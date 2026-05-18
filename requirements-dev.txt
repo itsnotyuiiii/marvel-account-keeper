@@ -1,0 +1,4 @@
+# Development / build dependencies. Installs the runtime deps plus the
+# packaging toolchain. Used by build.py and the GitHub Actions release job.
+-r requirements.txt
+pyinstaller>=6.6

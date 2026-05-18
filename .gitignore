@@ -1,0 +1,30 @@
+# ── Personal data — NEVER commit ─────────────────────────────────────────────
+# The vault holds your accounts (passwords encrypted, but emails/usernames are
+# plaintext). It lives in a per-user data dir at runtime; ignore any stray copy.
+vault*.json
+*.json.tmp
+backups/
+
+# ── Build output ─────────────────────────────────────────────────────────────
+build/
+dist/
+*.spec
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# ── Design-tool scratch (not part of the app) ────────────────────────────────
+uploads/
+screenshots/
+scraps/
+Demo.html
+demo-controller.js
+demo-overlay.css
+
+# ── OS noise ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
