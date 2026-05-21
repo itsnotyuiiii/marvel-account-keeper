@@ -89,10 +89,123 @@ function chip({ label, value, field, onCopy, cls = "tk-chip" }) {
   );
 }
 
+// ── Per-account sync state ───────────────────────────────────────────────────
+// marvelrivalsapi data older than this is shown as "stale" — the rank may no
+// longer be current. Server-side recrawls are gated to ~30 min, so anything
+// inside a day counts as fresh.
+const SYNC_STALE_AFTER_MS = 24 * 3600 * 1000;
+const RECRAWL_PENDING_MS = 30 * 60 * 1000;
+
+// Account timestamps are epoch seconds; normalize anything seconds-scale to ms.
+function toMs(ts) {
+  if (ts == null) return null;
+  return ts < 1e12 ? ts * 1000 : ts;
+}
+
+// Collapse an account's refresh fields into one state token. Drives both the
+// SyncChip and the refresh-button badge so they always agree.
+//   none → never refreshed      fresh → ok & recently crawled
+//   stale → ok but crawl is old   private / not_found / bad_key / error / missing_handle
+function syncState(acct) {
+  const st = acct.last_refresh_status;
+  if (!st) return "none";
+  if (st !== "ok") return st;
+  const synced = toMs(acct.rivals_synced_at);
+  if (synced == null) return "fresh";
+  return (Date.now() - synced) > SYNC_STALE_AFTER_MS ? "stale" : "fresh";
+}
+
+// Icon + copy for each non-clean sync state. 'fresh'/'none' render no badge on
+// the refresh button — a clean account needs no marker.
+const SYNC_META = {
+  stale:          { sym: "▲",  cls: "warn",  text: "API rank data is stale — refresh to recrawl" },
+  private:        { sym: "🔒", cls: "warn",  text: "Profile private — set rank manually" },
+  not_found:      { sym: "?",  cls: "muted", text: "No data for this player on marvelrivalsapi" },
+  bad_key:        { sym: "!",  cls: "err",   text: "API key rejected — check Options" },
+  missing_handle: { sym: "?",  cls: "muted", text: "No in-game name set — refresh skipped" },
+  error:          { sym: "!",  cls: "err",   text: "Last refresh failed — retry later" },
+};
+
+// Inline refresh button. Cells/cards/rows all share this so the spinner +
+// status-indicator placement stays consistent.
+function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
+                     size = "sm", showLabel = false }) {
+  if (!hasApiKey) return null;
+  const state = syncState(acct);
+  const meta = SYNC_META[state] || null;  // null for none / fresh
+  const title = meta ? (acct.last_refresh_error || meta.text) : "Refresh rank from marvelrivalsapi.com";
+  return (
+    <button
+      type="button"
+      className={"refresh-btn refresh-btn-" + size
+                 + (refreshing ? " is-busy" : "")
+                 + (meta ? " has-issue refresh-btn-" + meta.cls : "")}
+      data-status={state}
+      onClick={(e) => { e.stopPropagation(); onRefresh && onRefresh(acct); }}
+      disabled={refreshing}
+      aria-label={title}
+      title={title}
+    >
+      <svg viewBox="0 0 16 16" width="13" height="13"
+           className={"refresh-btn-svg" + (refreshing ? " is-spinning" : "")}
+           aria-hidden="true">
+        <path d="M2.5 8a5.5 5.5 0 0 1 9.9-3.3M13.5 8a5.5 5.5 0 0 1-9.9 3.3"
+              fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <path d="M12.4 1.6v3.1H9.3" fill="none" stroke="currentColor"
+              strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M3.6 14.4v-3.1h3.1" fill="none" stroke="currentColor"
+              strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      {meta && <span className="refresh-btn-issue" aria-hidden="true">{meta.sym}</span>}
+      {showLabel && <span className="refresh-btn-lbl">{refreshing ? "Refreshing…" : "Refresh"}</span>}
+    </button>
+  );
+}
+
+// Inline sync notifier: fresh / stale / private / not-found / failed. This is
+// the per-account counterpart to the API-wide status in the Options panel.
+function SyncChip({ acct, hasApiKey }) {
+  const state = syncState(acct);
+  if (state === "none") {
+    return hasApiKey ? (
+      <div className="sync-chip sync-chip-muted">
+        <span className="sync-chip-i" aria-hidden="true">○</span>
+        <span className="sync-chip-t">Not synced yet — hit ↻ to pull the live rank</span>
+      </div>
+    ) : null;
+  }
+
+  const synced = toMs(acct.rivals_synced_at);
+  const reqAt = toMs(acct.rivals_update_requested_at);
+  const recrawlPending = reqAt != null && (Date.now() - reqAt) < RECRAWL_PENDING_MS;
+
+  let cls, icon, text;
+  if (state === "fresh") {
+    cls = "ok";
+    icon = "●";
+    text = synced ? `API rank synced ${fmtRelative(synced)}` : "API rank synced";
+  } else {
+    const m = SYNC_META[state] || SYNC_META.error;
+    cls = m.cls;
+    icon = m.sym;
+    text = (state === "stale" && synced)
+      ? `API rank from ${fmtRelative(synced)} — may be outdated`
+      : m.text;
+  }
+  return (
+    <div className={"sync-chip sync-chip-" + cls}
+         title={acct.last_refresh_error || text}>
+      <span className="sync-chip-i" aria-hidden="true">{icon}</span>
+      <span className="sync-chip-t">{text}</span>
+      {recrawlPending && <span className="sync-chip-pending">· recrawl queued</span>}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // B. CARDS  (refined trading-card)
 // ─────────────────────────────────────────────────────────────────────────────
-function CardRefined({ acct, opts, onOpen, onCopy, onPin }) {
+function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -112,20 +225,24 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin }) {
 
       <header className="rcard-head">
         <span className="rcard-eyebrow">{lab.text}</span>
-        <button
-          type="button"
-          className={"rcard-mark" + (lab.kind === "alt" ? " rcard-mark-alt" : "")}
-          onClick={(e) => { e.stopPropagation(); onPin(acct); }}
-          aria-label={acct.pinned ? "Unpin" : (lab.kind === "alt" ? "Pin as main" : lab.text)}
-          title={acct.pinned ? "Unpin" : "Pin as main"}
-        >
-          {lab.kind === "alt"
-            ? <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                <path d="M8 1.5 9.85 6 14.5 6.5 11 9.8 12 14.5 8 12.1 4 14.5 5 9.8 1.5 6.5 6.15 6Z"
-                  fill="none" stroke="currentColor" strokeWidth="1.2" />
-              </svg>
-            : <Icon kind={lab.kind} />}
-        </button>
+        <div className="rcard-head-r">
+          <RefreshBtn acct={acct} refreshing={refreshing}
+                      onRefresh={onRefresh} hasApiKey={hasApiKey} size="sm" />
+          <button
+            type="button"
+            className={"rcard-mark" + (lab.kind === "alt" ? " rcard-mark-alt" : "")}
+            onClick={(e) => { e.stopPropagation(); onPin(acct); }}
+            aria-label={acct.pinned ? "Unpin" : (lab.kind === "alt" ? "Pin as main" : lab.text)}
+            title={acct.pinned ? "Unpin" : "Pin as main"}
+          >
+            {lab.kind === "alt"
+              ? <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                  <path d="M8 1.5 9.85 6 14.5 6.5 11 9.8 12 14.5 8 12.1 4 14.5 5 9.8 1.5 6.5 6.15 6Z"
+                    fill="none" stroke="currentColor" strokeWidth="1.2" />
+                </svg>
+              : <Icon kind={lab.kind} />}
+          </button>
+        </div>
       </header>
 
       <div className="rcard-name-row">
@@ -155,6 +272,8 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin }) {
         </div>
       </div>
 
+      <SyncChip acct={acct} hasApiKey={hasApiKey} />
+
       {!opts.hideCopy && (
         <footer className="rcard-foot">
           <span className="rcard-time">{fmtRelative(acct.updated_at)}</span>
@@ -173,7 +292,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // C. TABLE  (data-dense list)
 // ─────────────────────────────────────────────────────────────────────────────
-function TableView({ accounts, opts, onOpen, onCopy, onPin, sortLabel }) {
+function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, sortLabel }) {
   return (
     <section className="tbl">
       <header className="tbl-head">
@@ -191,14 +310,17 @@ function TableView({ accounts, opts, onOpen, onCopy, onPin, sortLabel }) {
       <ol className="tbl-rows">
         {accounts.map((a) => (
           <TableRow key={a.id} acct={a} opts={opts}
-                    onOpen={onOpen} onCopy={onCopy} onPin={onPin} />
+                    onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+                    onRefresh={onRefresh}
+                    refreshing={refreshingIds && refreshingIds.has(a.id)}
+                    hasApiKey={hasApiKey} />
         ))}
       </ol>
     </section>
   );
 }
 
-function TableRow({ acct, opts, onOpen, onCopy, onPin }) {
+function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -246,17 +368,22 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin }) {
 
         <div className="tbl-time">{fmtRelative(acct.updated_at)}</div>
 
-        <button
-          type="button"
-          className="tbl-more"
-          onClick={(e) => { e.stopPropagation(); onOpen(acct); }}
-          aria-label="Edit"
-          title="Edit"
-        >···</button>
+        <div className="tbl-actions">
+          <RefreshBtn acct={acct} refreshing={refreshing}
+                      onRefresh={onRefresh} hasApiKey={hasApiKey} size="sm" />
+          <button
+            type="button"
+            className="tbl-more"
+            onClick={(e) => { e.stopPropagation(); onOpen(acct); }}
+            aria-label="Edit"
+            title="Edit"
+          >···</button>
+        </div>
       </div>
 
       {open && (
         <div className="tbl-row-detail">
+          <SyncChip acct={acct} hasApiKey={hasApiKey} />
           {!opts.hideDetails && (
             <div className="tbl-detail-meta">
               <span><i>steam</i> {acct.username || "—"}</span>
@@ -287,7 +414,7 @@ const TIER_ORDER = [
   "Celestial", "Grandmaster", "Diamond", "Platinum", "Gold", "Silver", "Bronze",
 ];
 
-function LadderView({ accounts, opts, onOpen, onCopy, onPin }) {
+function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey }) {
   // Group by tier of current_rank
   const groups = React.useMemo(() => {
     const m = new Map();
@@ -305,13 +432,14 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin }) {
     <div className="ladder">
       {groups.map(([tier, list]) => (
         <LadderGroup key={tier} tier={tier} list={list}
-                     opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin} />
+                     opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+                     onRefresh={onRefresh} refreshingIds={refreshingIds} hasApiKey={hasApiKey} />
       ))}
     </div>
   );
 }
 
-function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin }) {
+function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey }) {
   const t = themeFor(tier === "One Above All" ? "One Above All" : tier + " I") || { fg: "#9aa3b2" };
   return (
     <section className="ladder-group" style={{ "--tier-fg": t.fg }}>
@@ -323,14 +451,17 @@ function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin }) {
       <div className="ladder-grid">
         {list.map((a) => (
           <LadderCard key={a.id} acct={a}
-                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin} />
+                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+                      onRefresh={onRefresh}
+                      refreshing={refreshingIds && refreshingIds.has(a.id)}
+                      hasApiKey={hasApiKey} />
         ))}
       </div>
     </section>
   );
 }
 
-function LadderCard({ acct, opts, onOpen, onPin }) {
+function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -354,6 +485,8 @@ function LadderCard({ acct, opts, onOpen, onPin }) {
         </span>
         <div className="lad-line-r">
           <TagPill acct={acct} />
+          <RefreshBtn acct={acct} refreshing={refreshing}
+                      onRefresh={onRefresh} hasApiKey={hasApiKey} size="xs" />
           {lab.kind !== "alt" && (
             <span className="lad-icon" style={{ color: lab.color || "currentColor" }}>
               <Icon kind={lab.kind} />

@@ -960,6 +960,7 @@ body::before {
 }
 .dr-field input:focus, .dr-field textarea:focus { border-color: var(--border-3); }
 .dr-field textarea { resize: vertical; min-height: 60px; font-family: var(--font-body); }
+.dr-field-note { margin: -6px 0 12px; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
 
 .drawer-pw { position: relative; }
 .drawer-pw-toggle {
@@ -1294,3 +1295,160 @@ body::before {
   cursor:pointer;text-transform:uppercase;
 }
 .drawer-draft-banner button:hover{background:rgba(232,185,74,.16)}
+
+/* ── Stats refresh (marvelrivalsapi.com integration) ───────────────────── */
+
+/* Spin animation reused by every refresh icon. */
+@keyframes mak-spin { to { transform: rotate(360deg); } }
+.refresh-btn-svg.is-spinning,
+.app-refresh-svg.is-spinning { animation: mak-spin .9s linear infinite; transform-origin: 50% 50%; }
+
+/* Toolbar "Refresh stats" button — ghost button styling, fits next to "New account". */
+.app-btn-refresh-all{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:0 12px;height:32px;font-size:12px;
+}
+.app-btn-refresh-all.is-busy{opacity:.72;cursor:default}
+.app-btn-refresh-all:disabled{opacity:.55;cursor:default}
+
+/* Per-card / per-row / per-ladder-row refresh button. Sized variants. */
+.refresh-btn{
+  appearance:none;border:0;background:transparent;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  color:var(--muted-2,#9aa3b2);opacity:.55;
+  border-radius:6px;padding:0;position:relative;
+  transition:opacity .14s, color .14s, background .14s, transform .14s;
+}
+.refresh-btn:hover{opacity:1;color:var(--fg,#fff);background:rgba(255,255,255,.06)}
+.refresh-btn:active{transform:scale(.96)}
+.refresh-btn:disabled{cursor:default}
+.refresh-btn.is-busy{opacity:1;color:var(--fg,#fff)}
+.refresh-btn-sm{width:22px;height:22px}
+.refresh-btn-xs{width:18px;height:18px}
+.refresh-btn-xs .refresh-btn-svg{width:11px;height:11px}
+
+/* Show a status indicator (♨ / ! / ?) overlay when last refresh wasn't ok. */
+.refresh-btn.has-issue{opacity:1}
+.refresh-btn.has-issue[data-status="private"]{color:#e8b94a}
+.refresh-btn.has-issue[data-status="bad_key"]{color:#ff8a4a}
+.refresh-btn.has-issue[data-status="error"]{color:#ff8a4a}
+.refresh-btn.has-issue[data-status="not_found"]{color:#9aa3b2}
+.refresh-btn.has-issue[data-status="missing_handle"]{color:#9aa3b2}
+.refresh-btn-issue{
+  position:absolute;top:-3px;right:-3px;
+  font-size:9px;line-height:1;font-weight:700;
+  background:var(--bg,#1a1d24);color:currentColor;
+  padding:1px 3px;border-radius:6px;
+  border:.5px solid currentColor;pointer-events:none;
+}
+.refresh-btn-lbl{font-size:11.5px;line-height:1;font-weight:500;letter-spacing:.01em}
+
+/* Card header — right cluster for refresh + pin. */
+.rcard-head-r{display:flex;align-items:center;gap:4px}
+
+/* Table actions column gets a small flex container so refresh + ··· line up. */
+.tbl-actions{display:flex;align-items:center;gap:4px;justify-self:end}
+
+/* ── Options panel: API key control ─────────────────────────────────────── */
+.api-key-ctrl{display:flex;flex-direction:column;gap:7px}
+.api-key-status{display:flex;align-items:center;gap:7px}
+.api-key-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:rgba(154,163,178,.5);flex-shrink:0;
+}
+.api-key-dot.on{background:#4ee07e;box-shadow:0 0 6px rgba(78,224,126,.55)}
+.api-key-status-lbl{flex:1;color:rgba(41,38,27,.78);font-weight:500}
+.api-key-edit{
+  appearance:none;border:0;background:rgba(0,0,0,.06);color:inherit;
+  font:inherit;font-size:10.5px;font-weight:500;letter-spacing:.01em;
+  padding:3px 9px;border-radius:6px;cursor:pointer;
+}
+.api-key-edit:hover{background:rgba(0,0,0,.1)}
+
+.api-key-input-row{display:flex;align-items:center;gap:6px}
+.api-key-input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.api-key-toggle{
+  appearance:none;border:0;background:rgba(0,0,0,.06);color:rgba(41,38,27,.65);
+  font:inherit;font-size:10.5px;font-weight:500;
+  padding:0 8px;height:26px;border-radius:6px;cursor:pointer;flex-shrink:0;
+}
+.api-key-toggle:hover{background:rgba(0,0,0,.1);color:#29261b}
+
+.api-key-actions{display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.api-key-btn{
+  appearance:none;border:0;font:inherit;font-size:11px;font-weight:500;
+  padding:0 10px;height:26px;border-radius:7px;cursor:pointer;
+}
+.api-key-btn.primary{background:rgba(0,0,0,.78);color:#fff}
+.api-key-btn.primary:hover{background:rgba(0,0,0,.88)}
+.api-key-btn.primary:disabled{background:rgba(0,0,0,.35);cursor:default}
+.api-key-btn.ghost{background:rgba(0,0,0,.06);color:inherit}
+.api-key-btn.ghost:hover{background:rgba(0,0,0,.1)}
+.api-key-btn.danger{background:transparent;color:#c0394a;
+  box-shadow:inset 0 0 0 .5px rgba(192,57,74,.45)}
+.api-key-btn.danger:hover{background:rgba(192,57,74,.08)}
+
+.api-key-hint{
+  margin:2px 0 0;color:rgba(41,38,27,.55);font-size:10.5px;line-height:1.5;
+}
+.api-key-hint a{color:inherit;text-decoration:underline;text-underline-offset:2px}
+.api-key-hint a:hover{color:#29261b}
+
+/* Stale data gets the same amber treatment as a private profile. */
+.refresh-btn.has-issue[data-status="stale"]{color:#e8b94a}
+
+/* ── Per-account sync chip (cards + table detail) ───────────────────────── */
+.sync-chip{
+  display:flex;align-items:center;gap:6px;
+  margin-top:9px;padding:5px 9px;border-radius:7px;
+  font-size:11px;line-height:1.35;font-weight:500;letter-spacing:.01em;
+  background:rgba(255,255,255,.04);
+  border:.5px solid rgba(255,255,255,.07);
+  color:var(--muted-2,#9aa3b2);
+}
+.sync-chip-i{font-size:10px;line-height:1;flex-shrink:0}
+.sync-chip-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sync-chip-pending{flex-shrink:0;opacity:.7;font-style:italic}
+.sync-chip-ok{
+  color:#79e6a4;
+  background:rgba(78,224,126,.07);border-color:rgba(78,224,126,.16);
+}
+.sync-chip-warn{
+  color:#f0c863;
+  background:rgba(232,185,74,.08);border-color:rgba(232,185,74,.2);
+}
+.sync-chip-err{
+  color:#ff8a90;
+  background:rgba(255,85,96,.08);border-color:rgba(255,85,96,.2);
+}
+.sync-chip-muted{color:var(--muted-2,#9aa3b2)}
+
+/* ── Options panel: API sync status ─────────────────────────────────────── */
+.sync-status{
+  display:flex;flex-direction:column;gap:8px;
+  margin-top:10px;padding-top:10px;border-top:.5px solid rgba(0,0,0,.08);
+}
+.sync-status-empty{
+  margin:8px 0 0;padding-top:10px;border-top:.5px solid rgba(0,0,0,.08);
+  color:rgba(41,38,27,.5);font-size:10.5px;line-height:1.5;
+}
+.sync-status-alert{
+  display:flex;align-items:center;gap:6px;
+  padding:6px 9px;border-radius:7px;
+  background:rgba(192,57,74,.1);color:#9a2230;
+  font-size:11px;font-weight:600;line-height:1.35;
+  box-shadow:inset 0 0 0 .5px rgba(192,57,74,.3);
+}
+.sync-status-grid{display:flex;gap:6px}
+.sync-status-cell{
+  flex:1;display:flex;flex-direction:column;gap:2px;
+  padding:7px 9px;border-radius:7px;background:rgba(0,0,0,.05);
+}
+.sync-status-k{
+  font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  color:rgba(41,38,27,.5);
+}
+.sync-status-v{
+  font-size:13px;font-weight:700;color:#29261b;font-variant-numeric:tabular-nums;
+}
+.sync-status-note{margin:0;color:rgba(41,38,27,.5);font-size:10px;line-height:1.5}

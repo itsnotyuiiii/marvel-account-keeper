@@ -139,7 +139,7 @@ async function apiCall(path, opts, onLocked, onActivity) {
 const DRAFT_PREFIX = "marvel-tracker-draft:";
 // Password is intentionally excluded — never store decrypted secrets in localStorage.
 const DRAFT_FIELDS = [
-  "in_game_name", "username", "email", "current_rank", "peak_rank",
+  "in_game_name", "rivals_uid", "username", "email", "current_rank", "peak_rank",
   "current_points", "peak_points", "notes", "tag", "border_color",
   "pinned", "neon",
 ];
@@ -262,7 +262,8 @@ function Header({ count, lockIn, lockoutMinutes, onLock, onSettings }) {
 // TOOLBAR
 // ─────────────────────────────────────────────────────────────────────────────
 const Toolbar = React.forwardRef(function Toolbar(
-{ query, onQuery, sort, onSort, view, onView, onNew }, searchRef)
+{ query, onQuery, sort, onSort, view, onView, onNew,
+  onRefreshAll, refreshingAll, hasApiKey, accountsCount }, searchRef)
 {
   return (
     <div className="app-toolbar">
@@ -302,12 +303,38 @@ const Toolbar = React.forwardRef(function Toolbar(
         </select>
       }
 
+      {hasApiKey && accountsCount > 0 && (
+        <button
+          className={"app-btn-ghost app-btn-refresh-all" + (refreshingAll ? " is-busy" : "")}
+          onClick={onRefreshAll}
+          disabled={refreshingAll}
+          title="Pull current ranks from marvelrivalsapi.com for every account">
+          <RefreshIcon spinning={refreshingAll} />
+          <span>{refreshingAll ? "Refreshing…" : "Refresh stats"}</span>
+        </button>
+      )}
+
       <button className="app-btn-primary" onClick={onNew}>
         <span className="app-btn-plus">+</span> New account
       </button>
     </div>);
 
 });
+
+function RefreshIcon({ spinning }) {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13"
+         className={"app-refresh-svg" + (spinning ? " is-spinning" : "")}
+         aria-hidden="true">
+      <path d="M2.5 8a5.5 5.5 0 0 1 9.9-3.3M13.5 8a5.5 5.5 0 0 1-9.9 3.3"
+            fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M12.4 1.6v3.1H9.3" fill="none" stroke="currentColor"
+            strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.6 14.4v-3.1h3.1" fill="none" stroke="currentColor"
+            strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 function ViewIcon({ view }) {
   if (view === "cards") {
@@ -345,6 +372,7 @@ function ViewIcon({ view }) {
 function baseFormFor(acct) {
   return {
     in_game_name: acct?.in_game_name || "",
+    rivals_uid: acct?.rivals_uid || "",
     username: acct?.username || "",
     email: acct?.email || "",
     password: acct?.password || "",
@@ -452,6 +480,13 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete }) {
             <div className="drawer-section-lbl">Identity</div>
             <Field label="In-game name" value={form.in_game_name}
             onChange={(v) => set("in_game_name", v)} placeholder="e.g. Yuiiii" />
+            <Field label="Marvel Rivals UID" value={form.rivals_uid}
+            onChange={(v) => set("rivals_uid", v)}
+            placeholder="optional — numeric player ID" />
+            <p className="dr-field-note">
+              When set, stats refresh looks up by UID — the most reliable option
+              for private or renamed accounts. Auto-filled after the first refresh.
+            </p>
           </section>
 
           <section className="drawer-section">
@@ -749,6 +784,158 @@ function LockScreen({ mode, accountCount, onSubmit }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Marvel Rivals API key control (rendered inside the Options panel)
+// ─────────────────────────────────────────────────────────────────────────────
+function ApiKeyControl({ hasKey, onSave }) {
+  // The actual key is never returned by the server — only the "set / not set"
+  // boolean. Editing means typing a new key into the input. Empty save clears.
+  const [editing, setEditing] = React.useState(false);
+  const [value, setValue] = React.useState("");
+  const [show, setShow] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+
+  const handleSave = async () => {
+    if (busy) return;
+    setBusy(true);
+    const ok = await onSave(value);
+    setBusy(false);
+    if (ok) {
+      setEditing(false);
+      setValue("");
+      setShow(false);
+    }
+  };
+
+  const handleClear = async () => {
+    if (busy) return;
+    setBusy(true);
+    await onSave("");
+    setBusy(false);
+    setEditing(false);
+    setValue("");
+    setShow(false);
+  };
+
+  return (
+    <div className="api-key-ctrl">
+      <div className="api-key-status">
+        <span className={"api-key-dot" + (hasKey ? " on" : "")} aria-hidden="true" />
+        <span className="api-key-status-lbl">
+          {hasKey ? "API key set" : "No API key yet"}
+        </span>
+        {!editing && (
+          <button type="button" className="api-key-edit"
+                  onClick={() => setEditing(true)}>
+            {hasKey ? "Change" : "Add"}
+          </button>
+        )}
+      </div>
+
+      {editing && (
+        <>
+          <div className="api-key-input-row">
+            <input
+              className="twk-field api-key-input"
+              type={show ? "text" : "password"}
+              placeholder="paste x-api-key from marvelrivalsapi.com"
+              value={value}
+              autoFocus
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }} />
+            <button type="button" className="api-key-toggle"
+                    onClick={() => setShow((s) => !s)}>
+              {show ? "hide" : "show"}
+            </button>
+          </div>
+          <div className="api-key-actions">
+            <button type="button" className="api-key-btn ghost"
+                    onClick={() => { setEditing(false); setValue(""); setShow(false); }}>
+              Cancel
+            </button>
+            {hasKey && (
+              <button type="button" className="api-key-btn danger"
+                      onClick={handleClear} disabled={busy}>
+                Clear
+              </button>
+            )}
+            <button type="button" className="api-key-btn primary"
+                    onClick={handleSave} disabled={busy || !value.trim()}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </>
+      )}
+
+      <p className="api-key-hint">
+        Get a free key at{" "}
+        <a href="https://marvelrivalsapi.com/dashboard/settings"
+           target="_blank" rel="noopener noreferrer">marvelrivalsapi.com</a>{" "}
+        — used to refresh current / peak rank automatically. Stays on this machine.
+      </p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Marvel Rivals API sync status (rendered inside the Options panel)
+// ─────────────────────────────────────────────────────────────────────────────
+// marvelrivalsapi enforces a *dynamic* rate limit surfaced via X-RateLimit-*
+// headers — there is no fixed daily number. `calls_today` is our own local
+// count; `quota_*` are the live header values (null until an uncached call,
+// since cached hits report the literal string "cache").
+function SyncStatus({ sync, hasKey }) {
+  if (!hasKey) return null;
+  if (!sync) {
+    return <p className="sync-status-empty">API usage appears after your first refresh.</p>;
+  }
+  const {
+    calls_today, quota_limit, quota_remaining, quota_reset,
+    rate_limited, rate_limited_for_s,
+  } = sync;
+
+  const fmtSecs = (s) => (s >= 60 ? `${Math.round(s / 60)}m` : `${Math.max(1, s | 0)}s`);
+  const fmtUntil = (ts) => {
+    if (ts == null) return "—";
+    const ms = ts < 1e12 ? ts * 1000 : ts;
+    const s = Math.round((ms - Date.now()) / 1000);
+    return s <= 0 ? "now" : fmtSecs(s);
+  };
+
+  return (
+    <div className="sync-status">
+      {rate_limited && (
+        <div className="sync-status-alert">
+          <span aria-hidden="true">⚠</span>
+          Rate limited by marvelrivalsapi — retry in {fmtSecs(rate_limited_for_s)}
+        </div>
+      )}
+      <div className="sync-status-grid">
+        <div className="sync-status-cell">
+          <span className="sync-status-k">Calls today</span>
+          <span className="sync-status-v">{calls_today ?? 0}</span>
+        </div>
+        <div className="sync-status-cell">
+          <span className="sync-status-k">Window left</span>
+          <span className="sync-status-v">
+            {quota_limit != null ? `${quota_remaining ?? "—"} / ${quota_limit}` : "—"}
+          </span>
+        </div>
+        <div className="sync-status-cell">
+          <span className="sync-status-k">Window resets</span>
+          <span className="sync-status-v">
+            {quota_reset != null ? `in ${fmtUntil(quota_reset)}` : "—"}
+          </span>
+        </div>
+      </div>
+      <p className="sync-status-note">
+        Dynamic rate limit — it adapts to your usage. Cached lookups don't
+        report live numbers, so the window figures fill in after an uncached call.
+      </p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────────────────────────────────────
 function App() {
@@ -772,6 +959,17 @@ function App() {
   const [drawer, setDrawer] = React.useState({ open: false, acct: null });
   const [toast, setToast] = React.useState(null);
   const [lockIn, setLockIn] = React.useState(30 * 60);
+  // Whether a Marvel Rivals API key is configured server-side. The key itself
+  // is never returned by the API — only this boolean. The actual key lives in
+  // vault.json's config and is sent to the server (POST /api/options) when set.
+  const [hasApiKey, setHasApiKey] = React.useState(false);
+  // marvelrivalsapi usage / rate-limit snapshot. Seeded from
+  // GET /api/rivals/sync-status and refreshed from every refresh response.
+  const [syncStatus, setSyncStatus] = React.useState(null);
+  // Set of account ids currently refreshing, for spinner state. Plus a single
+  // flag for the "Refresh all" action.
+  const [refreshing, setRefreshing] = React.useState(() => new Set());
+  const [refreshingAll, setRefreshingAll] = React.useState(false);
   const searchRef = React.useRef(null);
   const ready = phase === "ready";
 
@@ -815,6 +1013,14 @@ function App() {
     setLockIn(mins > 0 ? mins * 60 : 0);
   }, [setTweak]);
 
+  // Pull the API usage / rate-limit snapshot. Unauthenticated, fire-and-forget.
+  const refreshSyncStatus = React.useCallback(() => {
+    fetch("/api/rivals/sync-status")
+      .then((r) => r.json())
+      .then(setSyncStatus)
+      .catch(() => { /* transient — the next refresh response carries it */ });
+  }, []);
+
   // ── boot ──────────────────────────────────────────────────────────────────
   React.useEffect(() => {
     let cancelled = false;
@@ -824,6 +1030,8 @@ function App() {
         if (cancelled) return;
         setAccountCount(s.account_count || 0);
         syncLockout(s.lockout_minutes);
+        setHasApiKey(!!s.has_marvel_rivals_api_key);
+        refreshSyncStatus();
         if (!s.initialized) { setPhase("init"); return; }
         if (!s.unlocked) { setPhase("unlock"); return; }
         setLockIn(s.lockout_minutes > 0 ? s.lock_in_s : 0);
@@ -842,10 +1050,12 @@ function App() {
       const s = await fetch("/api/status").then((r) => r.json());
       syncLockout(s.lockout_minutes);
       setLockIn(s.lockout_minutes > 0 ? s.lock_in_s : 0);
+      setHasApiKey(!!s.has_marvel_rivals_api_key);
     } catch { /* fall through with whatever we have */ }
+    refreshSyncStatus();
     await loadAccounts();
     setPhase("ready");
-  }, [loadAccounts, syncLockout]);
+  }, [loadAccounts, syncLockout, refreshSyncStatus]);
 
   const handleUnlock = async (password) => {
     const res = await fetch("/api/unlock", {
@@ -942,6 +1152,7 @@ function App() {
   const onSave = async (next) => {
     const payload = {
       in_game_name: next.in_game_name || "",
+      rivals_uid: next.rivals_uid || "",
       username: next.username || "",
       email: next.email || "",
       password: next.password || "",
@@ -1019,6 +1230,86 @@ function App() {
     }
   };
 
+  // Save the marvelrivalsapi.com key. Empty string clears it.
+  const changeApiKey = async (rawKey) => {
+    const key = (rawKey || "").trim();
+    try {
+      const res = await api("/api/options", {
+        method: "POST",
+        body: JSON.stringify({ marvel_rivals_api_key: key }),
+      });
+      setHasApiKey(!!res?.has_marvel_rivals_api_key);
+      showToast(key ? "API key saved" : "API key cleared");
+      return true;
+    } catch (e) {
+      if (!e.locked) showToast("Couldn't save API key");
+      return false;
+    }
+  };
+
+  // Apply a refreshed account record (from the API) over its row in the
+  // accounts state, so we don't have to refetch the whole list.
+  const mergeRefreshed = React.useCallback((updated) => {
+    if (!updated || !updated.id) return;
+    setAccounts((arr) => arr.map((a) => a.id === updated.id ? { ...a, ...updated } : a));
+  }, []);
+
+  const REFRESH_LABEL = {
+    ok: "Refreshed",
+    private: "Profile is private",
+    not_found: "Player not found",
+    bad_key: "API key rejected — check Options",
+    missing_handle: "No in-game name set on this account",
+    error: "Refresh failed",
+  };
+
+  // Refresh one account's stats from marvelrivalsapi.com.
+  const onRefresh = async (acct) => {
+    if (!acct?.id) return;
+    if (!hasApiKey) {
+      showToast("Set your Marvel Rivals API key in Options first");
+      return;
+    }
+    setRefreshing((s) => { const n = new Set(s); n.add(acct.id); return n; });
+    try {
+      const res = await api(`/api/accounts/${acct.id}/refresh-stats`, { method: "POST" });
+      mergeRefreshed(res?.account);
+      if (res?.sync) setSyncStatus(res.sync);
+      const st = res?.account?.last_refresh_status || "error";
+      showToast(REFRESH_LABEL[st] || "Done");
+    } catch (e) {
+      if (!e.locked) showToast("Refresh failed — try again");
+    } finally {
+      setRefreshing((s) => { const n = new Set(s); n.delete(acct.id); return n; });
+    }
+  };
+
+  // Refresh every account in series (server adds a polite delay between calls).
+  const onRefreshAll = async () => {
+    if (!hasApiKey) {
+      showToast("Set your Marvel Rivals API key in Options first");
+      return;
+    }
+    if (refreshingAll) return;
+    setRefreshingAll(true);
+    try {
+      const res = await api("/api/accounts/refresh-all", { method: "POST" });
+      for (const a of (res?.accounts || [])) mergeRefreshed(a);
+      if (res?.sync) setSyncStatus(res.sync);
+      const sum = res?.summary || {};
+      const ok = sum.ok || 0;
+      const issues = (sum.private || 0) + (sum.not_found || 0)
+                   + (sum.error || 0) + (sum.bad_key || 0) + (sum.missing_handle || 0);
+      showToast(issues
+        ? `Refreshed ${ok} · ${issues} skipped`
+        : `Refreshed ${ok} ${ok === 1 ? "account" : "accounts"}`);
+    } catch (e) {
+      if (!e.locked) showToast("Refresh-all failed — try again");
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
+
   // ── derived ───────────────────────────────────────────────────────────────
   const effectiveSort = t.view === "ladder" ? "current_desc" : sort;
   const visible = React.useMemo(
@@ -1073,7 +1364,11 @@ function App() {
             query={query} onQuery={setQuery}
             sort={sort} onSort={setSort}
             view={t.view} onView={(v) => setTweak("view", v)}
-            onNew={onNew} />
+            onNew={onNew}
+            onRefreshAll={onRefreshAll}
+            refreshingAll={refreshingAll}
+            hasApiKey={hasApiKey}
+            accountsCount={accounts.length} />
 
 
           {visible.length === 0 ?
@@ -1085,15 +1380,18 @@ function App() {
           t.view === "table" ?
           <TableView accounts={visible} opts={opts}
           onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+          onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
           sortLabel={sortLabel} /> :
           t.view === "ladder" ?
           <LadderView accounts={visible} opts={opts}
-          onOpen={onOpen} onCopy={onCopy} onPin={onPin} /> :
+          onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+          onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey} /> :
 
           <div className="app-grid">
               {visible.map((a) =>
             <CardRefined key={a.id} acct={a} opts={opts}
-            onOpen={onOpen} onCopy={onCopy} onPin={onPin} />
+            onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+            onRefresh={onRefresh} refreshing={refreshing.has(a.id)} hasApiKey={hasApiKey} />
             )}
             </div>
           }
@@ -1158,6 +1456,11 @@ function App() {
             value={t.lockoutMinutes}
             options={LOCKOUT_OPTIONS}
             onChange={(v) => changeLockout(Number(v))} />
+        </TweakSection>
+
+        <TweakSection label="Marvel Rivals stats">
+          <ApiKeyControl hasKey={hasApiKey} onSave={changeApiKey} />
+          <SyncStatus sync={syncStatus} hasKey={hasApiKey} />
         </TweakSection>
       </TweaksPanel>
     </>);
