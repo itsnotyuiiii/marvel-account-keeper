@@ -6,37 +6,47 @@ entirely on your machine; nothing is sent anywhere.
 
 ![icon](icon.png)
 
-## Download & run
+## Get started (Windows — this is almost everyone)
 
-1. Go to the [**Releases**](https://github.com/itsnotyuiiii/marvel-account-keeper/releases)
-   page and download the file for your operating system:
+There's nothing to "install" — Marvel Account Keeper is a single file you run.
 
-   | Your OS | File |
-   |---------|------|
-   | Windows | `MarvelAccountKeeper-windows.exe` |
-   | macOS   | `MarvelAccountKeeper-macos` |
-   | Linux   | `MarvelAccountKeeper-linux` |
+1. **Download the app.** Open the
+   [**Releases page**](https://github.com/itsnotyuiiii/marvel-account-keeper/releases),
+   find the newest release at the top, and under **Assets** download
+   **`MarvelAccountKeeper-windows.exe`**. That's the file 99% of people want.
+2. **Put it somewhere handy** — your Desktop, or a folder like
+   `Documents\Marvel Account Keeper`. It runs fine from anywhere.
+3. **Double-click it.** Your web browser opens the app on its own. A small
+   black window also appears — that's normal, just leave it be.
+4. **When you're done, close the browser tab.** The app shuts itself down a
+   couple of minutes later — nothing is left running in the background.
 
-2. **Double-click it.** Your default browser loads the app automatically (a
-   small terminal window also opens — you can ignore it). When you're done,
-   just **close the browser**: the app shuts itself down a couple of minutes
-   later, leaving no process running. No arguments or setup needed.
+No Python, no installer, no internet connection — everything runs on your own
+PC, and it works completely offline.
 
-   - **macOS / Linux:** the download may need the executable bit first —
-     `chmod +x MarvelAccountKeeper-macos` — then run it. On macOS you may also
-     need to allow it under *System Settings → Privacy & Security*.
-   - **Windows:** SmartScreen may warn about an unsigned app — *More info →
-     Run anyway*.
+> [!NOTE]
+> The first time you run it, Windows may show a blue **"Windows protected your
+> PC"** box, because the app isn't code-signed. Click **More info → Run
+> anyway**. It's safe — the source code is public and the app never connects
+> to the internet.
 
-No Python, no install, no internet required — the app is fully self-contained
-and works offline.
+## Mac & Linux
 
-## First launch
+Download `MarvelAccountKeeper-macos` or `MarvelAccountKeeper-linux` from the
+[Releases page](https://github.com/itsnotyuiiii/marvel-account-keeper/releases)
+instead. Make it runnable once in a terminal —
+`chmod +x MarvelAccountKeeper-macos` — then double-click or run it. On macOS
+you may also need *System Settings → Privacy & Security → Open Anyway*.
 
-You'll be asked to **set a master password**. It encrypts the password field
-of every account (scrypt key derivation + AES-256-GCM) and is **never stored**.
-If you forget it, the saved passwords cannot be recovered. Everything else
-(IGN, username, email, ranks, notes) is stored in plain text.
+## First launch — set your password
+
+The first time it opens, the app asks you to **create a master password**. It
+locks the account passwords you save (strong encryption — scrypt key
+derivation + AES-256-GCM) and is **never written down anywhere**.
+
+Pick something you'll remember: if you forget it, the saved passwords can't be
+recovered. Everything else (in-game name, email, ranks, notes) is stored
+normally and stays readable.
 
 ## Where your data lives
 
