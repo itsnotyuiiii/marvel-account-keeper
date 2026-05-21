@@ -1002,12 +1002,12 @@ function InfoRail({ open, onToggle }) {
           </ul>
           <p className="sync-legend-foot">
             <strong>Recrawl queued</strong> — refreshing a stale account asks
-            marvelrivalsapi to re-fetch that player's stats from the game. The
-            card shows a “recrawl queued · ~Nm” note while it runs. The crawl
-            itself usually completes within a few minutes (30 min at the very
-            most) — refresh the card again then to pull the new rank. The
-            countdown is that 30-min window, which is also the soonest another
-            recrawl can be queued for the same player.
+            marvelrivalsapi to re-fetch that player's stats from the game. While
+            it runs, the card shows a “recrawl queued” note with a live
+            countdown (“~12m” = roughly 12 minutes left). When that 30-min
+            window is up the note switches to “recrawl done — hit ↻”: nothing
+            auto-refreshes, so click ↻ then to pull the new rank in. That window
+            is also the soonest another recrawl can be queued for the player.
           </p>
         </div>
       )}

@@ -107,6 +107,23 @@ function toMs(ts) {
   return ts < 1e12 ? ts * 1000 : ts;
 }
 
+// Full date/time behind a relative "2h ago" label — used for hover tooltips.
+function fmtAbsolute(ts) {
+  const ms = toMs(ts);
+  if (ms == null) return "";
+  return new Date(ms).toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
+}
+
+// Tooltip text for an account's "last edited" timestamp.
+function updatedTitle(acct) {
+  return acct.updated_at
+    ? "Account last updated " + fmtAbsolute(acct.updated_at)
+    : "Account not updated yet";
+}
+
 // Re-render on an interval so countdowns / relative times stay live. Pass
 // active=false to park the timer when there is nothing counting down.
 function useMinuteTick(active) {
@@ -190,10 +207,16 @@ function SyncChip({ acct, hasApiKey }) {
 
   const synced = toMs(acct.rivals_synced_at);
   const reqAt = toMs(acct.rivals_update_requested_at);
+  const lastRefreshTs = toMs(acct.last_refresh_ts);
   // marvelrivalsapi locks a player for 30 min after an /update — that same
   // window is both "recrawl in progress" and "can't request another yet".
   const recrawlLeft = reqAt != null ? RECRAWL_PENDING_MS - (Date.now() - reqAt) : -1;
   const recrawlPending = recrawlLeft > 0;
+  // Window elapsed and we haven't refreshed since asking for it: the recrawled
+  // data is now sitting on the API, but the card still shows the pre-recrawl
+  // rank until the next refresh pulls it in. Nothing auto-fetches.
+  const recrawlReady = reqAt != null && !recrawlPending
+    && (lastRefreshTs == null || lastRefreshTs <= reqAt);
   useMinuteTick(recrawlPending);
 
   if (state === "none") {
@@ -239,6 +262,15 @@ function SyncChip({ acct, hasApiKey }) {
                      + "Another recrawl can't be queued for this player for ~"
                      + recrawlMins + " min."}>
           · recrawl queued · ~{recrawlMins}m
+        </span>
+      )}
+      {recrawlReady && (
+        <span className="sync-chip-ready"
+              title={"The 30-min recrawl window has elapsed — marvelrivalsapi "
+                     + "should have fresh data for this player now. Nothing "
+                     + "refreshes on its own; hit the ↻ button to pull the "
+                     + "recrawled rank onto the card."}>
+          · recrawl done — hit ↻
         </span>
       )}
     </div>
@@ -319,7 +351,9 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
 
       {!opts.hideCopy && (
         <footer className="rcard-foot">
-          <span className="rcard-time">{fmtRelative(acct.updated_at)}</span>
+          <span className="rcard-time" title={updatedTitle(acct)}>
+            {fmtRelative(acct.updated_at)}
+          </span>
           <div className="rcard-copy">
             <span className="rcard-copy-lbl">copy</span>
             {chip({ label: "user",  value: acct.username, field: "username", onCopy })}
@@ -409,7 +443,7 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
           <span style={{ color: peak?.fg }}>{rankDisplay(acct.peak_rank, acct.peak_points)}</span>
         </div>
 
-        <div className="tbl-time">{fmtRelative(acct.updated_at)}</div>
+        <div className="tbl-time" title={updatedTitle(acct)}>{fmtRelative(acct.updated_at)}</div>
 
         <div className="tbl-actions">
           <RefreshBtn acct={acct} refreshing={refreshing}

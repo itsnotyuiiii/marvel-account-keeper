@@ -1430,6 +1430,7 @@ body::before {
 .sync-chip-i{font-size:10px;line-height:1;flex-shrink:0}
 .sync-chip-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sync-chip-pending{flex-shrink:0;opacity:.7;font-style:italic}
+.sync-chip-ready{flex-shrink:0;font-weight:600;color:#79e6a4}
 .sync-chip-ok{
   color:#79e6a4;
   background:rgba(78,224,126,.07);border-color:rgba(78,224,126,.16);
