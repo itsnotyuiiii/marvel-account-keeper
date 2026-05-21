@@ -71,7 +71,14 @@ automatically the first time the new app starts.
   configurable idle period (default 30 min — change it under **Options**), on
   quit, or when you click **Lock**.
 
-## Running from source
+---
+
+## For developers
+
+**Everything below is optional — you do not need any of this to use the app.**
+It only covers running from source or building the executable yourself.
+
+### Running from source
 
 You don't need the executable — with Python 3.10+ installed:
 
@@ -83,7 +90,7 @@ python app.py
 It picks a free port and opens your browser, same as the packaged app. On
 Windows you can also just double-click `run.bat`.
 
-## Building it yourself
+### Building it yourself
 
 See [BUILDING.md](BUILDING.md) for producing the executables locally, and
 [`.github/workflows/release.yml`](.github/workflows/release.yml) for the CI
