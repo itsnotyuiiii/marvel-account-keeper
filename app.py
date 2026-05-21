@@ -4,11 +4,15 @@ Single-user local-only app. Stores account records in vault.json, with the
 password field encrypted under a key derived from a master password (scrypt
 + AES-256-GCM). The derived key lives only in process memory after unlock.
 
-Run directly (`python app.py`) or as the packaged executable: it picks a free
-loopback port, opens the default browser, and serves until Ctrl+C.
+Run directly (`python app.py`) or as the packaged executable — no arguments
+needed. It picks a free loopback port, opens the default browser, and quits
+itself ~2 min after the browser is closed, so a double-clicked build leaves
+nothing running. Optional flags: `--no-browser` (headless, stays up),
+`--port N` (fixed port), `--keep-alive` (open the browser but don't auto-quit).
 """
 from __future__ import annotations
 
+import argparse
 import calendar
 import json
 import logging
@@ -1264,6 +1268,28 @@ _migrate_vault_if_needed()
 _load_api_usage()
 
 
+# ---------- liveness heartbeat ----------
+# The frontend POSTs /api/heartbeat every ~30s while a browser tab is open. In
+# the default (browser) mode the launcher watches this timestamp and exits
+# once every tab has closed — so a double-clicked .exe behaves like an app and
+# leaves no orphaned process behind.
+
+_heartbeat_lock = threading.Lock()
+_last_heartbeat = 0.0
+_heartbeat_seen = False
+IDLE_SHUTDOWN_S = 120      # quit this long after the browser's last heartbeat
+STARTUP_GRACE_S = 300      # ...or this long if a browser never connects at all
+
+
+@app.route("/api/heartbeat", methods=["POST"])
+def heartbeat():
+    global _last_heartbeat, _heartbeat_seen
+    with _heartbeat_lock:
+        _last_heartbeat = time.time()
+        _heartbeat_seen = True
+    return jsonify({"ok": True})
+
+
 # ---------- launcher ----------
 
 def _free_port() -> int:
@@ -1273,11 +1299,57 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _shutdown(reason: str) -> None:
+    """Print a parting line and end the process."""
+    print(f"\n  {reason} — Marvel Account Keeper stopped. Your vault is saved.")
+    os._exit(0)
+
+
+def _idle_watch() -> None:
+    """Quit once the browser is gone — the no-CLI "close it and you're done"
+    lifecycle for a double-clicked build.
+
+    Runs only in the default browser mode. Exits when no heartbeat has arrived
+    for IDLE_SHUTDOWN_S after one was seen (every tab closed), or when none
+    arrives within STARTUP_GRACE_S (the browser never opened — so the process
+    can't get stuck running invisibly).
+    """
+    start = time.time()
+    while True:
+        time.sleep(15)
+        with _heartbeat_lock:
+            seen, last = _heartbeat_seen, _last_heartbeat
+        now = time.time()
+        if seen and now - last > IDLE_SHUTDOWN_S:
+            _shutdown("Browser closed")
+        elif not seen and now - start > STARTUP_GRACE_S:
+            _shutdown("Browser never opened")
+
+
 def main() -> None:
+    # Zero arguments is the intended path — a double-clicked .exe just works.
+    # The flags below exist only for the rare headless / power-user case.
+    parser = argparse.ArgumentParser(
+        prog="MarvelAccountKeeper",
+        description="Local encrypted Marvel Rivals account vault. "
+                    "Just run it with no arguments — the flags are optional.")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="run headless: don't open a browser, and keep "
+                             "running until stopped manually")
+    parser.add_argument("--port", type=int, default=0, metavar="N",
+                        help="serve on a fixed port instead of a random one")
+    parser.add_argument("--keep-alive", action="store_true",
+                        help="open the browser but don't quit when it closes")
+    args = parser.parse_args()
+
     # Quiet the per-request Werkzeug log lines — the banner is what matters.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    port = _free_port()
+    port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}"
+    open_browser = not args.no_browser
+    # Default: behave like an app — quit shortly after the browser closes so
+    # nothing is left running. Headless or --keep-alive opt out of that.
+    auto_stop = open_browser and not args.keep_alive
 
     line = "=" * 60
     print(line)
@@ -1286,18 +1358,31 @@ def main() -> None:
     print(f"  Open in browser : {url}")
     print(f"  Vault file      : {VAULT_PATH}")
     print()
-    print("  Your browser should open automatically.")
-    print("  Keep this window open while you use the app.")
-    print("  Press Ctrl+C to quit.")
+    if open_browser:
+        print("  Your browser should open automatically.")
+    else:
+        print("  Open the address above in your browser.")
+    if auto_stop:
+        print("  Done? Just close the browser — this window closes itself.")
+    else:
+        print("  Keep this window open while you use the app; Ctrl+C quits.")
     print(line)
 
     # Open the browser shortly after the server starts listening.
-    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    if open_browser:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    # In the default app-like mode, quit once the browser is gone.
+    if auto_stop:
+        threading.Thread(target=_idle_watch, daemon=True).start()
 
     try:
         app.run(host="127.0.0.1", port=port, debug=False)
     except KeyboardInterrupt:
         pass
+    except OSError as e:
+        print(f"\n  Could not start on port {port}: {e}")
+        print("  Try a different --port, or omit it to pick one automatically.")
+        return
     print("\n  Marvel Account Keeper stopped. Your vault is saved.")
 
 

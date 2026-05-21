@@ -44,6 +44,11 @@ html {
   /* Semantic label colors — used ONLY for the eyebrow tag + matching icon */
   --label-main: #e8b94a;   /* gold for MAIN ACCOUNT */
   --label-oaa:  #ff5560;   /* red for PEAKED OAA */
+  --label-alt:  #7fb0cf;   /* slate-blue for ALT */
+
+  /* Rank-value text uses the bright tier color on dark; the light theme
+     swaps this to the deep --rk-glow tone (see html[data-theme="light"]). */
+  --rank-ink: var(--rk-fg, var(--muted));
 
   --font-display: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --font-body:    "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -78,6 +83,35 @@ html[data-density="comfy"] {
   --lad-card-py: 18px; --lad-card-px: 18px; --lad-gap: 16px; --lad-group-gap: 40px;
 }
 
+/* ── Light theme ──────────────────────────────────────────────────────────
+   Flips the neutral chrome tokens. Rank chroma stays vivid for dots and
+   washes, but rank *text* swaps to the deeper "glow" tone via --rank-ink so
+   it stays legible on white. The floating Options panel is light either way. */
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ebedf1;
+  --bg-2: #e2e5ea;
+  --bg-3: #d8dce3;
+  --panel: #ffffff;
+  --panel-2: #f0f2f5;
+  --panel-3: #e6e9ee;
+  --border: #d5d9e1;
+  --border-2: #c0c6d1;
+  --border-3: #a7aebd;
+  --fg: #1b1e26;
+  --fg-2: #3f4654;
+  --fg-3: #5e6675;
+  --muted: #79818f;
+  --muted-2: #9098a4;
+  --muted-3: #c5cad2;
+  --accent: #1b1e26;
+  --accent-fg: #ffffff;
+  --label-main: #9a6f0c;
+  --label-oaa: #d62f3b;
+  --label-alt: #3f6f8e;
+  --rank-ink: var(--rk-glow, var(--muted));
+}
+
 /* ── Subtle ambient texture ───────────────────────────────────────────────── */
 body::before {
   content: "";
@@ -86,15 +120,44 @@ body::before {
     radial-gradient(900px 500px at 80% -8%, rgba(255,255,255,.03), transparent 60%),
     radial-gradient(900px 600px at 12% 100%, rgba(255,255,255,.018), transparent 65%);
 }
-/* Neon border opt-in (per account). Uses --neon-fg from the React style. */
-.rcard-neon {
+html[data-theme="light"] body::before {
+  background:
+    radial-gradient(900px 500px at 80% -8%, rgba(20,28,46,.05), transparent 60%),
+    radial-gradient(900px 600px at 12% 100%, rgba(20,28,46,.035), transparent 65%);
+}
+
+/* Light-theme fixes for colors that were tuned white-on-dark. The card
+   shadow skips neon cards so it can't clobber their colored glow. */
+html[data-theme="light"] .rcard:not(.rcard-neon) { box-shadow: 0 4px 14px rgba(20,28,46,.1); }
+html[data-theme="light"] .refresh-btn:hover { background: rgba(0,0,0,.06); }
+html[data-theme="light"] .sync-chip {
+  background: rgba(0,0,0,.035);
+  border-color: rgba(0,0,0,.09);
+}
+html[data-theme="light"] .sync-chip-ok,
+html[data-theme="light"] .sync-chip-ready,
+html[data-theme="light"] .sync-chip[data-state="current"] .sync-chip-i,
+html[data-theme="light"] .sync-legend-i-ok { color: #1f9d57; }
+html[data-theme="light"] .sync-chip[data-state="current"] .sync-chip-i { text-shadow: none; }
+html[data-theme="light"] .sync-chip-warn,
+html[data-theme="light"] .sync-legend-i-warn { color: #b9871f; }
+html[data-theme="light"] .sync-chip-err,
+html[data-theme="light"] .sync-legend-i-err { color: #c0394a; }
+html[data-theme="light"] .refresh-btn.has-issue[data-status="stale"],
+html[data-theme="light"] .refresh-btn.has-issue[data-status="private"] { color: #b9871f; }
+html[data-theme="light"] .refresh-btn.has-issue[data-status="bad_key"],
+html[data-theme="light"] .refresh-btn.has-issue[data-status="error"] { color: #d4691f; }
+/* Neon border opt-in (per account). Uses --neon-fg from the React style.
+   Scoped .rcard.rcard-neon (two classes) so it outranks the plain .rcard
+   border + the light-theme card shadow, both defined later in this file. */
+.rcard.rcard-neon {
   border-color: color-mix(in oklab, var(--neon-fg) 70%, var(--border));
   box-shadow:
     0 0 0 1px color-mix(in oklab, var(--neon-fg) 50%, transparent) inset,
     0 0 18px -2px color-mix(in oklab, var(--neon-fg) 55%, transparent),
     0 0 38px -8px color-mix(in oklab, var(--neon-fg) 35%, transparent);
 }
-.rcard-neon:hover {
+.rcard.rcard-neon:hover {
   border-color: var(--neon-fg);
   box-shadow:
     0 0 0 1px color-mix(in oklab, var(--neon-fg) 70%, transparent) inset,

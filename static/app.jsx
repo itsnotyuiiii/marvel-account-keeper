@@ -23,6 +23,7 @@ const {
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "view": "cards",
+  "theme": "dark",
   "densityCards": "regular",
   "densityTable": "regular",
   "densityLadder": "regular",
@@ -37,7 +38,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // because the server owns the real auto-lock timeout; the server value is
 // authoritative and is synced back into this store on every boot/unlock.
 const OPTIONS_KEY = "marvel-tracker-options";
-const OPTION_KEYS = ["view", "densityCards", "densityTable", "densityLadder",
+const OPTION_KEYS = ["view", "theme", "densityCards", "densityTable", "densityLadder",
   "hideDetails", "hideCopy", "infoRailOpen", "lockoutMinutes"];
 // Density is stored per view, so each layout keeps its own compact/comfy choice.
 const DENSITY_KEY = { cards: "densityCards", table: "densityTable", ladder: "densityLadder" };
@@ -241,7 +242,32 @@ function DuckMark({ onQuack }) {
   );
 }
 
-function Header({ count, lockIn, lockoutMinutes, onLock, onSettings }) {
+// Sun / moon button — flips the app between dark and light. Shows the icon of
+// the mode you'd switch *to*.
+function ThemeToggle({ theme, onToggle }) {
+  const light = theme === "light";
+  return (
+    <button className="app-btn-icon" onClick={onToggle}
+            aria-label={light ? "Switch to dark mode" : "Switch to light mode"}
+            title={light ? "Switch to dark mode" : "Switch to light mode"}>
+      {light ? (
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <path d="M13.6 9.4A5.6 5.6 0 0 1 6.6 2.4 5.6 5.6 0 1 0 13.6 9.4Z"
+                fill="currentColor" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <circle cx="8" cy="8" r="3.1" fill="currentColor" />
+          <g stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <path d="M8 1v1.8M8 13.2V15M1 8h1.8M13.2 8H15M3.05 3.05l1.27 1.27M11.68 11.68l1.27 1.27M12.95 3.05l-1.27 1.27M4.32 11.68l-1.27 1.27" />
+          </g>
+        </svg>
+      )}
+    </button>
+  );
+}
+
+function Header({ count, lockIn, lockoutMinutes, onLock, onSettings, theme, onToggleTheme }) {
   return (
     <header className="app-head">
       <div className="app-head-l">
@@ -262,6 +288,7 @@ function Header({ count, lockIn, lockoutMinutes, onLock, onSettings }) {
             <span className="app-dot-quiet" /> auto-lock off
           </span>
         )}
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         <button className="app-btn-icon" onClick={onSettings} aria-label="Options" title="Options">
           <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
             <path fill="currentColor" d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z" />
@@ -1173,14 +1200,27 @@ function App() {
     setDrawer({ open: false, acct: null });
   };
 
+  // ── liveness heartbeat ────────────────────────────────────────────────────
+  // Ping the server every 30s so a launch with --auto-stop can tell when every
+  // browser tab has closed and shut itself down. Harmless otherwise — the
+  // server just records the timestamp. Runs in every phase (incl. the lock
+  // screen), so the app counts as "open" even while locked.
+  React.useEffect(() => {
+    const ping = () => fetch("/api/heartbeat", { method: "POST" }).catch(() => {});
+    ping();
+    const id = setInterval(ping, 30000);
+    return () => clearInterval(id);
+  }, []);
+
   // ── document data attributes ──────────────────────────────────────────────
   React.useEffect(() => {
     document.documentElement.dataset.view = t.view;
+    document.documentElement.dataset.theme = t.theme || "dark";
     // data-density always carries the *active* view's density — only one view
     // renders at a time, so the table/ladder/card density CSS can key off this
     // single attribute without also matching on the view.
     document.documentElement.dataset.density = t[DENSITY_KEY[t.view]] || "regular";
-  }, [t.view, t.densityCards, t.densityTable, t.densityLadder]);
+  }, [t.view, t.theme, t.densityCards, t.densityTable, t.densityLadder]);
 
   // ── lock countdown ────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -1438,6 +1478,8 @@ function App() {
           lockIn={lockInLabel}
           lockoutMinutes={t.lockoutMinutes}
           onLock={onLock}
+          theme={t.theme}
+          onToggleTheme={() => setTweak("theme", t.theme === "light" ? "dark" : "light")}
           onSettings={() => window.postMessage({ type: "__activate_edit_mode" }, "*")} />
 
 

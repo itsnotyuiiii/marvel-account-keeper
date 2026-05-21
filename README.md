@@ -17,9 +17,10 @@ entirely on your machine; nothing is sent anywhere.
    | macOS   | `MarvelAccountKeeper-macos` |
    | Linux   | `MarvelAccountKeeper-linux` |
 
-2. **Double-click it.** A small terminal window opens and your default browser
-   loads the app automatically. Keep that window open while you use the app;
-   close it (or press `Ctrl+C`) to quit.
+2. **Double-click it.** Your default browser loads the app automatically (a
+   small terminal window also opens — you can ignore it). When you're done,
+   just **close the browser**: the app shuts itself down a couple of minutes
+   later, leaving no process running. No arguments or setup needed.
 
    - **macOS / Linux:** the download may need the executable bit first —
      `chmod +x MarvelAccountKeeper-macos` — then run it. On macOS you may also

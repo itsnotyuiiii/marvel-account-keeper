@@ -23,11 +23,18 @@ function rankDisplay(rank, points) {
 }
 
 function labelFor(acct) {
-  if (acct.pinned) return { kind: "main", text: "MAIN ACCOUNT", color: "#e8b94a" };
-  if (acct.peak_rank === "One Above All") return { kind: "oaa", text: "PEAKED OAA", color: "#ff5560" };
-  // Cool slate-blue: distinct from the warm gold "main" and red "oaa" labels,
-  // restrained enough to still read as the default/secondary state.
-  return { kind: "alt", text: "ALT", color: "#7fb0cf" };
+  // Colors are theme tokens (see styles.css) so the labels stay legible in
+  // both dark and light mode — gold "main", red "oaa", slate-blue "alt".
+  if (acct.pinned) return { kind: "main", text: "MAIN ACCOUNT", color: "var(--label-main)" };
+  if (acct.peak_rank === "One Above All") return { kind: "oaa", text: "PEAKED OAA", color: "var(--label-oaa)" };
+  return { kind: "alt", text: "ALT", color: "var(--label-alt)" };
+}
+
+// Inline style for rank-value text. Carries both the bright tier color and its
+// dark variant as CSS vars; --rank-ink (set per theme in styles.css) picks the
+// legible one — bright on the dark theme, the deep "glow" tone on light.
+function rankInk(t) {
+  return { "--rk-fg": t && t.fg, "--rk-glow": t && t.glow, color: "var(--rank-ink)" };
 }
 
 // Map a stored border_color name -> hex for the tag-pill accent.
@@ -338,12 +345,12 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: cur?.fg }} />
           <span className="rcard-rlbl">CURRENT</span>
-          <span className="rcard-rval" style={{ color: cur?.fg }}>{rankDisplay(acct.current_rank, acct.current_points)}</span>
+          <span className="rcard-rval" style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points)}</span>
         </div>
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: peak?.fg }} />
           <span className="rcard-rlbl">PEAK</span>
-          <span className="rcard-rval" style={{ color: peak?.fg }}>{rankDisplay(acct.peak_rank, acct.peak_points)}</span>
+          <span className="rcard-rval" style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points)}</span>
         </div>
       </div>
 
@@ -435,12 +442,12 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
 
         <div className="tbl-rank-cell">
           <span className="tbl-rdot" style={{ background: cur?.fg }} />
-          <span style={{ color: cur?.fg }}>{rankDisplay(acct.current_rank, acct.current_points)}</span>
+          <span style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points)}</span>
         </div>
 
         <div className="tbl-rank-cell">
           <span className="tbl-rdot" style={{ background: peak?.fg }} />
-          <span style={{ color: peak?.fg }}>{rankDisplay(acct.peak_rank, acct.peak_points)}</span>
+          <span style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points)}</span>
         </div>
 
         <div className="tbl-time" title={updatedTitle(acct)}>{fmtRelative(acct.updated_at)}</div>
@@ -575,7 +582,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
         {division && <span className="lad-div">{division}</span>}
         {division && <span className="lad-sep">·</span>}
         <span className="lad-peak-lbl">peak</span>
-        <span className="lad-peak-val" style={{ color: peak?.fg || "var(--muted)" }}>
+        <span className="lad-peak-val" style={rankInk(peak)}>
           {rankDisplay(acct.peak_rank, acct.peak_points)}
         </span>
       </div>
