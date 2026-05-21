@@ -54,10 +54,29 @@ html {
   --pad-card: 16px;
   --gap-grid: 12px;
   --grid-min: 280px;
+  /* Table-view density — row height + horizontal padding. */
+  --tbl-row-py: 11px;
+  --tbl-pad-x: 22px;
+  /* Ladder-view density — card padding + grid/group gaps. */
+  --lad-card-py: 12px;
+  --lad-card-px: 14px;
+  --lad-gap: 10px;
+  --lad-group-gap: 28px;
 }
 
-html[data-density="compact"] { --pad-card: 12px; --gap-grid: 10px; }
-html[data-density="comfy"]   { --pad-card: 22px; --gap-grid: 18px; }
+/* Density presets. data-density tracks whichever view is on screen, so each
+   preset tunes cards, table and ladder together; the per-view choice itself
+   lives in app state (densityCards / densityTable / densityLadder). */
+html[data-density="compact"] {
+  --pad-card: 12px; --gap-grid: 10px;
+  --tbl-row-py: 6px;  --tbl-pad-x: 16px;
+  --lad-card-py: 7px; --lad-card-px: 11px; --lad-gap: 7px; --lad-group-gap: 18px;
+}
+html[data-density="comfy"] {
+  --pad-card: 22px; --gap-grid: 18px;
+  --tbl-row-py: 17px; --tbl-pad-x: 28px;
+  --lad-card-py: 18px; --lad-card-px: 18px; --lad-gap: 16px; --lad-group-gap: 40px;
+}
 
 /* ── Subtle ambient texture ───────────────────────────────────────────────── */
 body::before {
@@ -482,7 +501,8 @@ body::before {
   font-weight: 600;
   color: var(--label-fg);
 }
-.rcard-alt .rcard-eyebrow { color: var(--muted); }
+/* "ALT" carries its own slate-blue (set via --label-fg in labelFor) so the
+   label reads at a glance without competing with the gold "main" accent. */
 
 .rcard-mark {
   width: 22px; height: 22px;
@@ -636,7 +656,7 @@ body::before {
 }
 .tbl-head {
   display: flex; align-items: baseline; justify-content: space-between;
-  padding: 16px 22px;
+  padding: 16px var(--tbl-pad-x);
   border-bottom: 1px solid var(--border);
 }
 .tbl-title {
@@ -656,7 +676,7 @@ body::before {
   display: grid;
   grid-template-columns: 28px 1fr 200px 200px 80px 32px;
   gap: 12px;
-  padding: 10px 22px;
+  padding: 10px var(--tbl-pad-x);
   border-bottom: 1px solid var(--border);
   background: var(--panel-2);
   font-family: var(--font-mono);
@@ -682,7 +702,7 @@ body::before {
   grid-template-columns: 28px 1fr 200px 200px 80px 32px;
   gap: 12px;
   align-items: center;
-  padding: 11px 22px;
+  padding: var(--tbl-row-py) var(--tbl-pad-x);
   cursor: pointer;
 }
 .tbl-pin {
@@ -751,7 +771,7 @@ body::before {
 .tbl-more:hover { color: var(--fg); background: var(--panel-3); }
 
 .tbl-row-detail {
-  padding: 0 22px 14px 50px;
+  padding: 0 var(--tbl-pad-x) 14px calc(var(--tbl-pad-x) + 28px);
   display: flex; flex-direction: column; gap: 10px;
   animation: tbl-expand .18s ease;
 }
@@ -779,7 +799,7 @@ body::before {
 /* ============================================================================
    LADDER VIEW (D — tier-grouped)
    ============================================================================ */
-.ladder { display: flex; flex-direction: column; gap: 28px; }
+.ladder { display: flex; flex-direction: column; gap: var(--lad-group-gap); }
 
 .ladder-group { display: flex; flex-direction: column; gap: 10px; }
 .ladder-head {
@@ -810,13 +830,13 @@ body::before {
 .ladder-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
+  gap: var(--lad-gap);
 }
 .lad-card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  padding: var(--lad-card-py) var(--lad-card-px);
   cursor: pointer;
   position: relative;
   overflow: hidden;
@@ -961,6 +981,7 @@ body::before {
 .dr-field input:focus, .dr-field textarea:focus { border-color: var(--border-3); }
 .dr-field textarea { resize: vertical; min-height: 60px; font-family: var(--font-body); }
 .dr-field-note { margin: -6px 0 12px; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+.dr-field-note strong { color: var(--fg-2); font-weight: 600; }
 
 .drawer-pw { position: relative; }
 .drawer-pw-toggle {
@@ -1452,3 +1473,67 @@ body::before {
   font-size:13px;font-weight:700;color:#29261b;font-variant-numeric:tabular-nums;
 }
 .sync-status-note{margin:0;color:rgba(41,38,27,.5);font-size:10px;line-height:1.5}
+
+/* "Current" — freshest possible crawl; brighten the tick so it reads as
+   genuinely live, a notch above the plain "synced" dot. */
+.sync-chip[data-state="current"] .sync-chip-i{
+  color:#4ee07e;text-shadow:0 0 5px rgba(78,224,126,.55);
+}
+
+/* ── Layout: account list + left-side info rail ─────────────────────────── */
+.app-body{ display:flex; gap:18px; align-items:flex-start; }
+.app-content{ flex:1; min-width:0; }
+
+.info-rail{
+  flex-shrink:0; width:250px;
+  position:sticky; top:20px;
+  max-height:calc(100vh - 40px); overflow:auto;
+  background:var(--panel); border:1px solid var(--border);
+  border-radius:var(--radius);
+}
+.info-rail.is-closed{ width:38px; overflow:hidden; }
+.info-rail-tab{
+  position:absolute; top:8px; right:8px;
+  width:24px; height:24px; padding:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:transparent; border:0; cursor:pointer;
+  color:var(--muted); font-size:15px; line-height:1; border-radius:6px;
+  transition:color .12s, background .12s;
+}
+.info-rail.is-closed .info-rail-tab{ position:static; width:100%; height:46px; }
+.info-rail-tab:hover{ color:var(--fg); background:var(--panel-3); }
+.info-rail-body{ padding:13px 15px 16px; }
+.info-rail-title{
+  font-family:var(--font-display);
+  font-size:11px; font-weight:600; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--muted);
+}
+
+/* Status key — legend rows (icon spans the stacked name + description). */
+.sync-legend-list{
+  list-style:none; margin:11px 0 0; padding:0;
+  display:flex; flex-direction:column; gap:10px;
+}
+.sync-legend-row{
+  display:grid; grid-template-columns:15px 1fr; align-items:baseline;
+  gap:2px 8px; font-size:10.5px; line-height:1.4;
+}
+.sync-legend-i{ grid-row:span 2; text-align:center; font-size:11px; }
+.sync-legend-i-ok{ color:#79e6a4; }
+.sync-legend-i-warn{ color:#f0c863; }
+.sync-legend-i-err{ color:#ff8a90; }
+.sync-legend-i-muted{ color:var(--muted-2,#9aa3b2); }
+.sync-legend-name{ font-weight:700; color:var(--fg); }
+.sync-legend-desc{ color:var(--muted); }
+.sync-legend-foot{
+  margin:13px 0 0; padding-top:12px; border-top:1px solid var(--border);
+  color:var(--muted); font-size:10px; line-height:1.6;
+}
+.sync-legend-foot strong{ color:var(--fg-2); font-weight:700; }
+
+@media (max-width:880px){
+  .app-body{ flex-direction:column; }
+  .info-rail{ width:auto; position:static; max-height:none; }
+  .info-rail.is-closed{ width:auto; }
+  .info-rail.is-closed .info-rail-tab{ width:46px; }
+}

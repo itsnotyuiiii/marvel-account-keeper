@@ -25,7 +25,9 @@ function rankDisplay(rank, points) {
 function labelFor(acct) {
   if (acct.pinned) return { kind: "main", text: "MAIN ACCOUNT", color: "#e8b94a" };
   if (acct.peak_rank === "One Above All") return { kind: "oaa", text: "PEAKED OAA", color: "#ff5560" };
-  return { kind: "alt", text: "ALT", color: null };
+  // Cool slate-blue: distinct from the warm gold "main" and red "oaa" labels,
+  // restrained enough to still read as the default/secondary state.
+  return { kind: "alt", text: "ALT", color: "#7fb0cf" };
 }
 
 // Map a stored border_color name -> hex for the tag-pill accent.
@@ -95,6 +97,9 @@ function chip({ label, value, field, onCopy, cls = "tk-chip" }) {
 // inside a day counts as fresh.
 const SYNC_STALE_AFTER_MS = 24 * 3600 * 1000;
 const RECRAWL_PENDING_MS = 30 * 60 * 1000;
+// A crawl this recent means the data is as live as the 30-min recrawl gate
+// allows — shown as "current" (green ✓) rather than just "synced".
+const SYNC_CURRENT_MS = 30 * 60 * 1000;
 
 // Account timestamps are epoch seconds; normalize anything seconds-scale to ms.
 function toMs(ts) {
@@ -102,17 +107,31 @@ function toMs(ts) {
   return ts < 1e12 ? ts * 1000 : ts;
 }
 
+// Re-render on an interval so countdowns / relative times stay live. Pass
+// active=false to park the timer when there is nothing counting down.
+function useMinuteTick(active) {
+  const [, force] = React.useState(0);
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const id = setInterval(() => force((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, [active]);
+}
+
 // Collapse an account's refresh fields into one state token. Drives both the
 // SyncChip and the refresh-button badge so they always agree.
-//   none → never refreshed      fresh → ok & recently crawled
-//   stale → ok but crawl is old   private / not_found / bad_key / error / missing_handle
+//   none → never refreshed       current → ok & crawled within the last 30 min
+//   fresh → ok & under a day old  stale → ok but crawl is over a day old
+//   private / not_found / bad_key / error / missing_handle → see SYNC_META
 function syncState(acct) {
   const st = acct.last_refresh_status;
   if (!st) return "none";
   if (st !== "ok") return st;
   const synced = toMs(acct.rivals_synced_at);
   if (synced == null) return "fresh";
-  return (Date.now() - synced) > SYNC_STALE_AFTER_MS ? "stale" : "fresh";
+  const age = Date.now() - synced;
+  if (age > SYNC_STALE_AFTER_MS) return "stale";
+  return age <= SYNC_CURRENT_MS ? "current" : "fresh";
 }
 
 // Icon + copy for each non-clean sync state. 'fresh'/'none' render no badge on
@@ -162,25 +181,37 @@ function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
   );
 }
 
-// Inline sync notifier: fresh / stale / private / not-found / failed. This is
-// the per-account counterpart to the API-wide status in the Options panel.
+// Inline sync notifier: current / fresh / stale / private / not-found / failed.
+// This is the per-account counterpart to the API-wide status in the Options
+// panel. When a recrawl is in flight it also shows a live countdown to when
+// fresh data should land (and when the next recrawl can be requested).
 function SyncChip({ acct, hasApiKey }) {
   const state = syncState(acct);
+
+  const synced = toMs(acct.rivals_synced_at);
+  const reqAt = toMs(acct.rivals_update_requested_at);
+  // marvelrivalsapi locks a player for 30 min after an /update — that same
+  // window is both "recrawl in progress" and "can't request another yet".
+  const recrawlLeft = reqAt != null ? RECRAWL_PENDING_MS - (Date.now() - reqAt) : -1;
+  const recrawlPending = recrawlLeft > 0;
+  useMinuteTick(recrawlPending);
+
   if (state === "none") {
     return hasApiKey ? (
-      <div className="sync-chip sync-chip-muted">
+      <div className="sync-chip sync-chip-muted" data-state="none">
         <span className="sync-chip-i" aria-hidden="true">○</span>
         <span className="sync-chip-t">Not synced yet — hit ↻ to pull the live rank</span>
       </div>
     ) : null;
   }
 
-  const synced = toMs(acct.rivals_synced_at);
-  const reqAt = toMs(acct.rivals_update_requested_at);
-  const recrawlPending = reqAt != null && (Date.now() - reqAt) < RECRAWL_PENDING_MS;
-
   let cls, icon, text;
-  if (state === "fresh") {
+  if (state === "current") {
+    cls = "ok";
+    icon = "✓";
+    text = synced ? `API rank is current — crawled ${fmtRelative(synced)}`
+                  : "API rank is current";
+  } else if (state === "fresh") {
     cls = "ok";
     icon = "●";
     text = synced ? `API rank synced ${fmtRelative(synced)}` : "API rank synced";
@@ -192,12 +223,24 @@ function SyncChip({ acct, hasApiKey }) {
       ? `API rank from ${fmtRelative(synced)} — may be outdated`
       : m.text;
   }
+
+  const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;
   return (
-    <div className={"sync-chip sync-chip-" + cls}
+    <div className={"sync-chip sync-chip-" + cls} data-state={state}
          title={acct.last_refresh_error || text}>
       <span className="sync-chip-i" aria-hidden="true">{icon}</span>
       <span className="sync-chip-t">{text}</span>
-      {recrawlPending && <span className="sync-chip-pending">· recrawl queued</span>}
+      {recrawlPending && (
+        <span className="sync-chip-pending"
+              title={"Recrawl queued — marvelrivalsapi is re-fetching this "
+                     + "player's live stats from the game. The crawl usually "
+                     + "finishes within a few minutes (30 min at the most); "
+                     + "refresh this card again then to pull the updated rank. "
+                     + "Another recrawl can't be queued for this player for ~"
+                     + recrawlMins + " min."}>
+          · recrawl queued · ~{recrawlMins}m
+        </span>
+      )}
     </div>
   );
 }

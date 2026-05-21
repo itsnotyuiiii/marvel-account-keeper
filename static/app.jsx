@@ -23,9 +23,12 @@ const {
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "view": "cards",
-  "density": "regular",
+  "densityCards": "regular",
+  "densityTable": "regular",
+  "densityLadder": "regular",
   "hideDetails": false,
   "hideCopy": false,
+  "infoRailOpen": true,
   "lockoutMinutes": 30
 } /*EDITMODE-END*/;
 
@@ -34,11 +37,23 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // because the server owns the real auto-lock timeout; the server value is
 // authoritative and is synced back into this store on every boot/unlock.
 const OPTIONS_KEY = "marvel-tracker-options";
-const OPTION_KEYS = ["view", "density", "hideDetails", "hideCopy", "lockoutMinutes"];
+const OPTION_KEYS = ["view", "densityCards", "densityTable", "densityLadder",
+  "hideDetails", "hideCopy", "infoRailOpen", "lockoutMinutes"];
+// Density is stored per view, so each layout keeps its own compact/comfy choice.
+const DENSITY_KEY = { cards: "densityCards", table: "densityTable", ladder: "densityLadder" };
+const DENSITY_VIEW_LABEL = { cards: "Cards", table: "Table", ladder: "Ladder" };
 function loadStoredOptions() {
   try {
     const raw = localStorage.getItem(OPTIONS_KEY);
-    return raw ? JSON.parse(raw) : {};
+    const stored = raw ? JSON.parse(raw) : {};
+    // Migrate the legacy single `density` value to the per-view keys.
+    if (typeof stored.density === "string") {
+      for (const k of ["densityCards", "densityTable", "densityLadder"]) {
+        if (stored[k] === undefined) stored[k] = stored.density;
+      }
+      delete stored.density;
+    }
+    return stored;
   } catch { return {}; }
 }
 function saveStoredOptions(values) {
@@ -479,13 +494,19 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete }) {
           <section className="drawer-section">
             <div className="drawer-section-lbl">Identity</div>
             <Field label="In-game name" value={form.in_game_name}
-            onChange={(v) => set("in_game_name", v)} placeholder="e.g. Yuiiii" />
+            onChange={(v) => set("in_game_name", v)}
+            placeholder="e.g. Yuiiii — optional if a UID is set" />
             <Field label="Marvel Rivals UID" value={form.rivals_uid}
             onChange={(v) => set("rivals_uid", v)}
-            placeholder="optional — numeric player ID" />
+            placeholder="recommended — numeric player ID" />
             <p className="dr-field-note">
-              When set, stats refresh looks up by UID — the most reliable option
-              for private or renamed accounts. Auto-filled after the first refresh.
+              <strong>A UID is the preferred way to link an account.</strong> It's
+              the most reliable lookup — it works for private or renamed accounts,
+              and it pulls the exact in-game name straight from the API, including
+              superscript / special characters that are awkward to type by hand.
+              Set a UID and the in-game name fills itself in and stays in sync on
+              every refresh; leave it blank and lookups fall back to the typed
+              in-game name.
             </p>
           </section>
 
@@ -931,7 +952,66 @@ function SyncStatus({ sync, hasKey }) {
         Dynamic rate limit — it adapts to your usage. Cached lookups don't
         report live numbers, so the window figures fill in after an uncached call.
       </p>
+      <p className="sync-status-note">
+        Each player can only be recrawled once every 30 min. Refreshing more
+        often just re-reads the cached rank — it won't pull newer data.
+      </p>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sync status legend — explains every per-account chip / refresh-badge state.
+// Lives in the Options panel so the icons on the cards are self-documenting.
+// ─────────────────────────────────────────────────────────────────────────────
+const SYNC_LEGEND = [
+  { icon: "✓", tone: "ok",    name: "Current",   desc: "Rank crawled by the API within the last 30 min — as live as it gets." },
+  { icon: "●", tone: "ok",    name: "Synced",    desc: "Rank synced and under a day old." },
+  { icon: "▲", tone: "warn",  name: "Stale",     desc: "API data is over a day old — refresh to queue a recrawl." },
+  { icon: "🔒", tone: "warn",  name: "Private",   desc: "Profile is private in-game — set the rank manually." },
+  { icon: "?", tone: "muted", name: "Not found", desc: "No data for this player on marvelrivalsapi.com." },
+  { icon: "?", tone: "muted", name: "No handle", desc: "Account has no in-game name or UID to look up." },
+  { icon: "!", tone: "err",   name: "Key error", desc: "API key was rejected — check the key above." },
+  { icon: "!", tone: "err",   name: "Failed",    desc: "Last refresh hit an error — retry in a bit." },
+  { icon: "○", tone: "muted", name: "Not synced", desc: "Never refreshed from the API yet." },
+];
+
+// Collapsible left-side rail carrying the status key. Sits beside the account
+// grid so the chip icons on the cards are documented in view, not buried in
+// Options. Collapsed state persists via the `infoRailOpen` tweak.
+function InfoRail({ open, onToggle }) {
+  return (
+    <aside className={"info-rail" + (open ? "" : " is-closed")}>
+      <button type="button" className="info-rail-tab" onClick={onToggle}
+              aria-label={open ? "Collapse status key" : "Show status key"}
+              title={open ? "Collapse" : "Status key"}>
+        {open ? "‹" : "ⓘ"}
+      </button>
+      {open && (
+        <div className="info-rail-body">
+          <div className="info-rail-title">Status key</div>
+          <ul className="sync-legend-list">
+            {SYNC_LEGEND.map((row) => (
+              <li className="sync-legend-row" key={row.name}>
+                <span className={"sync-legend-i sync-legend-i-" + row.tone}
+                      aria-hidden="true">{row.icon}</span>
+                <span className="sync-legend-name">{row.name}</span>
+                <span className="sync-legend-desc">{row.desc}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="sync-legend-foot">
+            <strong>Recrawl queued</strong> — refreshing a stale account asks
+            marvelrivalsapi to re-fetch that player's stats from the game. The
+            card shows a “recrawl queued · ~Nm” note while it runs. The crawl
+            itself usually completes within a few minutes (30 min at the very
+            most) — refresh the card again then to pull the new rank. The
+            countdown is that 30-min window, which is also the soonest another
+            recrawl can be queued for the same player.
+          </p>
+        </div>
+      )}
+    </aside>
   );
 }
 
@@ -1096,8 +1176,11 @@ function App() {
   // ── document data attributes ──────────────────────────────────────────────
   React.useEffect(() => {
     document.documentElement.dataset.view = t.view;
-    document.documentElement.dataset.density = t.density;
-  }, [t.view, t.density]);
+    // data-density always carries the *active* view's density — only one view
+    // renders at a time, so the table/ladder/card density CSS can key off this
+    // single attribute without also matching on the view.
+    document.documentElement.dataset.density = t[DENSITY_KEY[t.view]] || "regular";
+  }, [t.view, t.densityCards, t.densityTable, t.densityLadder]);
 
   // ── lock countdown ────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -1371,30 +1454,36 @@ function App() {
             accountsCount={accounts.length} />
 
 
-          {visible.length === 0 ?
-          <div className="app-empty">
-              {accounts.length === 0 ?
-            <><b>No accounts yet.</b> Add one with “New account”.</> :
-            <><b>No matches.</b> Try a different search.</>}
-            </div> :
-          t.view === "table" ?
-          <TableView accounts={visible} opts={opts}
-          onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-          onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
-          sortLabel={sortLabel} /> :
-          t.view === "ladder" ?
-          <LadderView accounts={visible} opts={opts}
-          onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-          onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey} /> :
+          <div className="app-body">
+            <InfoRail open={t.infoRailOpen}
+                      onToggle={() => setTweak("infoRailOpen", !t.infoRailOpen)} />
+            <div className="app-content">
+              {visible.length === 0 ?
+              <div className="app-empty">
+                  {accounts.length === 0 ?
+                <><b>No accounts yet.</b> Add one with “New account”.</> :
+                <><b>No matches.</b> Try a different search.</>}
+                </div> :
+              t.view === "table" ?
+              <TableView accounts={visible} opts={opts}
+              onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+              onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
+              sortLabel={sortLabel} /> :
+              t.view === "ladder" ?
+              <LadderView accounts={visible} opts={opts}
+              onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+              onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey} /> :
 
-          <div className="app-grid">
-              {visible.map((a) =>
-            <CardRefined key={a.id} acct={a} opts={opts}
-            onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-            onRefresh={onRefresh} refreshing={refreshing.has(a.id)} hasApiKey={hasApiKey} />
-            )}
+              <div className="app-grid">
+                  {visible.map((a) =>
+                <CardRefined key={a.id} acct={a} opts={opts}
+                onOpen={onOpen} onCopy={onCopy} onPin={onPin}
+                onRefresh={onRefresh} refreshing={refreshing.has(a.id)} hasApiKey={hasApiKey} />
+                )}
+                </div>
+              }
             </div>
-          }
+          </div>
         </main>
 
         {toast && <div className="app-toast">{toast}</div>}
@@ -1436,10 +1525,10 @@ function App() {
             onChange={(v) => setTweak("view", v)} />
 
           <TweakRadio
-            label="Density"
-            value={t.density}
+            label={"Density · " + DENSITY_VIEW_LABEL[t.view]}
+            value={t[DENSITY_KEY[t.view]]}
             options={["compact", "regular", "comfy"]}
-            onChange={(v) => setTweak("density", v)} />
+            onChange={(v) => setTweak(DENSITY_KEY[t.view], v)} />
 
         </TweakSection>
 
@@ -1461,6 +1550,9 @@ function App() {
         <TweakSection label="Marvel Rivals stats">
           <ApiKeyControl hasKey={hasApiKey} onSave={changeApiKey} />
           <SyncStatus sync={syncStatus} hasKey={hasApiKey} />
+          <p className="sync-status-note">
+            Status-icon key moved to the info rail on the left of the accounts list.
+          </p>
         </TweakSection>
       </TweaksPanel>
     </>);

@@ -907,15 +907,20 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         return {**base, "last_refresh_status": "not_found",
                 "last_refresh_error": "Response had no recognizable rank fields."}
 
-    # Autopopulate the in-game name from the API response when the account has
-    # none yet — i.e. it was looked up by UID. Handy for charmap / special-
-    # character IGNs the user can't type into the form. Only fills a blank
-    # field, so a name the user typed themselves is never overwritten.
+    # Sync the in-game name from the API response. The API's name is the
+    # canonical IGN — including charmap / superscript characters the user
+    # can't type into the form. We adopt it when the field is blank (covers
+    # UID-only adds) OR whenever the lookup ran by UID: a UID is the stable
+    # identity, so its name is authoritative and a plain-text approximation
+    # the user typed should follow it. A name-only lookup never overwrites,
+    # since there the typed name is itself the lookup key.
     extra: dict[str, Any] = {}
-    if not (acct.get("in_game_name") or "").strip():
-        api_name = payload.get("name")
-        if isinstance(api_name, str) and api_name.strip():
-            extra["in_game_name"] = api_name.strip()
+    api_name = payload.get("name")
+    api_name = api_name.strip() if isinstance(api_name, str) else ""
+    current_ign = (acct.get("in_game_name") or "").strip()
+    by_uid = bool((acct.get("rivals_uid") or "").strip())
+    if api_name and (not current_ign or (by_uid and api_name != current_ign)):
+        extra["in_game_name"] = api_name
 
     # Got something, but no rank fields means the upstream knows the player
     # exists yet has stale/missing rank data ('Invalid level' etc.). Keep the
