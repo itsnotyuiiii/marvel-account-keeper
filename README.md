@@ -6,6 +6,8 @@ entirely on your machine; nothing is sent anywhere.
 
 ![icon](icon.png)
 
+![Marvel Account Keeper demo](demo.gif)
+
 ## Get started (Windows — this is almost everyone)
 
 There's nothing to "install" — Marvel Account Keeper is a single file you run.
