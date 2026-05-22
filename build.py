@@ -34,7 +34,7 @@ def main() -> None:
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile",                              # single self-contained file
-        "--console",                             # show the terminal window
+        "--windowed",                            # no terminal window on Windows/macOS
         "--name", NAME,
         "--add-data", f"templates{sep}templates",  # Flask templates
         "--add-data", f"static{sep}static",        # JS / CSS / vendored libs

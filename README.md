@@ -18,8 +18,8 @@ There's nothing to "install" — Marvel Account Keeper is a single file you run.
    **`MarvelAccountKeeper-windows.exe`**. That's the file 99% of people want.
 2. **Put it somewhere handy** — your Desktop, or a folder like
    `Documents\Marvel Account Keeper`. It runs fine from anywhere.
-3. **Double-click it.** Your web browser opens the app on its own. A small
-   black window also appears — that's normal, just leave it be.
+3. **Double-click it.** Your web browser opens the app on its own — no
+   terminal window, no setup screen, nothing else to click.
 4. **When you're done, close the browser tab.** The app shuts itself down a
    couple of minutes later — nothing is left running in the background.
 

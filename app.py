@@ -36,6 +36,17 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from flask import Flask, jsonify, render_template, request
 
+# Packaged as a windowed PyInstaller exe (no console), sys.stdout / sys.stderr
+# come up as None on Windows and every print() in this file would raise
+# AttributeError. Point them at devnull so the existing chatter becomes a
+# silent no-op instead of crashing on launch.
+if sys.stdout is None or sys.stderr is None:
+    _devnull = open(os.devnull, "w", encoding="utf-8")
+    if sys.stdout is None:
+        sys.stdout = _devnull
+    if sys.stderr is None:
+        sys.stderr = _devnull
+
 APP_NAME = "MarvelAccountKeeper"
 VERIFIER_PLAINTEXT = b"VAULT_OK::v1"
 SCRYPT_N = 2**15
@@ -93,7 +104,16 @@ def _data_dir() -> Path:
       Windows : %APPDATA%/MarvelAccountKeeper/
       macOS   : ~/Library/Application Support/MarvelAccountKeeper/
       Linux   : ~/.local/share/MarvelAccountKeeper/
+
+    Set the MARVEL_KEEPER_DATA env var to override the location entirely —
+    handy for a throwaway demo vault, tests, or keeping more than one vault.
+    The override is used as-is (no MarvelAccountKeeper subfolder).
     """
+    override = os.environ.get("MARVEL_KEEPER_DATA")
+    if override:
+        d = Path(override).expanduser()
+        d.mkdir(parents=True, exist_ok=True)
+        return d
     home = Path.home()
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
