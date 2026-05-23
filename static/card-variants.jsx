@@ -20,6 +20,27 @@ function rankDisplay(rank, points) {
   return rank;
 }
 
+// True when the vault entry's Steam username matches the currently signed-in
+// Steam user on this PC (case-insensitive). Drives the "ACTIVE NOW" badge.
+function isActiveSteamMatch(acct, activeSteam) {
+  if (!activeSteam || !acct) return false;
+  const u = (acct.username || "").trim().toLowerCase();
+  const a = (activeSteam.account_name || "").trim().toLowerCase();
+  return !!u && u === a;
+}
+
+// Inline "ACTIVE NOW" pill. Tiny, low-contrast, sits next to the IGN.
+function ActiveSteamBadge({ activeSteam, compact }) {
+  if (!activeSteam) return null;
+  const title = `Signed in to Steam as ${activeSteam.persona_name || activeSteam.account_name}`;
+  return (
+    <span className={"active-steam-badge" + (compact ? " active-steam-badge-sm" : "")} title={title}>
+      <span className="active-steam-dot" />
+      <span className="active-steam-lbl">{compact ? "ACTIVE" : "ACTIVE NOW"}</span>
+    </span>
+  );
+}
+
 function labelFor(acct) {
   // Colors are theme tokens (see styles.css) so the labels stay legible in
   // both dark and light mode — gold "main", red "oaa", slate-blue "alt".
@@ -285,7 +306,7 @@ function SyncChip({ acct, hasApiKey }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // B. CARDS  (refined trading-card)
 // ─────────────────────────────────────────────────────────────────────────────
-function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey }) {
+function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -329,6 +350,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         <h3 className={"rcard-ign" + (acct.in_game_name ? "" : " rcard-ign-empty")}>
           {acct.in_game_name || "No IGN set"}
         </h3>
+        {isActiveSteamMatch(acct, activeSteam) && <ActiveSteamBadge activeSteam={activeSteam} />}
         <TagPill acct={acct} />
       </div>
 
@@ -374,7 +396,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
 // ─────────────────────────────────────────────────────────────────────────────
 // C. TABLE  (data-dense list)
 // ─────────────────────────────────────────────────────────────────────────────
-function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, sortLabel }) {
+function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, sortLabel, activeSteam }) {
   return (
     <section className="tbl">
       <header className="tbl-head">
@@ -395,14 +417,15 @@ function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshin
                     onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                     onRefresh={onRefresh}
                     refreshing={refreshingIds && refreshingIds.has(a.id)}
-                    hasApiKey={hasApiKey} />
+                    hasApiKey={hasApiKey}
+                    activeSteam={activeSteam} />
         ))}
       </ol>
     </section>
   );
 }
 
-function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey }) {
+function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -435,6 +458,7 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
           </span>
           {lab.kind === "main" && <span className="tbl-tag">main</span>}
           {lab.kind === "oaa"  && <span className="tbl-tag tbl-tag-oaa">peak oaa</span>}
+          {isActiveSteamMatch(acct, activeSteam) && <ActiveSteamBadge activeSteam={activeSteam} compact />}
           <TagPill acct={acct} />
         </div>
 
@@ -496,7 +520,7 @@ const TIER_ORDER = [
   "Celestial", "Grandmaster", "Diamond", "Platinum", "Gold", "Silver", "Bronze",
 ];
 
-function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey }) {
+function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam }) {
   // Group by tier of current_rank
   const groups = React.useMemo(() => {
     const m = new Map();
@@ -515,13 +539,14 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
       {groups.map(([tier, list]) => (
         <LadderGroup key={tier} tier={tier} list={list}
                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-                     onRefresh={onRefresh} refreshingIds={refreshingIds} hasApiKey={hasApiKey} />
+                     onRefresh={onRefresh} refreshingIds={refreshingIds} hasApiKey={hasApiKey}
+                     activeSteam={activeSteam} />
       ))}
     </div>
   );
 }
 
-function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey }) {
+function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam }) {
   const t = themeFor(tier === "One Above All" ? "One Above All" : tier + " I") || { fg: "#9aa3b2" };
   return (
     <section className="ladder-group" style={{ "--tier-fg": t.fg }}>
@@ -536,14 +561,15 @@ function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refre
                       opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                       onRefresh={onRefresh}
                       refreshing={refreshingIds && refreshingIds.has(a.id)}
-                      hasApiKey={hasApiKey} />
+                      hasApiKey={hasApiKey}
+                      activeSteam={activeSteam} />
         ))}
       </div>
     </section>
   );
 }
 
-function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey }) {
+function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey, activeSteam }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -566,6 +592,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
           {acct.in_game_name || "No IGN set"}
         </span>
         <div className="lad-line-r">
+          {isActiveSteamMatch(acct, activeSteam) && <ActiveSteamBadge activeSteam={activeSteam} compact />}
           <TagPill acct={acct} />
           <RefreshBtn acct={acct} refreshing={refreshing}
                       onRefresh={onRefresh} hasApiKey={hasApiKey} size="xs" />

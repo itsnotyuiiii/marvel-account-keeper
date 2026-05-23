@@ -1601,3 +1601,157 @@ html[data-theme="light"] .refresh-btn.has-issue[data-status="error"] { color: #d
   .info-rail.is-closed{ width:auto; }
   .info-rail.is-closed .info-rail-tab{ width:46px; }
 }
+
+/* ── Active Steam badge ─────────────────────────────────────────────────────
+   Surfaces which vault entry matches the currently signed-in Steam user on
+   this PC. The dot uses a steady glow rather than a pulse so it doesn't
+   distract from the card content. */
+.active-steam-badge{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:2px 9px;
+  border:1px solid #4ee07e;
+  border-radius:999px;
+  background:rgba(78,224,126,.08);
+  color:#4ee07e;
+  font-family:var(--font-mono);
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  white-space:nowrap;
+  flex-shrink:0;
+}
+.active-steam-badge-sm{
+  padding:1px 7px;
+  font-size:9px;
+  letter-spacing:.12em;
+}
+.active-steam-dot{
+  width:6px; height:6px; border-radius:50%;
+  background:#4ee07e;
+  box-shadow:0 0 6px #4ee07e, 0 0 12px rgba(78,224,126,.6);
+}
+html[data-theme="light"] .active-steam-badge{
+  color:#1f9d4d;
+  border-color:#1f9d4d;
+  background:rgba(31,157,77,.1);
+}
+html[data-theme="light"] .active-steam-dot{
+  background:#1f9d4d;
+  box-shadow:0 0 4px #1f9d4d;
+}
+
+/* ── Match history (in drawer) ─────────────────────────────────────────────
+   Renders the last 20 ranked matches for an account. Win/loss is a colored
+   left stripe; SR delta is green/red; MVP/SVP get a tiny pill. */
+.drawer-section-lbl-row{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:10px;
+}
+.drawer-section-r{
+  display:flex; align-items:center; gap:10px;
+}
+.match-sync-lbl{
+  font-family:var(--font-mono);
+  font-size:10px;
+  color:var(--muted);
+  letter-spacing:.04em;
+  text-transform:none;
+}
+.match-sync-btn{
+  padding:3px 10px;
+  font-family:var(--font-mono);
+  font-size:10px;
+  letter-spacing:.06em;
+  background:transparent;
+  color:var(--fg-2);
+  border:1px solid var(--border);
+  border-radius:6px;
+  cursor:pointer;
+  text-transform:uppercase;
+}
+.match-sync-btn:hover:not(:disabled){
+  border-color:var(--accent);
+  color:var(--accent);
+}
+.match-sync-btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+.match-empty{
+  padding:14px 12px;
+  border:1px dashed var(--border);
+  border-radius:8px;
+  color:var(--muted);
+  font-size:12px;
+  text-align:center;
+}
+.match-error{ color:#ff5560; border-color:rgba(255,85,96,.35); }
+
+.match-list{ display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.match-row{
+  position:relative;
+  display:grid;
+  grid-template-columns: 4px 28px 1fr auto;
+  gap:10px;
+  align-items:center;
+  padding:8px 10px 8px 0;
+  background:var(--panel-2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  font-size:12px;
+  overflow:hidden;
+}
+.match-row .match-stripe{
+  width:4px; height:100%;
+  align-self:stretch;
+}
+.match-win .match-stripe{ background:linear-gradient(180deg,#4ee07e,#21a85a); }
+.match-loss .match-stripe{ background:linear-gradient(180deg,#ff5560,#9b1e26); }
+
+.match-hero-img{
+  width:28px; height:28px; border-radius:6px;
+  object-fit:cover;
+  background:var(--bg-2);
+  border:1px solid var(--border);
+}
+.match-info{ min-width:0; display:flex; flex-direction:column; gap:2px; }
+.match-line1{ display:flex; align-items:center; gap:6px; }
+.match-hero-name{
+  font-weight:600;
+  color:var(--fg);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.match-badge{
+  display:inline-block;
+  padding:1px 5px;
+  border-radius:4px;
+  font-family:var(--font-mono);
+  font-size:9px;
+  font-weight:700;
+  letter-spacing:.1em;
+  line-height:1.4;
+}
+.match-mvp{ background:#ffe14d; color:#3a2d00; }
+.match-svp{ background:#5be0ff; color:#003040; }
+.match-dc { background:#9aa3b2; color:#1a1d24; }
+.match-line2{
+  display:flex; gap:6px; align-items:center;
+  color:var(--muted);
+  font-family:var(--font-mono);
+  font-size:11px;
+}
+.match-kda b{ color:var(--fg-2); font-weight:600; }
+.match-sep{ opacity:.45; }
+.match-right{ text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:2px; padding-right:10px; }
+.match-sr{
+  font-family:var(--font-mono);
+  font-size:12px;
+  font-weight:700;
+  color:var(--muted);
+}
+.match-sr-up{   color:#4ee07e; }
+.match-sr-down{ color:#ff5560; }
+.match-ago{
+  font-family:var(--font-mono);
+  font-size:10px;
+  color:var(--muted);
+}

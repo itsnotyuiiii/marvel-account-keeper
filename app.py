@@ -72,6 +72,10 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "last_refresh_error": None,
     "rivals_synced_at": None,      # epoch — when marvelrivalsapi last crawled this player
     "rivals_update_requested_at": None,  # epoch — when we last asked the API to recrawl
+    # Match history (lazy — populated only when the drawer is opened for an account)
+    "recent_matches": [],
+    "matches_synced_at": None,
+    "matches_error": None,
 }
 
 # marvelrivalsapi.com integration
@@ -131,6 +135,169 @@ DATA_DIR = _data_dir()
 VAULT_PATH = DATA_DIR / "vault.json"
 BACKUP_DIR = DATA_DIR / "backups"
 EXTRA_BACKUP_DIR = Path.home() / "Documents" / "MarvelAccountsBackups"
+
+
+# ---------- Steam install detection ----------
+# We surface which Steam account is currently logged in so the matching vault
+# card can show an "ACTIVE NOW" badge — turning the vault into a live snapshot
+# of which account is in use, rather than a passive list.
+
+def _steam_install_dir() -> Path | None:
+    """Locate the Steam install directory across Windows / macOS / Linux."""
+    if sys.platform == "win32":
+        try:
+            import winreg  # std-lib, Windows-only
+        except ImportError:
+            return None
+        # SteamPath lives in HKCU; InstallPath in HKLM as a 32/64-bit fallback.
+        for hive, path, name in (
+            (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam", "InstallPath"),
+        ):
+            try:
+                with winreg.OpenKey(hive, path) as k:
+                    val = winreg.QueryValueEx(k, name)[0]
+                    if val:
+                        return Path(val)
+            except OSError:
+                continue
+        return None
+    if sys.platform == "darwin":
+        cand = Path.home() / "Library" / "Application Support" / "Steam"
+        return cand if cand.exists() else None
+    # Linux: ~/.steam/steam is the canonical symlink; ~/.local/share/Steam is
+    # the typical install. Try both before giving up.
+    for cand in (Path.home() / ".steam" / "steam",
+                 Path.home() / ".local" / "share" / "Steam"):
+        if cand.exists():
+            return cand
+    return None
+
+
+def _parse_vdf(text: str) -> dict[str, Any]:
+    """Minimal parser for Valve's text-KV format used in loginusers.vdf.
+
+    Handles only what that file uses: quoted keys, quoted scalar values, and
+    nested { ... } blocks. Escapes are limited to \\\\ and \\". Anything more
+    exotic isn't worth pulling in a dependency for.
+    """
+    i, n = 0, len(text)
+
+    def skip_ws() -> None:
+        nonlocal i
+        while i < n:
+            c = text[i]
+            if c in " \t\r\n":
+                i += 1
+            elif c == "/" and i + 1 < n and text[i + 1] == "/":
+                while i < n and text[i] != "\n":
+                    i += 1
+            else:
+                return
+
+    def read_quoted() -> str:
+        nonlocal i
+        assert text[i] == '"'
+        i += 1
+        out: list[str] = []
+        while i < n and text[i] != '"':
+            c = text[i]
+            if c == "\\" and i + 1 < n:
+                nxt = text[i + 1]
+                out.append({"\\": "\\", '"': '"', "n": "\n", "t": "\t"}.get(nxt, nxt))
+                i += 2
+            else:
+                out.append(c)
+                i += 1
+        i += 1  # closing quote
+        return "".join(out)
+
+    def read_value() -> Any:
+        nonlocal i
+        skip_ws()
+        if i >= n:
+            return ""
+        if text[i] == "{":
+            i += 1
+            obj: dict[str, Any] = {}
+            while True:
+                skip_ws()
+                if i >= n or text[i] == "}":
+                    if i < n:
+                        i += 1
+                    return obj
+                if text[i] == '"':
+                    key = read_quoted()
+                    val = read_value()
+                    obj[key] = val
+                else:
+                    i += 1  # be forgiving — skip stray bytes
+        if text[i] == '"':
+            return read_quoted()
+        return ""
+
+    # The top of loginusers.vdf is a single quoted key followed by a block
+    # (`"users" { ... }`). Read it as one pair so the result is a normal dict.
+    skip_ws()
+    if i < n and text[i] == '"':
+        key = read_quoted()
+        return {key: read_value()}
+    return {}
+
+
+def _active_steam_account() -> dict[str, Any] | None:
+    """Return {steam_id, account_name, persona_name} for the most-recent Steam
+    user on this machine, or None if Steam isn't installed / no user has ever
+    signed in. Reads config/loginusers.vdf — Steam updates that file on every
+    login, so the data is always current.
+    """
+    steam = _steam_install_dir()
+    if not steam:
+        return None
+    vdf = steam / "config" / "loginusers.vdf"
+    if not vdf.exists():
+        return None
+    try:
+        text = vdf.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    try:
+        parsed = _parse_vdf(text)
+    except Exception:  # nosec — best-effort against arbitrary on-disk content
+        return None
+    users = parsed.get("users") if isinstance(parsed, dict) else None
+    if not isinstance(users, dict):
+        return None
+    # Pick the user marked MostRecent=1; if multiple (or none) are flagged,
+    # fall back to the highest Timestamp.
+    most_recent_id: str | None = None
+    most_recent_ts = -1
+    for steam_id, info in users.items():
+        if not isinstance(info, dict):
+            continue
+        try:
+            ts = int(info.get("Timestamp") or 0)
+        except (TypeError, ValueError):
+            ts = 0
+        if str(info.get("MostRecent") or "0") == "1":
+            return {
+                "steam_id": steam_id,
+                "account_name": str(info.get("AccountName") or ""),
+                "persona_name": str(info.get("PersonaName") or ""),
+                "timestamp": ts,
+            }
+        if ts > most_recent_ts:
+            most_recent_ts, most_recent_id = ts, steam_id
+    if most_recent_id:
+        info = users[most_recent_id]
+        return {
+            "steam_id": most_recent_id,
+            "account_name": str(info.get("AccountName") or ""),
+            "persona_name": str(info.get("PersonaName") or ""),
+            "timestamp": most_recent_ts,
+        }
+    return None
 
 
 app = Flask(
@@ -967,6 +1134,114 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
     return {**base, "last_refresh_status": "ok", **extra, **parsed}
 
 
+# ---------- match history ----------
+# marvelrivalsapi exposes /player/{uid}/match-history with the last 20 ranked
+# matches. We slim each match to the few fields the UI shows and stash them
+# on the account so they survive a page reload — much friendlier than a fresh
+# API hit on every drawer-open.
+
+MATCH_HISTORY_KEEP = 20
+
+# play_mode_id / game_mode_id labels — derived empirically from real data.
+# These are best-effort; the API doesn't publish a key list and we fall back
+# to "Match" when an ID is unrecognized.
+_GAME_MODE_LABELS = {0: "Quick Match", 1: "Ranked", 2: "Competitive", 3: "Custom", 4: "Tournament"}
+
+
+def _slim_match(raw: dict[str, Any], player_uid: int | str | None) -> dict[str, Any] | None:
+    """Compress one match payload into the row the UI renders."""
+    if not isinstance(raw, dict):
+        return None
+    mp = raw.get("match_player") if isinstance(raw.get("match_player"), dict) else {}
+    hero = mp.get("player_hero") if isinstance(mp.get("player_hero"), dict) else {}
+    score = mp.get("score_info") if isinstance(mp.get("score_info"), dict) else {}
+    iw = mp.get("is_win") if isinstance(mp.get("is_win"), dict) else {}
+
+    try:
+        own_uid = int(player_uid) if player_uid is not None else None
+    except (TypeError, ValueError):
+        own_uid = None
+
+    def _i(v: Any, default: int = 0) -> int:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    def _f(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "uid": str(raw.get("match_uid") or ""),
+        "ts": _i(raw.get("match_time_stamp")),
+        "duration_s": int(_f(raw.get("match_play_duration"))),
+        "map_id": _i(raw.get("match_map_id")),
+        "map_thumbnail": raw.get("map_thumbnail") or "",
+        "hero_name": (hero.get("hero_name") or "").title(),
+        "hero_image": hero.get("hero_type") or "",
+        "kda": [_i(mp.get("kills")), _i(mp.get("deaths")), _i(mp.get("assists"))],
+        "is_win": bool(iw.get("is_win")),
+        "is_mvp": own_uid is not None and _i(raw.get("mvp_uid")) == own_uid,
+        "is_svp": own_uid is not None and _i(raw.get("svp_uid")) == own_uid,
+        "sr_delta": round(_f(score.get("add_score")), 1),
+        "sr_after": round(_f(score.get("new_score")), 1),
+        "level_after": _i(score.get("new_level")),
+        "season": str(raw.get("match_season") or ""),
+        "play_mode_id": _i(raw.get("play_mode_id")),
+        "game_mode_id": _i(raw.get("game_mode_id")),
+        "mode_label": _GAME_MODE_LABELS.get(_i(raw.get("game_mode_id")), "Match"),
+        "disconnected": bool(mp.get("disconnected")),
+    }
+
+
+def _fetch_match_history(acct: dict[str, Any], api_key: str) -> dict[str, Any]:
+    """Call /player/{uid}/match-history and return updates to merge in."""
+    now = int(time.time())
+    base: dict[str, Any] = {
+        "matches_synced_at": now,
+        "matches_error": None,
+    }
+    if not api_key:
+        return {**base, "matches_error": "No Marvel Rivals API key set in Options."}
+    uid = (acct.get("rivals_uid") or "").strip()
+    if not uid:
+        return {**base,
+                "matches_error": "Refresh the account's rank first to resolve its UID."}
+
+    url = f"{RIVALS_API_BASE}/player/{urllib.parse.quote(uid, safe='')}/match-history"
+    headers = {"x-api-key": api_key, "Accept": "application/json",
+               "User-Agent": "MarvelAccountKeeper/1.0"}
+    try:
+        status, payload, retry_after = _http_get_json(url, headers)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return {**base, "matches_error": f"Network error: {e}"}
+    _note_api_call()
+
+    if status == 429:
+        _note_rate_limited(retry_after or 60)
+        return {**base, "matches_error":
+                f"Rate limited — wait ~{retry_after or 60}s, then retry."}
+    if status in (401, 403):
+        if _is_private_payload(status, payload):
+            return {**base, "matches_error": "Profile is set to private in-game."}
+        return {**base, "matches_error": f"API rejected the key (HTTP {status})."}
+    if status == 404:
+        return {**base, "matches_error": "No matches on file for this player."}
+    if status >= 400 or not isinstance(payload, dict):
+        return {**base, "matches_error": f"Unexpected HTTP {status}."}
+
+    raw_matches = payload.get("match_history") or []
+    if not isinstance(raw_matches, list):
+        return {**base, "matches_error": "Response had no match_history list."}
+
+    slim = [m for m in (_slim_match(r, uid) for r in raw_matches) if m]
+    slim.sort(key=lambda m: m["ts"], reverse=True)
+    return {**base, "recent_matches": slim[:MATCH_HISTORY_KEEP]}
+
+
 def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | None = None) -> dict[str, Any]:
     now = int(time.time())
     if existing:
@@ -1306,6 +1581,42 @@ _last_heartbeat = 0.0
 _heartbeat_seen = False
 IDLE_SHUTDOWN_S = 120      # quit this long after the browser's last heartbeat
 STARTUP_GRACE_S = 300      # ...or this long if a browser never connects at all
+
+
+@app.route("/api/steam-active")
+def steam_active():
+    """Which Steam account is currently logged in on this PC? Used by the
+    frontend to badge the matching vault card with an 'ACTIVE NOW' indicator.
+
+    Unauthenticated on purpose: this exposes only what Steam itself broadcasts
+    locally (which the user can also see by opening Steam) and is consulted
+    from the lock screen too, where no vault key is yet held.
+    """
+    info = _active_steam_account()
+    return jsonify({"active": info})
+
+
+@app.route("/api/accounts/<acct_id>/matches", methods=["POST"])
+def fetch_match_history(acct_id: str):
+    """Pull the last 20 ranked matches for an account and persist them."""
+    key, err = _require_key()
+    if err:
+        return err
+    vault = _read_vault()
+    target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
+    if target is None:
+        return jsonify({"error": "not_found"}), 404
+    if not (target.get("rivals_uid") or "").strip():
+        return jsonify({"error": "no_uid",
+                        "message": "Refresh this account's rank first to resolve its UID."}), 400
+
+    api_key = _marvel_rivals_api_key()
+    updates = _fetch_match_history(target, api_key)
+    merged = _apply_refresh_updates(vault, acct_id, updates)
+    _persist_api_usage(vault)
+    _write_vault(vault)
+    return jsonify({"ok": True, "account": _public_account(merged, key),
+                    "sync": _sync_status()})
 
 
 @app.route("/api/heartbeat", methods=["POST"])

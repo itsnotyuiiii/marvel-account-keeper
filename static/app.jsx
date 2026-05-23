@@ -430,7 +430,124 @@ function baseFormFor(acct) {
   };
 }
 
-function Drawer({ open, acct, view, onClose, onSave, onDelete }) {
+// Render one match-history row. Win/loss is encoded as a left color stripe;
+// SR delta is green/red; MVP/SVP get a small badge. Hero/map artwork is loaded
+// from marvelrivalsapi.com which hosts the assets (URLs come back relative).
+function MatchRow({ m }) {
+  const sr = typeof m.sr_delta === "number" ? m.sr_delta : 0;
+  const ago = (() => {
+    if (!m.ts) return "";
+    const dt = Date.now() / 1000 - m.ts;
+    if (dt < 3600) return `${Math.max(1, Math.round(dt / 60))}m ago`;
+    if (dt < 86400) return `${Math.round(dt / 3600)}h ago`;
+    if (dt < 7 * 86400) return `${Math.round(dt / 86400)}d ago`;
+    const d = new Date(m.ts * 1000);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  })();
+  const duration = m.duration_s
+    ? `${Math.floor(m.duration_s / 60)}:${String(m.duration_s % 60).padStart(2, "0")}`
+    : "";
+  const heroSrc = m.hero_image
+    ? `https://marvelrivalsapi.com${m.hero_image}`
+    : "";
+  return (
+    <div className={"match-row " + (m.is_win ? "match-win" : "match-loss")}>
+      <span className="match-stripe" />
+      {heroSrc && (
+        <img className="match-hero-img" src={heroSrc} alt=""
+             onError={(e) => { e.currentTarget.style.display = "none"; }} />
+      )}
+      <div className="match-info">
+        <div className="match-line1">
+          <span className="match-hero-name">{m.hero_name || "Unknown"}</span>
+          {m.is_mvp && <span className="match-badge match-mvp">MVP</span>}
+          {m.is_svp && !m.is_mvp && <span className="match-badge match-svp">SVP</span>}
+          {m.disconnected && <span className="match-badge match-dc">DC</span>}
+        </div>
+        <div className="match-line2">
+          <span className="match-kda">
+            <b>{m.kda[0]}</b>/<b>{m.kda[1]}</b>/<b>{m.kda[2]}</b>
+          </span>
+          <span className="match-sep">·</span>
+          <span className="match-mode">{m.mode_label}</span>
+          {duration && <><span className="match-sep">·</span>
+                        <span className="match-dur">{duration}</span></>}
+        </div>
+      </div>
+      <div className="match-right">
+        <span className={"match-sr " + (sr > 0 ? "match-sr-up" : sr < 0 ? "match-sr-down" : "")}>
+          {sr > 0 ? `+${sr.toFixed(1)}` : sr.toFixed(1)}
+        </span>
+        <span className="match-ago">{ago}</span>
+      </div>
+    </div>
+  );
+}
+
+function MatchHistory({ acct, syncing, onSync }) {
+  const matches = acct?.recent_matches || [];
+  const synced = acct?.matches_synced_at || 0;
+  const err = acct?.matches_error;
+  const hasUid = !!(acct?.rivals_uid || "").toString().trim();
+
+  // Auto-pull on first open for accounts with a resolved UID and no matches yet.
+  React.useEffect(() => {
+    if (!hasUid || syncing || matches.length > 0 || synced) return;
+    onSync(acct.id);
+    // Only chase one auto-pull per drawer mount per account.
+  }, [acct?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const syncLabel = (() => {
+    if (!synced) return "Never synced";
+    const dt = Date.now() / 1000 - synced;
+    if (dt < 90) return "Just synced";
+    if (dt < 3600) return `Synced ${Math.round(dt / 60)}m ago`;
+    if (dt < 86400) return `Synced ${Math.round(dt / 3600)}h ago`;
+    return `Synced ${Math.round(dt / 86400)}d ago`;
+  })();
+
+  return (
+    <section className="drawer-section">
+      <div className="drawer-section-lbl drawer-section-lbl-row">
+        <span>Recent matches</span>
+        <div className="drawer-section-r">
+          <span className="match-sync-lbl">{syncLabel}</span>
+          <button
+            type="button"
+            className="match-sync-btn"
+            disabled={syncing || !hasUid}
+            onClick={() => onSync(acct.id)}
+            title={hasUid ? "Pull the last 20 ranked matches" :
+                            "Refresh the account's rank first to resolve its UID"}>
+            {syncing ? "Syncing…" : "Sync ↻"}
+          </button>
+        </div>
+      </div>
+      {!hasUid && (
+        <div className="match-empty">
+          Refresh the account's rank first to resolve its Marvel Rivals UID,
+          then come back here to pull match history.
+        </div>
+      )}
+      {hasUid && err && (
+        <div className="match-empty match-error">{err}</div>
+      )}
+      {hasUid && !err && matches.length === 0 && !syncing && (
+        <div className="match-empty">No matches synced yet.</div>
+      )}
+      {hasUid && !err && matches.length === 0 && syncing && (
+        <div className="match-empty">Pulling recent matches…</div>
+      )}
+      {matches.length > 0 && (
+        <div className="match-list">
+          {matches.map((m) => <MatchRow key={m.uid || m.ts} m={m} />)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, syncingMatches }) {
   const isNew = !acct?.id;
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [form, setForm] = React.useState(() => baseFormFor(null));
@@ -634,6 +751,13 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete }) {
             onChange={(v) => set("notes", v)} multiline
             placeholder="e.g. 1Password entry, alt purpose, region…" />
           </section>
+
+          {!isNew && acct?.id && (
+            <MatchHistory
+              acct={acct}
+              syncing={!!syncingMatches?.has?.(acct.id)}
+              onSync={onSyncMatches} />
+          )}
         </div>
 
         <footer className="drawer-foot">
@@ -1077,6 +1201,12 @@ function App() {
   // flag for the "Refresh all" action.
   const [refreshing, setRefreshing] = React.useState(() => new Set());
   const [refreshingAll, setRefreshingAll] = React.useState(false);
+  // Currently signed-in Steam user on this PC (from loginusers.vdf). Drives
+  // the "ACTIVE NOW" badge that surfaces which vault entry matches the live
+  // Steam session. Null when Steam isn't installed or hasn't been used.
+  const [activeSteam, setActiveSteam] = React.useState(null);
+  // Account ids whose match-history sync is in flight, for inline spinners.
+  const [syncingMatches, setSyncingMatches] = React.useState(() => new Set());
   const searchRef = React.useRef(null);
   const ready = phase === "ready";
 
@@ -1211,6 +1341,41 @@ function App() {
     const id = setInterval(ping, 30000);
     return () => clearInterval(id);
   }, []);
+
+  // ── active Steam account poll ─────────────────────────────────────────────
+  // Steam rewrites loginusers.vdf on every login, so polling it cheaply tells
+  // us which vault entry is the live session. Unauthenticated endpoint —
+  // works on the lock screen too, but the badge is only rendered post-unlock.
+  React.useEffect(() => {
+    const pull = () => fetch("/api/steam-active")
+      .then((r) => r.json())
+      .then((d) => setActiveSteam(d.active || null))
+      .catch(() => { /* Steam not installed or transient — keep last value */ });
+    pull();
+    const id = setInterval(pull, 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── match-history sync ────────────────────────────────────────────────────
+  // Fetches the last 20 ranked matches for an account and merges them onto the
+  // accounts state. Used both by the in-drawer button and the on-open auto-sync.
+  const onSyncMatches = React.useCallback(async (acctId) => {
+    if (!acctId) return false;
+    setSyncingMatches((s) => { const n = new Set(s); n.add(acctId); return n; });
+    try {
+      const data = await api(`/api/accounts/${acctId}/matches`, { method: "POST" });
+      if (data?.account) {
+        setAccounts((arr) => arr.map((a) =>
+          a.id === acctId ? { ...a, ...data.account } : a));
+      }
+      if (data?.sync) setSyncStatus(data.sync);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setSyncingMatches((s) => { const n = new Set(s); n.delete(acctId); return n; });
+    }
+  }, [api]);
 
   // ── document data attributes ──────────────────────────────────────────────
   React.useEffect(() => {
@@ -1510,17 +1675,20 @@ function App() {
               <TableView accounts={visible} opts={opts}
               onOpen={onOpen} onCopy={onCopy} onPin={onPin}
               onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
+              activeSteam={activeSteam}
               sortLabel={sortLabel} /> :
               t.view === "ladder" ?
               <LadderView accounts={visible} opts={opts}
               onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-              onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey} /> :
+              onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
+              activeSteam={activeSteam} /> :
 
               <div className="app-grid">
                   {visible.map((a) =>
                 <CardRefined key={a.id} acct={a} opts={opts}
                 onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-                onRefresh={onRefresh} refreshing={refreshing.has(a.id)} hasApiKey={hasApiKey} />
+                onRefresh={onRefresh} refreshing={refreshing.has(a.id)} hasApiKey={hasApiKey}
+                activeSteam={activeSteam} />
                 )}
                 </div>
               }
@@ -1546,11 +1714,13 @@ function App() {
 
         <Drawer
           open={drawer.open}
-          acct={drawer.acct}
+          acct={drawer.open ? (accounts.find((a) => a.id === drawer.acct?.id) || drawer.acct) : drawer.acct}
           view={t.view}
           onClose={() => setDrawer({ open: false, acct: null })}
           onSave={onSave}
-          onDelete={onDelete} />
+          onDelete={onDelete}
+          onSyncMatches={onSyncMatches}
+          syncingMatches={syncingMatches} />
 
       </div>
 
