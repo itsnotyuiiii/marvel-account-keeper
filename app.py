@@ -315,7 +315,7 @@ def _require_key():
 # ---------- account (de)serialization ----------
 
 def _coerce_points(value: Any) -> int | None:
-    """Rank score for Eternity / One Above All. Blank or non-numeric -> None."""
+    """Absolute Marvel Rivals MMR/SR for any tier. Blank or non-numeric -> None."""
     if value is None or value == "":
         return None
     try:
@@ -459,10 +459,12 @@ _RANK_INDEX = {r: i for i, r in enumerate(_RANK_ORDER)}
 
 
 def _peak_from_seasons(player: dict[str, Any]) -> tuple[str, int | None]:
-    """Walk every ranked season and return (rank_string, score_for_eternity_or_oaa).
+    """Walk every ranked season and return (rank_string, peak_rank_score).
 
     Picks the highest max_level across seasons (tiebreak: max_rank_score).
-    Level 22+ is reported as 'Eternity' with the score in the second slot.
+    Level 22+ is reported as 'Eternity'. The score is the player's absolute
+    Marvel Rivals MMR / SR at that peak — used as-is for every tier (the
+    in-game ranked system is absolute-score, not 0/100 within a division).
     """
     seasons = ((player or {}).get("info") or {}).get("rank_game_season")
     if not isinstance(seasons, dict):
@@ -482,10 +484,11 @@ def _peak_from_seasons(player: dict[str, Any]) -> tuple[str, int | None]:
             best_level, best_score = ml, ms
     if best_level <= 0:
         return "", None
+    score = int(best_score) if best_score > 0 else None
     if best_level in _LEVEL_TO_RANK:
-        return _LEVEL_TO_RANK[best_level], None
+        return _LEVEL_TO_RANK[best_level], score
     # Above Celestial I: Eternity (we can't tell OAA from level alone).
-    return "Eternity", int(best_score) if best_score > 0 else None
+    return "Eternity", score
 
 
 def _current_from_seasons(player: dict[str, Any]) -> tuple[str, int | None]:
@@ -552,8 +555,10 @@ def _parse_rivals_payload(payload: dict[str, Any]) -> dict[str, Any]:
       payload.player.rank.rank                       → 'Celestial III' etc.
       payload.player.info.rank_game_season[<sid>]    → per-season {level, rank_score, max_level, max_rank_score, update_time}
       payload.isPrivate                              → boolean
-    Peak is derived from the highest max_level across all seasons; points
-    are filled only when current/peak is Eternity or One Above All.
+    Peak is derived from the highest max_level across all seasons.
+    `rank_score` is the player's absolute Marvel Rivals MMR/SR and is
+    captured for every tier (the game's ranked system is absolute-score,
+    not 0/100 within a division).
     """
     if not isinstance(payload, dict):
         return {}
@@ -602,25 +607,27 @@ def _parse_rivals_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     # Peak: derived from the season history. Trust the level table over any
     # API-supplied "peak" string, since their player.rank is sometimes stale.
-    peak_rank, peak_eternity_score = _peak_from_seasons(player)
+    peak_rank, peak_score = _peak_from_seasons(player)
 
     # Peak floor: a peak can't be lower than the current rank. The season
     # snapshots sometimes lag (or undercount placements), so clamp upward.
     if peak_rank and _RANK_INDEX.get(cur_rank, -1) > _RANK_INDEX.get(peak_rank, -1):
         peak_rank = cur_rank
-        peak_eternity_score = None
+        peak_score = season_score   # peak == current when we clamp
     elif not peak_rank:
         peak_rank = cur_rank
+        peak_score = season_score
 
     out["current_rank"] = cur_rank
     out["peak_rank"] = peak_rank
 
-    # Eternity / One Above All carry a numeric score. Use the latest season's
-    # rank_score for "current", and the highest season's max_rank_score for "peak".
-    if cur_rank in {"Eternity", "One Above All"} and season_score is not None:
+    # Absolute MMR score from the latest season → current_points; highest
+    # season's max_rank_score → peak_points. Captured for every tier (the
+    # in-game ranked system is absolute-score, not 0/100 RR within division).
+    if season_score is not None:
         out["current_points"] = season_score
-    if peak_rank in {"Eternity", "One Above All"} and peak_eternity_score is not None:
-        out["peak_points"] = peak_eternity_score
+    if peak_score is not None:
+        out["peak_points"] = peak_score
     return out
 
 

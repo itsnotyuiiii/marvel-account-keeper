@@ -11,14 +11,12 @@
 
 const { tierOf, themeFor, fmtRelative, RANK_INDEX, RANK_TIERS } = window;
 
-// Display string for a rank, including the point score for Eternity / OAA.
-// `Eternity (4280)` reads much better than just `Eternity` when the user
-// went to the trouble of recording the number.
+// Display string for a rank with its absolute MMR/SR score. Marvel Rivals'
+// ranked system uses absolute points across every tier, so the score reads
+// the same for Bronze through One Above All — e.g. "Celestial II · 4897 SR".
 function rankDisplay(rank, points) {
   if (!rank) return "—";
-  if ((rank === "Eternity" || rank === "One Above All") && points != null && points !== "") {
-    return `${rank} · ${points}`;
-  }
+  if (points != null && points !== "") return `${rank} · ${points} SR`;
   return rank;
 }
 
