@@ -1205,6 +1205,10 @@ function App() {
   // the "ACTIVE NOW" badge that surfaces which vault entry matches the live
   // Steam session. Null when Steam isn't installed or hasn't been used.
   const [activeSteam, setActiveSteam] = React.useState(null);
+  // Every Marvel Rivals UID with a local config folder on this PC — drives
+  // the "ON THIS PC" badge on vault cards whose rivals_uid matches. Empty
+  // when the game isn't installed.
+  const [localRivalsUids, setLocalRivalsUids] = React.useState(() => new Set());
   // Account ids whose match-history sync is in flight, for inline spinners.
   const [syncingMatches, setSyncingMatches] = React.useState(() => new Set());
   const searchRef = React.useRef(null);
@@ -1353,6 +1357,20 @@ function App() {
       .catch(() => { /* Steam not installed or transient — keep last value */ });
     pull();
     const id = setInterval(pull, 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── local Marvel Rivals UID detection ─────────────────────────────────────
+  // The game's Saved/Config dir has one folder per UID that has signed in on
+  // this PC. The list rarely changes between sessions, so a lazy 5-minute
+  // refresh is plenty — it just keeps things fresh when a new alt is played.
+  React.useEffect(() => {
+    const pull = () => fetch("/api/rivals/local-uids")
+      .then((r) => r.json())
+      .then((d) => setLocalRivalsUids(new Set(d.uids || [])))
+      .catch(() => { /* game not installed or transient — keep last value */ });
+    pull();
+    const id = setInterval(pull, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -1675,20 +1693,20 @@ function App() {
               <TableView accounts={visible} opts={opts}
               onOpen={onOpen} onCopy={onCopy} onPin={onPin}
               onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
-              activeSteam={activeSteam}
+              activeSteam={activeSteam} localRivalsUids={localRivalsUids}
               sortLabel={sortLabel} /> :
               t.view === "ladder" ?
               <LadderView accounts={visible} opts={opts}
               onOpen={onOpen} onCopy={onCopy} onPin={onPin}
               onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
-              activeSteam={activeSteam} /> :
+              activeSteam={activeSteam} localRivalsUids={localRivalsUids} /> :
 
               <div className="app-grid">
                   {visible.map((a) =>
                 <CardRefined key={a.id} acct={a} opts={opts}
                 onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                 onRefresh={onRefresh} refreshing={refreshing.has(a.id)} hasApiKey={hasApiKey}
-                activeSteam={activeSteam} />
+                activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
                 )}
                 </div>
               }

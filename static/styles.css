@@ -1641,6 +1641,47 @@ html[data-theme="light"] .active-steam-dot{
   box-shadow:0 0 4px #1f9d4d;
 }
 
+/* ── Local Rivals badge ─────────────────────────────────────────────────────
+   "ON THIS PC" — cyan, distinct from the green Steam badge. Fires when the
+   account's rivals_uid is among the UIDs detected in Marvel Rivals' local
+   config dir (Saved/Saved/Config/<UID>/), i.e. you've actually signed into
+   that account in the game on this machine. Independent of launcher (works
+   for both Steam and NetEase native launcher logins). */
+.local-rivals-badge{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:2px 9px;
+  border:1px solid #5be0ff;
+  border-radius:999px;
+  background:rgba(91,224,255,.08);
+  color:#5be0ff;
+  font-family:var(--font-mono);
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  white-space:nowrap;
+  flex-shrink:0;
+}
+.local-rivals-badge-sm{
+  padding:1px 7px;
+  font-size:9px;
+  letter-spacing:.12em;
+}
+.local-rivals-dot{
+  width:6px; height:6px; border-radius:50%;
+  background:#5be0ff;
+  box-shadow:0 0 6px #5be0ff, 0 0 12px rgba(91,224,255,.55);
+}
+html[data-theme="light"] .local-rivals-badge{
+  color:#0d7396;
+  border-color:#0d7396;
+  background:rgba(13,115,150,.1);
+}
+html[data-theme="light"] .local-rivals-dot{
+  background:#0d7396;
+  box-shadow:0 0 4px #0d7396;
+}
+
 /* ── Match history (in drawer) ─────────────────────────────────────────────
    Renders the last 20 ranked matches for an account. Win/loss is a colored
    left stripe; SR delta is green/red; MVP/SVP get a tiny pill. */

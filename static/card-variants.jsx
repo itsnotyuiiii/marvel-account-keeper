@@ -41,6 +41,40 @@ function ActiveSteamBadge({ activeSteam, compact }) {
   );
 }
 
+// True when this account's Marvel Rivals UID has a local config folder on
+// this PC — i.e. someone has actually signed in to that account in the game
+// here. Independent of Steam (works for NetEase-launcher logins too).
+function isLocalRivalsMatch(acct, localRivalsUids) {
+  if (!localRivalsUids || !acct) return false;
+  const uid = (acct.rivals_uid || "").toString().trim();
+  return !!uid && localRivalsUids.has(uid);
+}
+
+// "ON THIS PC" pill — cyan, distinct from the green Steam badge.
+function LocalRivalsBadge({ compact }) {
+  return (
+    <span className={"local-rivals-badge" + (compact ? " local-rivals-badge-sm" : "")}
+          title="This Marvel Rivals account has signed in on this PC">
+      <span className="local-rivals-dot" />
+      <span className="local-rivals-lbl">{compact ? "ON PC" : "ON THIS PC"}</span>
+    </span>
+  );
+}
+
+// Pick the single "presence" badge to render for a card. ACTIVE NOW wins
+// when both signals fire — a live Steam session implies the account has
+// been played here, but the converse isn't true, so the Steam badge is
+// strictly more specific. One indicator per card keeps the layout calm.
+function PresenceBadge({ acct, activeSteam, localRivalsUids, compact }) {
+  if (isActiveSteamMatch(acct, activeSteam)) {
+    return <ActiveSteamBadge activeSteam={activeSteam} compact={compact} />;
+  }
+  if (isLocalRivalsMatch(acct, localRivalsUids)) {
+    return <LocalRivalsBadge compact={compact} />;
+  }
+  return null;
+}
+
 function labelFor(acct) {
   // Colors are theme tokens (see styles.css) so the labels stay legible in
   // both dark and light mode — gold "main", red "oaa", slate-blue "alt".
@@ -306,7 +340,7 @@ function SyncChip({ acct, hasApiKey }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // B. CARDS  (refined trading-card)
 // ─────────────────────────────────────────────────────────────────────────────
-function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam }) {
+function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -350,7 +384,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         <h3 className={"rcard-ign" + (acct.in_game_name ? "" : " rcard-ign-empty")}>
           {acct.in_game_name || "No IGN set"}
         </h3>
-        {isActiveSteamMatch(acct, activeSteam) && <ActiveSteamBadge activeSteam={activeSteam} />}
+        <PresenceBadge acct={acct} activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
         <TagPill acct={acct} />
       </div>
 
@@ -396,7 +430,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
 // ─────────────────────────────────────────────────────────────────────────────
 // C. TABLE  (data-dense list)
 // ─────────────────────────────────────────────────────────────────────────────
-function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, sortLabel, activeSteam }) {
+function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, sortLabel, activeSteam, localRivalsUids }) {
   return (
     <section className="tbl">
       <header className="tbl-head">
@@ -418,14 +452,14 @@ function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshin
                     onRefresh={onRefresh}
                     refreshing={refreshingIds && refreshingIds.has(a.id)}
                     hasApiKey={hasApiKey}
-                    activeSteam={activeSteam} />
+                    activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
         ))}
       </ol>
     </section>
   );
 }
 
-function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam }) {
+function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -458,7 +492,7 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
           </span>
           {lab.kind === "main" && <span className="tbl-tag">main</span>}
           {lab.kind === "oaa"  && <span className="tbl-tag tbl-tag-oaa">peak oaa</span>}
-          {isActiveSteamMatch(acct, activeSteam) && <ActiveSteamBadge activeSteam={activeSteam} compact />}
+          <PresenceBadge acct={acct} activeSteam={activeSteam} localRivalsUids={localRivalsUids} compact />
           <TagPill acct={acct} />
         </div>
 
@@ -520,7 +554,7 @@ const TIER_ORDER = [
   "Celestial", "Grandmaster", "Diamond", "Platinum", "Gold", "Silver", "Bronze",
 ];
 
-function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam }) {
+function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids }) {
   // Group by tier of current_rank
   const groups = React.useMemo(() => {
     const m = new Map();
@@ -540,13 +574,13 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
         <LadderGroup key={tier} tier={tier} list={list}
                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                      onRefresh={onRefresh} refreshingIds={refreshingIds} hasApiKey={hasApiKey}
-                     activeSteam={activeSteam} />
+                     activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
       ))}
     </div>
   );
 }
 
-function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam }) {
+function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids }) {
   const t = themeFor(tier === "One Above All" ? "One Above All" : tier + " I") || { fg: "#9aa3b2" };
   return (
     <section className="ladder-group" style={{ "--tier-fg": t.fg }}>
@@ -562,14 +596,14 @@ function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refre
                       onRefresh={onRefresh}
                       refreshing={refreshingIds && refreshingIds.has(a.id)}
                       hasApiKey={hasApiKey}
-                      activeSteam={activeSteam} />
+                      activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
         ))}
       </div>
     </section>
   );
 }
 
-function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey, activeSteam }) {
+function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -592,7 +626,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
           {acct.in_game_name || "No IGN set"}
         </span>
         <div className="lad-line-r">
-          {isActiveSteamMatch(acct, activeSteam) && <ActiveSteamBadge activeSteam={activeSteam} compact />}
+          <PresenceBadge acct={acct} activeSteam={activeSteam} localRivalsUids={localRivalsUids} compact />
           <TagPill acct={acct} />
           <RefreshBtn acct={acct} refreshing={refreshing}
                       onRefresh={onRefresh} hasApiKey={hasApiKey} size="xs" />

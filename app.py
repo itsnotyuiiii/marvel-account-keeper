@@ -300,6 +300,46 @@ def _active_steam_account() -> dict[str, Any] | None:
     return None
 
 
+# ---------- Marvel Rivals: local UID detection ----------
+# The game writes one folder per signed-in Marvel Rivals account to its local
+# config dir (e.g. <Saved>/Saved/Config/326631126/). We use these as the
+# authoritative list of accounts that have been played on this PC — better
+# than Steam VDF because it captures both Steam and NetEase-launcher logins.
+
+def _marvel_rivals_data_dir() -> Path | None:
+    """Locate Marvel Rivals' local config root (parent of the per-UID folders)."""
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
+            return None
+        cand = Path(local) / "Marvel" / "Saved" / "Saved" / "Config"
+        return cand if cand.exists() else None
+    # The Windows client is the only supported target. Marvel Rivals does not
+    # have an official macOS/Linux release at time of writing; if a future
+    # port lands here, extend with platform-specific paths.
+    return None
+
+
+def _detected_rivals_uids() -> list[str]:
+    """List numeric UID folder names found under the game's local Config dir.
+
+    UIDs are 7-10 digit integers — anything else (e.g. the side-by-side
+    'MarvelUserSetting.json' file) is filtered out.
+    """
+    base = _marvel_rivals_data_dir()
+    if not base:
+        return []
+    out: list[str] = []
+    try:
+        for child in base.iterdir():
+            name = child.name
+            if child.is_dir() and name.isdigit() and 6 <= len(name) <= 11:
+                out.append(name)
+    except OSError:
+        return []
+    return sorted(out)
+
+
 app = Flask(
     __name__,
     static_folder=str(RESOURCE_DIR / "static"),
@@ -1594,6 +1634,20 @@ def steam_active():
     """
     info = _active_steam_account()
     return jsonify({"active": info})
+
+
+@app.route("/api/rivals/local-uids")
+def rivals_local_uids():
+    """Every Marvel Rivals UID with a local config folder on this PC.
+
+    The game creates one folder per account that signs in, regardless of
+    launcher (Steam, NetEase native). Vault cards whose rivals_uid is in
+    this list get an 'ON THIS PC' badge; UIDs not in the vault are
+    candidates to quick-add later.
+
+    Unauthenticated for the same reason as /api/steam-active.
+    """
+    return jsonify({"uids": _detected_rivals_uids()})
 
 
 @app.route("/api/accounts/<acct_id>/matches", methods=["POST"])
