@@ -48,6 +48,14 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
+APP_VERSION = "1.6.0"
+
+# Update-check / self-apply settings. The packaged .exe checks the GitHub
+# release feed on boot and offers a one-click update when a newer tag is
+# available. Running from source (not frozen) hides the banner entirely.
+GITHUB_RELEASES_URL = "https://api.github.com/repos/itsnotyuiiii/marvel-account-keeper/releases/latest"
+UPDATE_ASSET_NAME = "MarvelAccountKeeper-windows.exe"
+UPDATE_MIN_DOWNLOAD_BYTES = 1_000_000  # PyInstaller exes are 10MB+; anything smaller is junk
 VERIFIER_PLAINTEXT = b"VAULT_OK::v1"
 SCRYPT_N = 2**15
 SCRYPT_R = 8
@@ -338,6 +346,71 @@ def _detected_rivals_uids() -> list[str]:
     except OSError:
         return []
     return sorted(out)
+
+
+# ---------- self-update ----------
+# Strategy: the packaged .exe checks the GitHub releases feed for a newer
+# version on boot, and applies the update in-place by renaming the running
+# exe to <name>.old.exe and writing the new download to the original path.
+# Windows allows renaming a running executable (rename is a metadata op,
+# not a content modification), so the swap works without a helper process —
+# the user just relaunches once and the new binary is what runs.
+
+def _version_tuple(s: str) -> tuple[int, ...]:
+    """Lossy semver-ish parse for `1.6.0` / `v1.6.0`. Returns (0,) on garbage."""
+    s = (s or "").strip().lstrip("vV")
+    parts = []
+    for chunk in s.split("."):
+        m = re.match(r"\d+", chunk)
+        parts.append(int(m.group()) if m else 0)
+    return tuple(parts) or (0,)
+
+
+def _fetch_latest_release() -> dict[str, Any] | None:
+    """Hit the GitHub releases feed for the latest tag. Returns None on any
+    error — the caller treats that as 'no update available' (silent failure
+    is the right default for a background check)."""
+    headers = {
+        "User-Agent": f"{APP_NAME}/{APP_VERSION}",
+        "Accept": "application/vnd.github+json",
+    }
+    req = urllib.request.Request(GITHUB_RELEASES_URL, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return None
+
+
+def _release_asset_url(release: dict[str, Any] | None) -> str | None:
+    """Pull the Windows .exe download URL out of a release payload."""
+    if not isinstance(release, dict):
+        return None
+    for asset in release.get("assets") or []:
+        if asset.get("name") == UPDATE_ASSET_NAME:
+            return asset.get("browser_download_url")
+    return None
+
+
+def _is_packaged() -> bool:
+    """True when running as the PyInstaller-built .exe — the only path where
+    self-update is meaningful. Running from source returns False and the
+    update endpoints become no-ops."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _cleanup_post_update() -> None:
+    """Delete the .old.exe left behind by a previous successful update.
+    Called at app startup so the leftover doesn't accumulate."""
+    if not _is_packaged():
+        return
+    exe = Path(sys.executable)
+    old = exe.with_name(exe.stem + ".old" + exe.suffix)
+    if old.exists():
+        try:
+            old.unlink()
+        except OSError:
+            pass  # likely a permission/lock issue — try again next launch
 
 
 app = Flask(
@@ -1608,6 +1681,7 @@ def delete_account(acct_id: str):
 _migrate_from_app_folder()
 _migrate_vault_if_needed()
 _load_api_usage()
+_cleanup_post_update()
 
 
 # ---------- liveness heartbeat ----------
@@ -1634,6 +1708,137 @@ def steam_active():
     """
     info = _active_steam_account()
     return jsonify({"active": info})
+
+
+@app.route("/api/check-update")
+def check_update():
+    """Compare the running version against the latest GitHub release.
+    Always returns 200 — a transient network failure shows as
+    `{has_update: false}` so the UI stays quiet."""
+    release = _fetch_latest_release()
+    if not release:
+        return jsonify({
+            "current": APP_VERSION,
+            "latest": None,
+            "has_update": False,
+            "checked_at": int(time.time()),
+            "packaged": _is_packaged(),
+        })
+    latest = (release.get("tag_name") or "").strip()
+    asset = _release_asset_url(release)
+    has_update = (
+        _version_tuple(latest) > _version_tuple(APP_VERSION)
+        and bool(asset)
+        and _is_packaged()      # source runs never auto-update
+    )
+    notes = (release.get("body") or "").strip()
+    return jsonify({
+        "current": APP_VERSION,
+        "latest": latest.lstrip("vV"),
+        "tag_name": latest,
+        "has_update": has_update,
+        "download_url": asset,
+        "release_url": release.get("html_url"),
+        "release_notes": notes[:2000],
+        "checked_at": int(time.time()),
+        "packaged": _is_packaged(),
+    })
+
+
+@app.route("/api/apply-update", methods=["POST"])
+def apply_update():
+    """Download the newest .exe and swap it into place over the running one.
+    The user must relaunch the app to actually run the new binary.
+
+    Implementation: rename the running exe to <name>.old.exe (Windows allows
+    this even while the process is running — rename is a metadata op), then
+    write the download to the original path. On next launch, the new exe
+    deletes the .old leftover via `_cleanup_post_update`."""
+    if not _is_packaged():
+        return jsonify({"error": "not_packaged",
+                        "message": "Self-update only works from the packaged .exe. "
+                                   "From source, `git pull` instead."}), 400
+
+    release = _fetch_latest_release()
+    if not release:
+        return jsonify({"error": "fetch_failed",
+                        "message": "Could not reach the GitHub releases API."}), 502
+
+    latest_tag = (release.get("tag_name") or "").strip()
+    asset_url = _release_asset_url(release)
+    if not asset_url:
+        return jsonify({"error": "no_asset",
+                        "message": f"Release {latest_tag} has no {UPDATE_ASSET_NAME} asset."}), 502
+    if _version_tuple(latest_tag) <= _version_tuple(APP_VERSION):
+        return jsonify({"error": "not_newer",
+                        "message": f"Already on the latest version (v{APP_VERSION})."}), 400
+
+    exe = Path(sys.executable)
+    parent = exe.parent
+    new_path = exe.with_name(exe.stem + ".new" + exe.suffix)
+    old_path = exe.with_name(exe.stem + ".old" + exe.suffix)
+
+    # 1. Sanity-check writability before we start, so we don't half-finish.
+    if not os.access(parent, os.W_OK):
+        return jsonify({"error": "dir_not_writable",
+                        "message": "Move the .exe to a folder you can write to "
+                                   "(e.g. Desktop or Documents) and try again."}), 403
+
+    # 2. Wipe stale .new from a prior attempt so the download lands cleanly.
+    if new_path.exists():
+        try:
+            new_path.unlink()
+        except OSError as e:
+            return jsonify({"error": "stale_cleanup_failed",
+                            "message": str(e)}), 500
+
+    # 3. Download.
+    headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION}"}
+    req = urllib.request.Request(asset_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r, open(new_path, "wb") as out:
+            shutil.copyfileobj(r, out)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        new_path.unlink(missing_ok=True)
+        return jsonify({"error": "download_failed",
+                        "message": f"Could not download the update: {e}"}), 502
+
+    if new_path.stat().st_size < UPDATE_MIN_DOWNLOAD_BYTES:
+        new_path.unlink(missing_ok=True)
+        return jsonify({"error": "bad_download",
+                        "message": "Download was suspiciously small — aborted."}), 502
+
+    # 4. Wipe any older .old from a prior update so the rename has room.
+    if old_path.exists():
+        try:
+            old_path.unlink()
+        except OSError:
+            pass
+
+    # 5. Swap: move the running exe out of the way, move the new one in.
+    try:
+        exe.rename(old_path)
+    except OSError as e:
+        new_path.unlink(missing_ok=True)
+        return jsonify({"error": "rename_failed",
+                        "message": f"Could not rename running .exe: {e}"}), 500
+    try:
+        new_path.rename(exe)
+    except OSError as e:
+        # Try to restore the original so we don't leave the user with no .exe.
+        try:
+            old_path.rename(exe)
+        except OSError:
+            pass
+        return jsonify({"error": "install_failed",
+                        "message": f"Could not install the update: {e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "installed": latest_tag.lstrip("vV"),
+        "message": f"v{latest_tag.lstrip('vV')} downloaded. Close the app and reopen "
+                   f"it to run the new version.",
+    })
 
 
 @app.route("/api/rivals/local-uids")

@@ -267,6 +267,46 @@ function ThemeToggle({ theme, onToggle }) {
   );
 }
 
+// Banner shown between header and toolbar when a newer release is available.
+// Dormant when running from source (the server suppresses has_update there)
+// or when there's no update — keeps the chrome clean for the common case.
+function UpdateBanner({ info, applying, applied, error, onApply }) {
+  if (applied) {
+    return (
+      <div className="update-banner update-banner-done">
+        <span className="update-dot" />
+        <span className="update-msg">
+          <b>v{applied}</b> downloaded — close and reopen the app to use it.
+        </span>
+      </div>
+    );
+  }
+  if (!info || !info.has_update) return null;
+  return (
+    <div className="update-banner">
+      <span className="update-dot" />
+      <span className="update-msg">
+        <b>v{info.latest}</b> is available
+        {info.current && <> · running v{info.current}</>}
+      </span>
+      <div className="update-banner-r">
+        {info.release_url && (
+          <a className="update-link"
+             href={info.release_url}
+             target="_blank"
+             rel="noopener noreferrer">Release notes</a>
+        )}
+        <button className="update-btn"
+                onClick={onApply}
+                disabled={applying}>
+          {applying ? "Updating…" : "Update now"}
+        </button>
+      </div>
+      {error && <div className="update-err" role="alert">{error}</div>}
+    </div>
+  );
+}
+
 function Header({ count, lockIn, lockoutMinutes, onLock, onSettings, theme, onToggleTheme }) {
   return (
     <header className="app-head">
@@ -1209,6 +1249,14 @@ function App() {
   // the "ON THIS PC" badge on vault cards whose rivals_uid matches. Empty
   // when the game isn't installed.
   const [localRivalsUids, setLocalRivalsUids] = React.useState(() => new Set());
+  // Latest-release check vs. the running app version. `info.has_update` is
+  // only true for packaged .exe runs (source runs ignore updates entirely).
+  // `applying` flips on while POSTing /api/apply-update; `applied` flips on
+  // after a successful install so the banner can swap to "Restart to use".
+  const [updateInfo, setUpdateInfo] = React.useState(null);
+  const [applyingUpdate, setApplyingUpdate] = React.useState(false);
+  const [updateApplied, setUpdateApplied] = React.useState(null); // null | "1.6.0"
+  const [updateError, setUpdateError] = React.useState(null);
   // Account ids whose match-history sync is in flight, for inline spinners.
   const [syncingMatches, setSyncingMatches] = React.useState(() => new Set());
   const searchRef = React.useRef(null);
@@ -1373,6 +1421,38 @@ function App() {
     const id = setInterval(pull, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
+
+  // ── update check ──────────────────────────────────────────────────────────
+  // Hit /api/check-update once on boot, then every 6h. Failure is silent —
+  // an offline check yields {has_update: false} and the banner stays hidden.
+  React.useEffect(() => {
+    const pull = () => fetch("/api/check-update")
+      .then((r) => r.json())
+      .then((d) => setUpdateInfo(d))
+      .catch(() => { /* offline or rate-limited — try again next interval */ });
+    pull();
+    const id = setInterval(pull, 6 * 3600 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const onApplyUpdate = React.useCallback(async () => {
+    if (applyingUpdate) return;
+    setApplyingUpdate(true);
+    setUpdateError(null);
+    try {
+      const r = await fetch("/api/apply-update", { method: "POST" });
+      const data = await r.json();
+      if (r.ok && data.ok) {
+        setUpdateApplied(data.installed || "newer");
+      } else {
+        setUpdateError(data.message || "Update failed.");
+      }
+    } catch (e) {
+      setUpdateError("Network error while updating.");
+    } finally {
+      setApplyingUpdate(false);
+    }
+  }, [applyingUpdate]);
 
   // ── match-history sync ────────────────────────────────────────────────────
   // Fetches the last 20 ranked matches for an account and merges them onto the
@@ -1665,6 +1745,12 @@ function App() {
           onToggleTheme={() => setTweak("theme", t.theme === "light" ? "dark" : "light")}
           onSettings={() => window.postMessage({ type: "__activate_edit_mode" }, "*")} />
 
+        <UpdateBanner
+          info={updateInfo}
+          applying={applyingUpdate}
+          applied={updateApplied}
+          error={updateError}
+          onApply={onApplyUpdate} />
 
         <main className="app-main">
           <Toolbar

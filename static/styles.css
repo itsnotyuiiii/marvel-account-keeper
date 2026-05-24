@@ -1641,6 +1641,84 @@ html[data-theme="light"] .active-steam-dot{
   box-shadow:0 0 4px #1f9d4d;
 }
 
+/* ── Update banner ──────────────────────────────────────────────────────────
+   Slim bar between the header and the toolbar when a newer release is
+   available. Sticks at the top of the app body but doesn't overlap the
+   floating header — both stay sticky in document order. */
+.update-banner{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  padding:10px 28px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(90deg,
+    rgba(54,224,255,.10),
+    rgba(122,92,255,.08) 60%,
+    rgba(54,224,255,.04));
+  font-size:13px;
+  flex-wrap:wrap;
+}
+.update-dot{
+  width:8px; height:8px; border-radius:50%;
+  background:#36e0ff;
+  box-shadow:0 0 8px #36e0ff, 0 0 16px rgba(54,224,255,.5);
+  flex-shrink:0;
+}
+.update-msg{ color:var(--fg-2); }
+.update-msg b{ color:var(--fg); font-weight:600; }
+.update-banner-r{
+  margin-left:auto;
+  display:flex; align-items:center; gap:10px;
+}
+.update-link{
+  font-family:var(--font-mono);
+  font-size:11px;
+  letter-spacing:.06em;
+  color:var(--muted);
+  text-transform:uppercase;
+  text-decoration:none;
+}
+.update-link:hover{ color:var(--fg-2); }
+.update-btn{
+  padding:6px 14px;
+  font-family:var(--font-mono);
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:#0b0d11;
+  background:#36e0ff;
+  border:0;
+  border-radius:6px;
+  cursor:pointer;
+  transition:filter .15s;
+}
+.update-btn:hover:not(:disabled){ filter:brightness(1.1); }
+.update-btn:disabled{ opacity:.5; cursor:not-allowed; }
+.update-err{
+  flex-basis:100%;
+  margin-top:6px;
+  color:#ff8a90;
+  font-family:var(--font-mono);
+  font-size:11px;
+}
+.update-banner-done{
+  background:linear-gradient(90deg,
+    rgba(78,224,126,.12),
+    rgba(78,224,126,.04));
+}
+.update-banner-done .update-dot{
+  background:#4ee07e;
+  box-shadow:0 0 8px #4ee07e, 0 0 16px rgba(78,224,126,.5);
+}
+html[data-theme="light"] .update-banner{
+  background:linear-gradient(90deg,
+    rgba(54,180,205,.16),
+    rgba(122,92,255,.10) 60%,
+    rgba(54,180,205,.06));
+}
+html[data-theme="light"] .update-err{ color:#c0394a; }
+
 /* ── Local Rivals badge ─────────────────────────────────────────────────────
    "ON THIS PC" — cyan, distinct from the green Steam badge. Fires when the
    account's rivals_uid is among the UIDs detected in Marvel Rivals' local
