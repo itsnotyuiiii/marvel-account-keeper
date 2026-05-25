@@ -1834,11 +1834,19 @@ function App() {
       if (res?.sync) setSyncStatus(res.sync);
       const sum = res?.summary || {};
       const ok = sum.ok || 0;
-      const issues = (sum.private || 0) + (sum.not_found || 0)
-                   + (sum.error || 0) + (sum.bad_key || 0) + (sum.missing_handle || 0);
-      showToast(issues
-        ? `Refreshed ${ok} · ${issues} skipped`
-        : `Refreshed ${ok} ${ok === 1 ? "account" : "accounts"}`);
+      const priv = sum.private || 0;
+      const issues = priv + (sum.not_found || 0) + (sum.error || 0)
+                   + (sum.bad_key || 0) + (sum.missing_handle || 0);
+      let msg;
+      if (issues === 0) {
+        msg = `Refreshed ${ok} ${ok === 1 ? "account" : "accounts"}`;
+      } else if (ok === 0) {
+        msg = priv > 0 ? `${priv} private · ${issues - priv} other failures`
+                       : `${issues} accounts couldn't refresh`;
+      } else {
+        msg = `${ok} refreshed · ${issues} skipped`;
+      }
+      showToast(msg);
     } catch (e) {
       if (!e.locked) showToast("Refresh-all failed — try again");
     } finally {
@@ -1923,7 +1931,16 @@ function App() {
               {visible.length === 0 ?
               <div className="app-empty">
                   {accounts.length === 0 ?
-                <><b>No accounts yet.</b> Add one with “New account”.</> :
+                <div className="app-empty-onboard">
+                  <div className="app-empty-icon">📒</div>
+                  <h2>No accounts saved yet.</h2>
+                  <p>Hit <b>New account</b> up top to drop one in. If Marvel Rivals has been played on this PC, the UID suggester will offer the player IDs it found locally.</p>
+                  {localRivalsUids.size > 0 && (
+                    <p className="app-empty-hint">
+                      <b>{localRivalsUids.size}</b> Marvel Rivals {localRivalsUids.size === 1 ? "UID" : "UIDs"} detected on this PC — claim them as you add accounts.
+                    </p>
+                  )}
+                </div> :
                 <><b>No matches.</b> Try a different search.</>}
                 </div> :
               t.view === "table" ?

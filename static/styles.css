@@ -484,6 +484,45 @@ a.app-foot-commit:hover { color: var(--fg); text-decoration: underline; }
   font-size: 14px;
 }
 .app-empty b { color: var(--fg); font-weight: 600; display: block; margin-bottom: 4px; }
+.app-empty-onboard {
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.app-empty-icon {
+  font-size: 48px;
+  opacity: .7;
+  margin-bottom: 6px;
+}
+.app-empty-onboard h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 0;
+  letter-spacing: -.01em;
+}
+.app-empty-onboard p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+.app-empty-onboard p b { display: inline; color: var(--fg); margin: 0; }
+.app-empty-hint {
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px dashed color-mix(in oklab, #5be0ff 50%, transparent);
+  border-radius: 10px;
+  color: #5be0ff;
+  background: color-mix(in oklab, #5be0ff 5%, transparent);
+  font-size: 13px;
+}
+html[data-theme="light"] .app-empty-hint {
+  border-color: color-mix(in oklab, #0d7396 55%, transparent);
+  background: color-mix(in oklab, #0d7396 5%, transparent);
+  color: #0d7396;
+}
 
 .app-toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
@@ -521,13 +560,19 @@ a.app-foot-commit:hover { color: var(--fg); text-decoration: underline; }
   border-radius: var(--radius);
   padding: var(--pad-card);
   cursor: pointer;
-  transition: transform .12s, border-color .15s, box-shadow .25s;
+  transition: transform .18s cubic-bezier(.2,.7,.3,1),
+              border-color .15s,
+              box-shadow .22s,
+              opacity .18s;
   display: flex; flex-direction: column;
   gap: 12px;
 }
 .rcard:hover {
-  transform: translateY(-1px);
-  border-color: var(--border-2);
+  transform: translateY(-3px);
+  border-color: color-mix(in oklab, var(--tier-fg) 35%, var(--border-2));
+  box-shadow:
+    0 10px 28px rgba(0,0,0,.35),
+    0 0 0 1px color-mix(in oklab, var(--tier-fg) 18%, transparent) inset;
 }
 /* Faint tier-colored wash, only on hover gets a touch stronger */
 .rcard-wash {
