@@ -543,6 +543,47 @@ html[data-theme="light"] .app-empty-hint {
   transform: translateY(-1px);
 }
 
+.shortcuts-list, .about-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex; flex-direction: column; gap: 8px;
+  font-size: 13px;
+  color: var(--fg-2);
+}
+.shortcuts-list li, .about-list li {
+  display: flex; align-items: center; gap: 10px;
+}
+.shortcuts-list kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 1px 0 rgba(0,0,0,.4);
+}
+.about-k {
+  min-width: 110px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.about-v {
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+a.about-v { text-decoration: none; border-bottom: 1px dotted var(--muted-2); }
+a.about-v:hover { color: var(--fg); border-bottom-color: currentColor; }
+
 .app-toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
   padding: 10px 18px;

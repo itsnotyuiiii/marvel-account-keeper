@@ -415,12 +415,12 @@ const Toolbar = React.forwardRef(function Toolbar(
         </select>
       }
 
-      {hasApiKey && accountsCount > 0 && (
+      {accountsCount > 0 && (
         <button
           className={"app-btn-ghost app-btn-refresh-all" + (refreshingAll ? " is-busy" : "")}
           onClick={onRefreshAll}
           disabled={refreshingAll}
-          title="Pull current ranks from marvelrivalsapi.com for every account">
+          title="Pull current ranks (tracker.gg primary, marvelrivalsapi fallback)">
           <RefreshIcon spinning={refreshingAll} />
           <span>{refreshingAll ? "Refreshing…" : "Refresh stats"}</span>
         </button>
@@ -2079,8 +2079,39 @@ function App() {
           <ApiKeyControl hasKey={hasApiKey} onSave={changeApiKey} />
           <SyncStatus sync={syncStatus} hasKey={hasApiKey} />
           <p className="sync-status-note">
-            Status-icon key moved to the info rail on the left of the accounts list.
+            Rank data: <b>tracker.gg</b> is the primary source (no key needed,
+            works on private profiles). <b>marvelrivalsapi.com</b> is the
+            fallback — the API key above is only used when tracker.gg can't
+            service a lookup.
           </p>
+        </TweakSection>
+
+        <TweakSection label="Shortcuts">
+          <ul className="shortcuts-list">
+            <li><kbd>/</kbd> focus search</li>
+            <li><kbd>n</kbd> new account</li>
+            <li><kbd>r</kbd> refresh all</li>
+            <li><kbd>Esc</kbd> close drawer</li>
+          </ul>
+        </TweakSection>
+
+        <TweakSection label="About">
+          <ul className="about-list">
+            <li>
+              <span className="about-k">Vault location</span>
+              <code className="about-v">%APPDATA%/MarvelAccountKeeper/</code>
+            </li>
+            {buildInfo?.version && (
+              <li>
+                <span className="about-k">Running</span>
+                <span className="about-v">v{buildInfo.version}{buildInfo.commit && buildInfo.commit !== "dev" ? ` · ${buildInfo.commit}` : ""}</span>
+              </li>
+            )}
+            <li>
+              <span className="about-k">Source</span>
+              <a className="about-v" href="https://github.com/itsnotyuiiii/marvel-account-keeper" target="_blank" rel="noopener noreferrer">github.com/itsnotyuiiii/marvel-account-keeper</a>
+            </li>
+          </ul>
         </TweakSection>
       </TweaksPanel>
     </>);
