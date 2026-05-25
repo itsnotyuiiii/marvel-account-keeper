@@ -666,13 +666,13 @@ a.app-foot-commit:hover { color: var(--fg); text-decoration: underline; }
   letter-spacing: .18em;
 }
 .rcard-rval {
-  font-weight: 800;
+  font-weight: 700;
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: 12.5px;
   letter-spacing: .02em;
   color: var(--rk-fg, var(--muted));
   text-shadow:
@@ -818,8 +818,8 @@ html[data-theme="light"] .rcard-rval {
 .tbl-rank-cell {
   display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--font-display);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   letter-spacing: .01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -975,7 +975,7 @@ html[data-theme="light"] .tbl-rank-cell > span:last-child {
 .lad-sep { color: var(--muted-2); }
 .lad-peak-lbl { color: var(--muted); }
 .lad-peak-val {
-  font-weight: 800;
+  font-weight: 700;
   color: var(--rk-fg, var(--fg));
   text-shadow: 0 0 6px color-mix(in oklab, var(--rk-fg, transparent) 45%, transparent);
 }
