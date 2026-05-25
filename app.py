@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -93,7 +93,7 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
 RIVALS_API_BASE = "https://marvelrivalsapi.com/api/v1"
 RIVALS_API_TIMEOUT_S = 12
 RIVALS_UPDATE_TIMEOUT_S = 8  # fire-and-forget recrawl request
-REFRESH_ALL_DELAY_S = 0.6  # polite spacing between calls in /refresh-all
+REFRESH_ALL_DELAY_S = 2.0  # polite spacing between calls in /refresh-all (30 req/min)
 # The /update endpoint locks a player for 30 min and penalizes repeat requests
 # (queue position resets, risk of a stuck processing loop) — never re-request
 # a recrawl for the same player inside this window.
@@ -1229,6 +1229,13 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         return {**base, "last_refresh_status": "bad_key",
                 "last_refresh_error": "No Marvel Rivals API key set in Options."}
 
+    # Respect the global rate-limit cooldown set by a prior 429 — without
+    # this, spamming refresh during a cooldown burns the cooldown timer.
+    cooldown_left = int(_rivals_rate_limited_until - time.time())
+    if cooldown_left > 0:
+        return {**base, "last_refresh_status": "error",
+                "last_refresh_error": f"Rate limit cooldown — wait ~{cooldown_left}s, then retry."}
+
     # marvelrivalsapi indexes Marvel Rivals player names — look up by the
     # in-game name, never the Steam `username` (a login credential the API
     # has never heard of). Prefer the UID once a past refresh resolved one.
@@ -1719,7 +1726,25 @@ def refresh_all_accounts():
         if merged is not None:
             updated_accounts.append(_public_account(merged, key))
         # Bail early on bad_key — every subsequent call would also fail.
+        # Same for a 429: the cooldown applies globally, so plowing through
+        # the remaining accounts just stacks up more rate-limited failures.
         if st == "bad_key":
+            break
+        if st == "error" and _rivals_rate_limited_until > time.time():
+            # Mark the rest as skipped so the UI surfaces *why* they didn't run.
+            for skipped_id in ids[i + 1:]:
+                skipped = next((a for a in vault.get("accounts", []) if a["id"] == skipped_id), None)
+                if skipped is None:
+                    continue
+                cooldown_s = max(1, int(_rivals_rate_limited_until - time.time()))
+                merged_skip = _apply_refresh_updates(vault, skipped_id, {
+                    "last_refresh_ts": int(time.time()),
+                    "last_refresh_status": "error",
+                    "last_refresh_error": f"Skipped — rate limit cooldown ~{cooldown_s}s. Retry later.",
+                })
+                summary["error"] = summary.get("error", 0) + 1
+                if merged_skip is not None:
+                    updated_accounts.append(_public_account(merged_skip, key))
             break
         if i < len(ids) - 1:
             time.sleep(REFRESH_ALL_DELAY_S)
@@ -1943,6 +1968,49 @@ def rivals_local_uids():
     Unauthenticated for the same reason as /api/steam-active.
     """
     return jsonify({"uids": _detected_rivals_uids()})
+
+
+@app.route("/api/rivals/lookup-uid/<uid>")
+def rivals_lookup_uid(uid: str):
+    """Resolve a Marvel Rivals UID to its current in-game name via
+    marvelrivalsapi. Used by the drawer to preview which player owns
+    each locally-detected UID before claiming it for a vault entry.
+
+    Authenticated (needs the unlocked vault to read the stored API key)."""
+    _key, err = _require_key()
+    if err:
+        return err
+    api_key = _marvel_rivals_api_key()
+    if not api_key:
+        return jsonify({"error": "missing_api_key"}), 400
+    uid = re.sub(r"\D", "", uid or "")
+    if not uid:
+        return jsonify({"error": "bad_uid"}), 400
+    cooldown_left = int(_rivals_rate_limited_until - time.time())
+    if cooldown_left > 0:
+        return jsonify({"error": "rate_limited", "retry_after_s": cooldown_left}), 429
+
+    url = f"{RIVALS_API_BASE}/player/{urllib.parse.quote(uid, safe='')}"
+    headers = {"x-api-key": api_key, "Accept": "application/json",
+               "User-Agent": f"{APP_NAME}/{APP_VERSION}"}
+    try:
+        status, payload, retry_after = _http_get_json(url, headers)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return jsonify({"error": "network", "message": str(e)}), 502
+    _note_api_call()
+    if status == 429:
+        _note_rate_limited(retry_after or 60)
+        return jsonify({"error": "rate_limited", "retry_after_s": retry_after or 60}), 429
+    if status == 404 or not isinstance(payload, dict):
+        return jsonify({"error": "not_found"}), 404
+    if _is_private_payload(status, payload):
+        # Even a private profile usually returns a `name` field — surface it
+        # so the user still gets the IGN; just flag the privacy state.
+        name = (payload.get("name") or "").strip() if isinstance(payload, dict) else ""
+        return jsonify({"uid": uid, "name": name or None, "private": True})
+    if status >= 400:
+        return jsonify({"error": "upstream", "status": status}), 502
+    return jsonify({"uid": uid, "name": (payload.get("name") or "").strip() or None})
 
 
 @app.route("/api/accounts/<acct_id>/matches", methods=["POST"])

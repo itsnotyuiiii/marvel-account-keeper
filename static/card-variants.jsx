@@ -50,13 +50,17 @@ function isLocalRivalsMatch(acct, localRivalsUids) {
   return !!uid && localRivalsUids.has(uid);
 }
 
-// "ON THIS PC" pill — cyan, distinct from the green Steam badge.
+// Compact "on this PC" badge — Steam-style icon only, no label. Saves
+// horizontal space on the card name row (the IGN + tag + presence all
+// have to fit in one line).
 function LocalRivalsBadge({ compact }) {
   return (
-    <span className={"local-rivals-badge" + (compact ? " local-rivals-badge-sm" : "")}
-          title="This Marvel Rivals account has signed in on this PC">
-      <span className="local-rivals-dot" />
-      <span className="local-rivals-lbl">{compact ? "ON PC" : "ON THIS PC"}</span>
+    <span className={"local-rivals-icon" + (compact ? " local-rivals-icon-sm" : "")}
+          title="Signed in to Marvel Rivals on this PC"
+          aria-label="on this PC">
+      <svg viewBox="0 0 24 24" width={compact ? "12" : "13"} height={compact ? "12" : "13"} aria-hidden="true">
+        <path fill="currentColor" d="M12 2a10 10 0 0 0-9.94 9.04l5.4 2.23a2.83 2.83 0 0 1 1.6-.5c.06 0 .12 0 .18.01l2.4-3.48v-.05a3.78 3.78 0 1 1 3.78 3.78h-.09l-3.43 2.45c0 .05.01.1.01.15a2.85 2.85 0 1 1-5.69.04l-3.87-1.6A10 10 0 1 0 12 2zm-3.18 13.16-1.23-.51a2.16 2.16 0 0 0 1.13 1.13 2.15 2.15 0 0 0 2.83-1.16 2.13 2.13 0 0 0-.01-1.64 2.16 2.16 0 0 0-1.16-1.16 2.16 2.16 0 0 0-1.6-.01l1.27.52a1.58 1.58 0 0 1-1.23 2.92zm9.94-5.43a2.52 2.52 0 1 1-2.52-2.52 2.52 2.52 0 0 1 2.52 2.52zm-4.41-.01a1.9 1.9 0 1 0 1.9-1.89 1.9 1.9 0 0 0-1.9 1.9z"/>
+      </svg>
     </span>
   );
 }
@@ -73,6 +77,21 @@ function PresenceBadge({ acct, activeSteam, localRivalsUids, compact }) {
     return <LocalRivalsBadge compact={compact} />;
   }
   return null;
+}
+
+// "Not yet set up": no UID linked AND no usable IGN (or the IGN was tried
+// and the API didn't recognize it). Drives a greyed-out card style so these
+// entries fade into the background until the user finishes linking them.
+function isIncomplete(acct) {
+  if (!acct) return false;
+  const uid = (acct.rivals_uid || "").toString().trim();
+  const ign = (acct.in_game_name || "").trim();
+  if (uid) return false;            // UID set → considered set up
+  if (!ign) return true;            // no UID, no IGN → definitely not set up
+  // IGN exists but lookups never resolved a UID — treat the typed name as
+  // probably stale / wrong since the UID is the source of truth.
+  return acct.last_refresh_status === "not_found"
+      || acct.last_refresh_status === "missing_handle";
 }
 
 function labelFor(acct) {
@@ -347,7 +366,8 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
 
   return (
     <article
-      className={"rcard rcard-" + lab.kind + (acct.neon ? " rcard-neon" : "")}
+      className={"rcard rcard-" + lab.kind + (acct.neon ? " rcard-neon" : "")
+                 + (isIncomplete(acct) ? " is-incomplete" : "")}
       style={{
         "--tier-fg":   cur?.fg   || "#9aa3b2",
         "--tier-glow": cur?.glow || "#1a1d24",
@@ -467,7 +487,7 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
 
   return (
     <li
-      className={"tbl-row" + (open ? " is-open" : "")}
+      className={"tbl-row" + (open ? " is-open" : "") + (isIncomplete(acct) ? " is-incomplete" : "")}
       data-label={lab.kind}
     >
       <div className="tbl-row-main" onClick={() => setOpen((p) => !p)}>
@@ -617,7 +637,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
 
   return (
     <article
-      className={"lad-card lad-card-" + lab.kind}
+      className={"lad-card lad-card-" + lab.kind + (isIncomplete(acct) ? " is-incomplete" : "")}
       style={{ "--tier-fg": cur?.fg || "var(--muted)" }}
       onClick={() => onOpen(acct)}
     >

@@ -664,14 +664,20 @@ a.app-foot-commit:hover { color: var(--fg); text-decoration: underline; }
   letter-spacing: .14em;
 }
 .rcard-rval {
-  font-weight: 600;
+  font-weight: 700;
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-display);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: .02em;
+  color: var(--rk-fg, var(--muted));
+  text-shadow: 0 0 8px color-mix(in oklab, var(--rk-fg, transparent) 35%, transparent);
+}
+html[data-theme="light"] .rcard-rval {
+  color: var(--rk-glow, var(--muted));
+  text-shadow: none;
 }
 
 .rcard-foot {
@@ -1728,39 +1734,17 @@ html[data-theme="light"] .update-err{ color:#c0394a; }
    config dir (Saved/Saved/Config/<UID>/), i.e. you've actually signed into
    that account in the game on this machine. Independent of launcher (works
    for both Steam and NetEase native launcher logins). */
-.local-rivals-badge{
-  display:inline-flex; align-items:center; gap:6px;
-  padding:2px 9px;
-  border:1px solid #5be0ff;
-  border-radius:999px;
-  background:rgba(91,224,255,.08);
+.local-rivals-icon{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:18px; height:18px;
   color:#5be0ff;
-  font-family:var(--font-mono);
-  font-size:10px;
-  font-weight:700;
-  letter-spacing:.16em;
-  text-transform:uppercase;
-  white-space:nowrap;
   flex-shrink:0;
+  filter:drop-shadow(0 0 4px rgba(91,224,255,.4));
 }
-.local-rivals-badge-sm{
-  padding:1px 7px;
-  font-size:9px;
-  letter-spacing:.12em;
-}
-.local-rivals-dot{
-  width:6px; height:6px; border-radius:50%;
-  background:#5be0ff;
-  box-shadow:0 0 6px #5be0ff, 0 0 12px rgba(91,224,255,.55);
-}
-html[data-theme="light"] .local-rivals-badge{
+.local-rivals-icon-sm{ width:15px; height:15px; }
+html[data-theme="light"] .local-rivals-icon{
   color:#0d7396;
-  border-color:#0d7396;
-  background:rgba(13,115,150,.1);
-}
-html[data-theme="light"] .local-rivals-dot{
-  background:#0d7396;
-  box-shadow:0 0 4px #0d7396;
+  filter:none;
 }
 
 /* ── Match history (in drawer) ─────────────────────────────────────────────
@@ -1876,4 +1860,71 @@ html[data-theme="light"] .local-rivals-dot{
   font-family:var(--font-mono);
   font-size:10px;
   color:var(--muted);
+}
+
+/* ── Incomplete account fade ───────────────────────────────────────────────
+   Cards/rows for accounts with no UID and no usable IGN are dimmed so they
+   read as "needs attention" without cluttering the main visual hierarchy.
+   Hover restores full opacity so editing is still easy. */
+.rcard.is-incomplete,
+.tbl-row.is-incomplete,
+.lad-card.is-incomplete{
+  opacity:.45;
+  transition:opacity .15s ease;
+}
+.rcard.is-incomplete:hover,
+.tbl-row.is-incomplete:hover,
+.lad-card.is-incomplete:hover{
+  opacity:1;
+}
+
+/* ── UID suggester (drawer) ────────────────────────────────────────────────
+   Lists locally-detected Marvel Rivals UIDs that aren't claimed yet. Click
+   a pill to assign it to the open account; the API resolves the IGN. */
+.uid-suggester{
+  margin:6px 0 4px;
+  padding:8px 10px;
+  border:1px dashed color-mix(in oklab, #5be0ff 45%, transparent);
+  border-radius:8px;
+  background:color-mix(in oklab, #5be0ff 6%, transparent);
+}
+.uid-suggester-lbl{
+  font-family:var(--font-mono);
+  font-size:10px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--muted);
+  margin-bottom:6px;
+}
+.uid-suggester-pills{
+  display:flex; flex-wrap:wrap; gap:6px;
+}
+.uid-pill{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 9px;
+  border:1px solid color-mix(in oklab, #5be0ff 55%, transparent);
+  border-radius:999px;
+  background:transparent;
+  color:#5be0ff;
+  font-family:var(--font-mono);
+  font-size:11px;
+  cursor:pointer;
+  transition:background .12s, transform .12s;
+}
+.uid-pill:hover{
+  background:color-mix(in oklab, #5be0ff 18%, transparent);
+  transform:translateY(-1px);
+}
+.uid-pill-id{ font-weight:600; }
+.uid-pill-name{
+  color:var(--fg-2);
+  font-style:italic;
+}
+html[data-theme="light"] .uid-suggester{
+  border-color:color-mix(in oklab, #0d7396 50%, transparent);
+  background:color-mix(in oklab, #0d7396 6%, transparent);
+}
+html[data-theme="light"] .uid-pill{
+  border-color:color-mix(in oklab, #0d7396 60%, transparent);
+  color:#0d7396;
 }

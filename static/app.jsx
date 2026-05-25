@@ -617,7 +617,57 @@ function MatchHistory({ acct, syncing, onSync }) {
   );
 }
 
-function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, syncingMatches }) {
+// Lists Marvel Rivals UIDs detected on this PC that aren't already claimed
+// by any vault account. Clicking one assigns it to the open drawer's form
+// and (best-effort) resolves the IGN via marvelrivalsapi so the in-game
+// name field auto-fills. Source of truth: the UID. Typed IGNs that don't
+// match the API name will be corrected on the next refresh.
+function UidSuggester({ currentUid, unclaimedUids, onResolveUid, onPick }) {
+  const [resolved, setResolved] = React.useState(() => new Map()); // uid -> name | null
+  const [resolving, setResolving] = React.useState(() => new Set());
+  const hasCurrent = !!(currentUid || "").toString().trim();
+  if (hasCurrent || !unclaimedUids || unclaimedUids.length === 0) return null;
+
+  const resolve = async (uid) => {
+    if (resolved.has(uid) || resolving.has(uid)) return resolved.get(uid);
+    setResolving((p) => new Set(p).add(uid));
+    const name = await onResolveUid(uid);
+    setResolved((p) => new Map(p).set(uid, name || null));
+    setResolving((p) => { const n = new Set(p); n.delete(uid); return n; });
+    return name || null;
+  };
+
+  return (
+    <div className="uid-suggester">
+      <div className="uid-suggester-lbl">
+        Detected on this PC, not yet linked to any account:
+      </div>
+      <div className="uid-suggester-pills">
+        {unclaimedUids.map((uid) => {
+          const name = resolved.get(uid);
+          const isResolving = resolving.has(uid);
+          return (
+            <button key={uid}
+                    type="button"
+                    className="uid-pill"
+                    onClick={async () => {
+                      const n = resolved.has(uid) ? resolved.get(uid) : await resolve(uid);
+                      onPick(uid, n);
+                    }}
+                    onMouseEnter={() => resolve(uid)}>
+              <span className="uid-pill-id">{uid}</span>
+              {isResolving && <span className="uid-pill-name">…</span>}
+              {!isResolving && name && <span className="uid-pill-name">{name}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, syncingMatches,
+                  unclaimedUids, onResolveUid }) {
   const isNew = !acct?.id;
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [form, setForm] = React.useState(() => baseFormFor(null));
@@ -713,6 +763,14 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
             <Field label="Marvel Rivals UID" value={form.rivals_uid}
             onChange={(v) => set("rivals_uid", v)}
             placeholder="recommended — numeric player ID" />
+            <UidSuggester
+              currentUid={form.rivals_uid}
+              unclaimedUids={unclaimedUids}
+              onResolveUid={onResolveUid}
+              onPick={(uid, name) => {
+                set("rivals_uid", uid);
+                if (name) set("in_game_name", name);
+              }} />
             <p className="dr-field-note">
               <strong>A UID is the preferred way to link an account.</strong> It's
               the most reliable lookup — it works for private or renamed accounts,
@@ -1514,6 +1572,28 @@ function App() {
     }
   }, [api]);
 
+  // UIDs detected locally but not claimed by any vault account. Shown as
+  // suggestion pills in the drawer's Identity section — click to assign +
+  // auto-fill the IGN from the API.
+  const unclaimedUids = React.useMemo(() => {
+    const claimed = new Set(
+      accounts.map((a) => (a.rivals_uid || "").toString().trim()).filter(Boolean)
+    );
+    return [...localRivalsUids].filter((uid) => !claimed.has(uid));
+  }, [accounts, localRivalsUids]);
+
+  // Resolve a UID to its current IGN via marvelrivalsapi. Returns the name
+  // string, or null on any failure (network, 404, rate-limited). Drawer
+  // uses this for hover-previews on the UID suggester pills.
+  const onResolveUid = React.useCallback(async (uid) => {
+    try {
+      const data = await api(`/api/rivals/lookup-uid/${encodeURIComponent(uid)}`);
+      return data?.name || null;
+    } catch {
+      return null;
+    }
+  }, [api]);
+
   // ── document data attributes ──────────────────────────────────────────────
   React.useEffect(() => {
     document.documentElement.dataset.view = t.view;
@@ -1864,7 +1944,9 @@ function App() {
           onSave={onSave}
           onDelete={onDelete}
           onSyncMatches={onSyncMatches}
-          syncingMatches={syncingMatches} />
+          syncingMatches={syncingMatches}
+          unclaimedUids={unclaimedUids}
+          onResolveUid={onResolveUid} />
 
       </div>
 
