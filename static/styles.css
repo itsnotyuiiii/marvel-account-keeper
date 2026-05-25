@@ -201,6 +201,9 @@ html[data-theme="light"] .refresh-btn.has-issue[data-status="error"] { color: #d
 .app-foot-link:hover { color: var(--fg); }
 .app-foot-link svg { opacity: .8; }
 .app-foot-link:hover svg { opacity: 1; }
+.app-foot-build { color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.app-foot-commit { color: var(--muted); }
+a.app-foot-commit:hover { color: var(--fg); text-decoration: underline; }
 
 .app-shell { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; }
 

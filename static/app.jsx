@@ -307,6 +307,36 @@ function UpdateBanner({ info, applying, applied, error, onApply }) {
   );
 }
 
+// Renders "v1.7.0 · a1b2c3d4 · built YYYY-MM-DD" in the footer. The commit
+// links to GitHub when the build is real (non-"dev"); on source runs the
+// label simplifies to "v1.7.0 · dev" so it's obvious which path you're on.
+function BuildStamp({ info }) {
+  if (!info || !info.version) return null;
+  const isDev = !info.commit || info.commit === "dev" || info.commit === "unknown";
+  const commitUrl = (info.repo && !isDev)
+    ? `https://github.com/${info.repo}/commit/${info.commit}`
+    : null;
+  const built = info.built_at ? info.built_at.slice(0, 10) : null;
+  return (
+    <>
+      <span className="app-foot-sep">·</span>
+      <span className="app-foot-build" title={info.built_at || ""}>
+        v{info.version}
+        {" "}·{" "}
+        {commitUrl ? (
+          <a className="app-foot-link app-foot-commit"
+             href={commitUrl}
+             target="_blank"
+             rel="noopener noreferrer">{info.commit}</a>
+        ) : (
+          <span className="app-foot-commit">{info.commit || "dev"}</span>
+        )}
+        {built && <> · built {built}</>}
+      </span>
+    </>
+  );
+}
+
 function Header({ count, lockIn, lockoutMinutes, onLock, onSettings, theme, onToggleTheme }) {
   return (
     <header className="app-head">
@@ -1257,6 +1287,9 @@ function App() {
   const [applyingUpdate, setApplyingUpdate] = React.useState(false);
   const [updateApplied, setUpdateApplied] = React.useState(null); // null | "1.6.0"
   const [updateError, setUpdateError] = React.useState(null);
+  // { version, commit, built_at, repo } captured from /api/status on boot.
+  // Surfaced in the footer so the user can confirm which build is running.
+  const [buildInfo, setBuildInfo] = React.useState(null);
   // Account ids whose match-history sync is in flight, for inline spinners.
   const [syncingMatches, setSyncingMatches] = React.useState(() => new Set());
   const searchRef = React.useRef(null);
@@ -1320,6 +1353,12 @@ function App() {
         setAccountCount(s.account_count || 0);
         syncLockout(s.lockout_minutes);
         setHasApiKey(!!s.has_marvel_rivals_api_key);
+        setBuildInfo({
+          version: s.version || null,
+          commit: s.commit || null,
+          built_at: s.built_at || null,
+          repo: s.repo || null,
+        });
         refreshSyncStatus();
         if (!s.initialized) { setPhase("init"); return; }
         if (!s.unlocked) { setPhase("unlock"); return; }
@@ -1814,6 +1853,7 @@ function App() {
             </svg>
             github.com/itsnotyuiiii
           </a>
+          <BuildStamp info={buildInfo} />
         </footer>
 
         <Drawer

@@ -41,17 +41,23 @@ jobs:
       - name: Build executable
         run: python build.py
 
-      - name: Stage artifact
+      - name: Stage artifact + checksum
         shell: bash
         run: |
           mkdir -p out
           cp "${{ matrix.built }}" "out/${{ matrix.asset }}"
+          # Generate a SHA256 sidecar so the self-updater (>=v1.7.0) can
+          # verify the download. Single bare hex line, no filename suffix
+          # — the in-app verifier handles either format.
+          python -c "import hashlib, pathlib; p = pathlib.Path('out/${{ matrix.asset }}'); pathlib.Path(str(p) + '.sha256').write_text(hashlib.sha256(p.read_bytes()).hexdigest() + '\n', encoding='utf-8')"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: out/${{ matrix.asset }}
+          path: |
+            out/${{ matrix.asset }}
+            out/${{ matrix.asset }}.sha256
 
   release:
     name: Publish release

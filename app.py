@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import hashlib
 import json
 import logging
 import os
@@ -48,13 +49,15 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
+GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
 # release feed on boot and offers a one-click update when a newer tag is
 # available. Running from source (not frozen) hides the banner entirely.
-GITHUB_RELEASES_URL = "https://api.github.com/repos/itsnotyuiiii/marvel-account-keeper/releases/latest"
+GITHUB_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO_SLUG}/releases/latest"
 UPDATE_ASSET_NAME = "MarvelAccountKeeper-windows.exe"
+UPDATE_CHECKSUM_NAME = UPDATE_ASSET_NAME + ".sha256"
 UPDATE_MIN_DOWNLOAD_BYTES = 1_000_000  # PyInstaller exes are 10MB+; anything smaller is junk
 VERIFIER_PLAINTEXT = b"VAULT_OK::v1"
 SCRYPT_N = 2**15
@@ -108,6 +111,25 @@ def _resource_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     return Path(__file__).parent
+
+
+def _load_build_info() -> dict[str, Any]:
+    """Read `_build_info.json` written by build.py at CI build time. Carries
+    the short commit SHA and build timestamp so the About/footer can show
+    which build is running. Returns {} in source runs where the file is
+    absent — the UI falls back to a "dev" label."""
+    p = _resource_dir() / "_build_info.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+_BUILD_INFO = _load_build_info()
+APP_COMMIT = (_BUILD_INFO.get("commit") or "").strip() or "dev"
+APP_BUILT_AT = _BUILD_INFO.get("built_at")  # ISO 8601 string or None
 
 
 def _data_dir() -> Path:
@@ -390,6 +412,48 @@ def _release_asset_url(release: dict[str, Any] | None) -> str | None:
         if asset.get("name") == UPDATE_ASSET_NAME:
             return asset.get("browser_download_url")
     return None
+
+
+def _release_checksum_url(release: dict[str, Any] | None) -> str | None:
+    """Pull the URL of the sibling SHA256 file (e.g. `<exe>.sha256`) out of
+    a release payload, or None if this release didn't ship one (e.g. <= v1.6.0,
+    which predates checksum publishing)."""
+    if not isinstance(release, dict):
+        return None
+    for asset in release.get("assets") or []:
+        if asset.get("name") == UPDATE_CHECKSUM_NAME:
+            return asset.get("browser_download_url")
+    return None
+
+
+def _fetch_expected_checksum(url: str) -> str | None:
+    """Download a tiny checksum file (one line: `<64-hex-chars>`) and return
+    the normalized lowercase hex digest. Returns None on any error — the
+    caller should treat a missing checksum as "no verification possible"
+    and decide whether that's acceptable (it is for releases that predate
+    this feature)."""
+    headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION}"}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read().decode("utf-8", errors="replace").strip()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+    # Accept either bare hex or `<hex>  filename` (the sha256sum format).
+    token = raw.split()[0] if raw else ""
+    token = token.lower()
+    if len(token) == 64 and all(c in "0123456789abcdef" for c in token):
+        return token
+    return None
+
+
+def _sha256_of_file(path: Path) -> str:
+    """Stream-read a file and return its hex SHA256."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _is_packaged() -> bool:
@@ -1420,6 +1484,10 @@ def status():
         "has_marvel_rivals_api_key": bool(
             (vault.get("config", {}) or {}).get("marvel_rivals_api_key")
         ),
+        "version": APP_VERSION,
+        "commit": APP_COMMIT,
+        "built_at": APP_BUILT_AT,
+        "repo": GITHUB_REPO_SLUG,
     })
 
 
@@ -1808,6 +1876,27 @@ def apply_update():
         return jsonify({"error": "bad_download",
                         "message": "Download was suspiciously small — aborted."}), 502
 
+    # 3b. Verify the SHA256 against the sibling .sha256 published by the
+    # release workflow. Releases >= v1.7.0 publish this file; older ones
+    # (v1.6.0 and below) don't, and we allow the update through with a flag
+    # in the response so the UI can mention that verification was skipped.
+    checksum_url = _release_checksum_url(release)
+    expected = _fetch_expected_checksum(checksum_url) if checksum_url else None
+    verified = False
+    if expected is not None:
+        actual = _sha256_of_file(new_path)
+        if actual.lower() != expected:
+            new_path.unlink(missing_ok=True)
+            return jsonify({
+                "error": "checksum_mismatch",
+                "message": f"Downloaded file failed SHA256 verification. "
+                           f"Expected {expected[:12]}…, got {actual[:12]}…. "
+                           f"Update aborted — your current install is untouched.",
+                "expected": expected,
+                "actual": actual,
+            }), 502
+        verified = True
+
     # 4. Wipe any older .old from a prior update so the rename has room.
     if old_path.exists():
         try:
@@ -1836,6 +1925,7 @@ def apply_update():
     return jsonify({
         "ok": True,
         "installed": latest_tag.lstrip("vV"),
+        "verified": verified,
         "message": f"v{latest_tag.lstrip('vV')} downloaded. Close the app and reopen "
                    f"it to run the new version.",
     })

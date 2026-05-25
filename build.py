@@ -8,14 +8,47 @@ See BUILDING.md for the full walkthrough.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 NAME = "MarvelAccountKeeper"
+BUILD_INFO_PATH = ROOT / "_build_info.json"
+
+
+def _git_short_sha() -> str:
+    """Read the current commit SHA so the build can stamp it into the binary.
+    CI checks out the tagged commit before building, so this matches the
+    release tag. Falls back to an env var (GITHUB_SHA) or "unknown" when
+    `git` isn't available."""
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=ROOT, stderr=subprocess.DEVNULL,
+        ).decode("utf-8").strip()
+        if out:
+            return out
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        pass
+    env_sha = (os.environ.get("GITHUB_SHA") or "").strip()
+    return env_sha[:12] if env_sha else "unknown"
+
+
+def _write_build_info() -> Path:
+    """Drop a tiny JSON file into the source tree that PyInstaller will
+    bundle next to the code. app.py reads it at startup to display the
+    running version + commit in the footer."""
+    info = {
+        "commit": _git_short_sha(),
+        "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    BUILD_INFO_PATH.write_text(json.dumps(info, indent=2), encoding="utf-8")
+    return BUILD_INFO_PATH
 
 
 def main() -> None:
@@ -31,6 +64,8 @@ def main() -> None:
     if spec.exists():
         spec.unlink()
 
+    _write_build_info()
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile",                              # single self-contained file
@@ -38,6 +73,7 @@ def main() -> None:
         "--name", NAME,
         "--add-data", f"templates{sep}templates",  # Flask templates
         "--add-data", f"static{sep}static",        # JS / CSS / vendored libs
+        "--add-data", f"_build_info.json{sep}.",   # commit SHA + build timestamp
         "--noconfirm",
         "--clean",
     ]
