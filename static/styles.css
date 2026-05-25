@@ -1437,6 +1437,15 @@ html[data-theme="light"] .lad-peak-val {
 .refresh-btn:active{transform:scale(.96)}
 .refresh-btn:disabled{cursor:default}
 .refresh-btn.is-busy{opacity:1;color:var(--fg,#fff)}
+.refresh-btn.is-cooldown{
+  opacity:.35;
+  cursor:not-allowed;
+  filter:grayscale(.5);
+}
+.refresh-btn.is-cooldown:hover{
+  background:transparent;
+  opacity:.4;
+}
 .refresh-btn-sm{width:22px;height:22px}
 .refresh-btn-xs{width:18px;height:18px}
 .refresh-btn-xs .refresh-btn-svg{width:11px;height:11px}

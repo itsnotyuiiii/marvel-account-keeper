@@ -214,6 +214,18 @@ function useMinuteTick(active) {
   }, [active]);
 }
 
+// Faster tick (1s) for short countdowns — the per-account refresh cooldown
+// is 20s, so a 30s minute tick wouldn't update the tooltip until after it
+// already expired.
+function useSecondTick(active) {
+  const [, force] = React.useState(0);
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const id = setInterval(() => force((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+}
+
 // Collapse an account's refresh fields into one state token. Drives both the
 // SyncChip and the refresh-button badge so they always agree.
 //   none → never refreshed       current → ok & crawled within the last 30 min
@@ -231,33 +243,67 @@ function syncState(acct) {
 }
 
 // Icon + copy for each non-clean sync state. 'fresh'/'none' render no badge on
-// the refresh button — a clean account needs no marker.
+// the refresh button — a clean account needs no marker. tracker.gg is the
+// primary data source; marvelrivalsapi is the fallback. Copy reflects that.
 const SYNC_META = {
-  stale:          { sym: "▲",  cls: "warn",  text: "API rank data is stale — refresh to recrawl" },
-  private:        { sym: "🔒", cls: "warn",  text: "Profile private — set rank manually" },
-  not_found:      { sym: "?",  cls: "muted", text: "No data for this player on marvelrivalsapi" },
-  bad_key:        { sym: "!",  cls: "err",   text: "API key rejected — check Options" },
+  stale:          { sym: "▲",  cls: "warn",  text: "Rank data is stale — hit ↻ for a fresh pull" },
+  private:        { sym: "🔒", cls: "warn",  text: "Both tracker.gg and marvelrivalsapi reported this profile as private — set rank manually" },
+  not_found:      { sym: "?",  cls: "muted", text: "No data for this player on tracker.gg or marvelrivalsapi — IGN may be wrong" },
+  bad_key:        { sym: "!",  cls: "err",   text: "marvelrivalsapi key rejected (fallback only) — tracker.gg should still work" },
   missing_handle: { sym: "?",  cls: "muted", text: "No in-game name set — refresh skipped" },
-  error:          { sym: "!",  cls: "err",   text: "Last refresh failed — retry later" },
+  error:          { sym: "!",  cls: "err",   text: "Last refresh failed — retry shortly" },
 };
 
+// Short human label for the data source field on each account.
+const SOURCE_LABEL = {
+  tracker:         "tracker.gg",
+  marvelrivalsapi: "marvelrivalsapi.com",
+};
+
+// How long (ms) the server enforces between refreshes of the same account.
+// Mirrors PER_ACCOUNT_REFRESH_COOLDOWN_S in app.py — keep in sync.
+const PER_ACCOUNT_COOLDOWN_MS = 20 * 1000;
+
+// Seconds remaining in the per-account refresh cooldown, or 0 when refresh
+// is allowed right now.
+function refreshCooldownLeft(acct) {
+  const ts = toMs(acct.last_refresh_ts);
+  if (ts == null) return 0;
+  const left = PER_ACCOUNT_COOLDOWN_MS - (Date.now() - ts);
+  return left > 0 ? Math.ceil(left / 1000) : 0;
+}
+
 // Inline refresh button. Cells/cards/rows all share this so the spinner +
-// status-indicator placement stays consistent.
+// status-indicator placement stays consistent. tracker.gg is unauthenticated
+// so the button renders even without a marvelrivalsapi key in Options.
 function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
                      size = "sm", showLabel = false }) {
-  if (!hasApiKey) return null;
   const state = syncState(acct);
   const meta = SYNC_META[state] || null;  // null for none / fresh
-  const title = meta ? (acct.last_refresh_error || meta.text) : "Refresh rank from marvelrivalsapi.com";
+  const cooldownLeft = refreshCooldownLeft(acct);
+  // 1s tick while the per-account cooldown is counting down so the tooltip
+  // updates live and the button re-enables the moment it expires.
+  useSecondTick(cooldownLeft > 0);
+
+  let title;
+  if (cooldownLeft > 0) {
+    title = `Just refreshed — wait ${cooldownLeft}s before another pull`;
+  } else if (meta) {
+    title = acct.last_refresh_error || meta.text;
+  } else {
+    title = "Refresh rank — tries tracker.gg first, marvelrivalsapi as fallback";
+  }
+  const blocked = refreshing || cooldownLeft > 0;
   return (
     <button
       type="button"
       className={"refresh-btn refresh-btn-" + size
                  + (refreshing ? " is-busy" : "")
+                 + (cooldownLeft > 0 ? " is-cooldown" : "")
                  + (meta ? " has-issue refresh-btn-" + meta.cls : "")}
       data-status={state}
-      onClick={(e) => { e.stopPropagation(); onRefresh && onRefresh(acct); }}
-      disabled={refreshing}
+      onClick={(e) => { e.stopPropagation(); if (!blocked) onRefresh && onRefresh(acct); }}
+      disabled={blocked}
       aria-label={title}
       title={title}
     >
@@ -307,22 +353,25 @@ function SyncChip({ acct, hasApiKey }) {
     ) : null;
   }
 
+  const srcLabel = SOURCE_LABEL[acct.last_refresh_source] || null;
+  const srcSuffix = srcLabel ? ` · ${srcLabel}` : "";
   let cls, icon, text;
   if (state === "current") {
     cls = "ok";
     icon = "✓";
-    text = synced ? `API rank is current — crawled ${fmtRelative(synced)}`
-                  : "API rank is current";
+    text = synced ? `Rank current — crawled ${fmtRelative(synced)}${srcSuffix}`
+                  : `Rank current${srcSuffix}`;
   } else if (state === "fresh") {
     cls = "ok";
     icon = "●";
-    text = synced ? `API rank synced ${fmtRelative(synced)}` : "API rank synced";
+    text = synced ? `Rank synced ${fmtRelative(synced)}${srcSuffix}`
+                  : `Rank synced${srcSuffix}`;
   } else {
     const m = SYNC_META[state] || SYNC_META.error;
     cls = m.cls;
     icon = m.sym;
     text = (state === "stale" && synced)
-      ? `API rank from ${fmtRelative(synced)} — may be outdated`
+      ? `Rank from ${fmtRelative(synced)} — may be outdated${srcSuffix}`
       : m.text;
   }
 
@@ -334,21 +383,20 @@ function SyncChip({ acct, hasApiKey }) {
       <span className="sync-chip-t">{text}</span>
       {recrawlPending && (
         <span className="sync-chip-pending"
-              title={"Recrawl queued — marvelrivalsapi is re-fetching this "
-                     + "player's live stats from the game. The crawl usually "
-                     + "finishes within a few minutes (30 min at the most); "
-                     + "refresh this card again then to pull the updated rank. "
-                     + "Another recrawl can't be queued for this player for ~"
-                     + recrawlMins + " min."}>
+              title={"Recrawl queued on marvelrivalsapi (fallback only) — "
+                     + "their backend is re-fetching this player's live stats. "
+                     + "Refresh again in a few minutes to pull the updated rank. "
+                     + "Another recrawl can't be queued for ~"
+                     + recrawlMins + " min. tracker.gg pulls live data on every "
+                     + "refresh, so no recrawl is needed there."}>
           · recrawl queued · ~{recrawlMins}m
         </span>
       )}
       {recrawlReady && (
         <span className="sync-chip-ready"
-              title={"The 30-min recrawl window has elapsed — marvelrivalsapi "
-                     + "should have fresh data for this player now. Nothing "
-                     + "refreshes on its own; hit the ↻ button to pull the "
-                     + "recrawled rank onto the card."}>
+              title={"The 30-min marvelrivalsapi recrawl window has elapsed. "
+                     + "Hit ↻ to pull the recrawled rank — relevant only if "
+                     + "this account falls back to marvelrivalsapi."}>
           · recrawl done — hit ↻
         </span>
       )}

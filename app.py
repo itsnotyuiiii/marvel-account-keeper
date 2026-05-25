@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "1.9.2"
+APP_VERSION = "1.10.0"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -95,6 +95,7 @@ RIVALS_API_BASE = "https://marvelrivalsapi.com/api/v1"
 RIVALS_API_TIMEOUT_S = 12
 RIVALS_UPDATE_TIMEOUT_S = 8  # fire-and-forget recrawl request
 REFRESH_ALL_DELAY_S = 2.0  # polite spacing between calls in /refresh-all (30 req/min)
+PER_ACCOUNT_REFRESH_COOLDOWN_S = 20  # min spacing between refreshes for the SAME account
 # The /update endpoint locks a player for 30 min and penalizes repeat requests
 # (queue position resets, risk of a stuck processing loop) — never re-request
 # a recrawl for the same player inside this window.
@@ -1869,6 +1870,14 @@ def refresh_account_stats(acct_id: str):
     target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
     if target is None:
         return jsonify({"error": "not_found"}), 404
+    # Per-account spam guard. Spamming refresh hammers tracker.gg / Cloudflare
+    # and burns marvelrivalsapi quota. Block re-refresh inside the cooldown.
+    last_ts = int(target.get("last_refresh_ts") or 0)
+    since = int(time.time()) - last_ts
+    if last_ts and since < PER_ACCOUNT_REFRESH_COOLDOWN_S:
+        wait = PER_ACCOUNT_REFRESH_COOLDOWN_S - since
+        return jsonify({"error": "cooldown", "retry_after_s": wait,
+                        "message": f"Just refreshed — wait {wait}s before another pull."}), 429
     api_key = _marvel_rivals_api_key()
     updates = _refresh_account_stats(target, api_key)
     # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
@@ -1886,17 +1895,26 @@ def refresh_all_accounts():
     if err:
         return err
     api_key = _marvel_rivals_api_key()
-    if not api_key:
-        return jsonify({"error": "missing_api_key",
-                        "message": "Set your Marvel Rivals API key in Options first."}), 400
+    # tracker.gg is unauthenticated, so refresh-all works even without a
+    # marvelrivalsapi key — the key is only needed for fallback / UID-only
+    # accounts. No hard gate.
     vault = _read_vault()
     ids = [a["id"] for a in vault.get("accounts", [])]
     summary = {"ok": 0, "private": 0, "not_found": 0, "bad_key": 0,
                "error": 0, "missing_handle": 0}
     updated_accounts: list[dict[str, Any]] = []
+    now_ts = int(time.time())
     for i, acct_id in enumerate(ids):
         target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
         if target is None:
+            continue
+        # Skip accounts that were refreshed within the per-account cooldown.
+        # Avoids hammering tracker.gg when the user just did refresh-all.
+        last_ts = int(target.get("last_refresh_ts") or 0)
+        if last_ts and now_ts - last_ts < PER_ACCOUNT_REFRESH_COOLDOWN_S:
+            # Record nothing — the existing rank stays as-is, this acct is
+            # just skipped. Count toward summary so UI shows the skip.
+            summary["ok"] = summary.get("ok", 0)  # no-op for accounting
             continue
         updates = _refresh_account_stats(target, api_key)
         # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).

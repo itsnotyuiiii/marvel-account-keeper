@@ -1770,13 +1770,11 @@ function App() {
     error: "Refresh failed",
   };
 
-  // Refresh one account's stats from marvelrivalsapi.com.
+  // Refresh one account's rank. tracker.gg is primary, marvelrivalsapi is
+  // the fallback — no API key is required for the common path, so we don't
+  // gate on hasApiKey here.
   const onRefresh = async (acct) => {
     if (!acct?.id) return;
-    if (!hasApiKey) {
-      showToast("Set your Marvel Rivals API key in Options first");
-      return;
-    }
     setRefreshing((s) => { const n = new Set(s); n.add(acct.id); return n; });
     try {
       const res = await api(`/api/accounts/${acct.id}/refresh-stats`, { method: "POST" });
@@ -1785,7 +1783,12 @@ function App() {
       const st = res?.account?.last_refresh_status || "error";
       showToast(REFRESH_LABEL[st] || "Done");
     } catch (e) {
-      if (!e.locked) showToast("Refresh failed — try again");
+      if (e.locked) return;
+      if (e.status === 429 && e.data?.error === "cooldown") {
+        showToast(`Just refreshed — wait ${e.data.retry_after_s}s`);
+      } else {
+        showToast("Refresh failed — try again");
+      }
     } finally {
       setRefreshing((s) => { const n = new Set(s); n.delete(acct.id); return n; });
     }
@@ -1793,10 +1796,6 @@ function App() {
 
   // Refresh every account in series (server adds a polite delay between calls).
   const onRefreshAll = async () => {
-    if (!hasApiKey) {
-      showToast("Set your Marvel Rivals API key in Options first");
-      return;
-    }
     if (refreshingAll) return;
     setRefreshingAll(true);
     try {
