@@ -982,10 +982,11 @@ function RankPicker({ label, value, onChange }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // LOCK SCREEN  — init (set master password) and unlock both run through here.
 // ─────────────────────────────────────────────────────────────────────────────
-function LockScreen({ mode, accountCount, onSubmit }) {
+function LockScreen({ mode, accountCount, rememberSupported, onSubmit }) {
   const isInit = mode === "init";
   const [pw, setPw] = React.useState("");
   const [confirm, setConfirm] = React.useState("");
+  const [remember, setRemember] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [shake, setShake] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -1003,12 +1004,12 @@ function LockScreen({ mode, accountCount, onSubmit }) {
     if (busy || !pw.length) return;
     setErr("");
     if (isInit) {
-      if (pw.length < 6) { fail("Master password must be at least 6 characters."); return; }
+      if (pw.length < 6) { fail("Pick a password with at least 6 characters."); return; }
       if (pw !== confirm) { fail("Passwords don't match."); return; }
     }
     setBusy(true);
     let error = null;
-    try { error = await onSubmit(pw); }
+    try { error = await onSubmit(pw, remember); }
     catch { error = "Something went wrong. Try again."; }
     setBusy(false);
     if (error) fail(error);
@@ -1020,29 +1021,29 @@ function LockScreen({ mode, accountCount, onSubmit }) {
       <div className="lock-grid" aria-hidden="true" />
 
       <main className="lock-main">
-        <div className="lock-eyebrow">RIVALS · ACCOUNT VAULT</div>
+        <div className="lock-eyebrow">MARVEL RIVALS · ACCOUNT KEEPER</div>
         <h1 className="lock-title">
           {isInit ? (
             <>
-              <span className="lock-title-row">Set your</span>
-              <span className="lock-title-row lock-title-row-2">master key.</span>
+              <span className="lock-title-row">Pick a password</span>
+              <span className="lock-title-row lock-title-row-2">to get started.</span>
             </>
           ) : (
             <>
-              <span className="lock-title-row">All your accounts.</span>
-              <span className="lock-title-row lock-title-row-2">One key.</span>
+              <span className="lock-title-row">Welcome back.</span>
+              <span className="lock-title-row lock-title-row-2">Let's see those ranks.</span>
             </>
           )}
         </h1>
         <p className="lock-sub">
           {isInit
-            ? "Pick a master password. It encrypts every saved password with scrypt + AES-GCM and is never stored — if you forget it, those passwords are unrecoverable."
-            : "Encrypted at rest with scrypt + AES-GCM. The master key never leaves this machine."}
+            ? "This password locks the vault on disk. Make it something you'll remember — there's no recovery."
+            : "Just need your password to open the vault."}
         </p>
 
         <form className={"lock-form" + (shake ? " shake" : "")} onSubmit={submit}>
           <div className="lock-field">
-            <span className="lock-field-lbl">MASTER PASSWORD</span>
+            <span className="lock-field-lbl">{isInit ? "PASSWORD" : "PASSWORD"}</span>
             <input
               ref={ref}
               type="password"
@@ -1050,36 +1051,45 @@ function LockScreen({ mode, accountCount, onSubmit }) {
               value={pw}
               onChange={(e) => { setPw(e.target.value); setErr(""); }}
               placeholder="• • • • • • • •"
-              aria-label="Master password" />
+              aria-label="Password" />
           </div>
           {isInit && (
             <div className="lock-field">
-              <span className="lock-field-lbl">CONFIRM PASSWORD</span>
+              <span className="lock-field-lbl">CONFIRM</span>
               <input
                 type="password"
                 autoComplete="new-password"
                 value={confirm}
                 onChange={(e) => { setConfirm(e.target.value); setErr(""); }}
                 placeholder="• • • • • • • •"
-                aria-label="Confirm master password" />
+                aria-label="Confirm password" />
             </div>
           )}
+          {rememberSupported && (
+            <label className="lock-remember">
+              <input type="checkbox"
+                     checked={remember}
+                     onChange={(e) => setRemember(e.target.checked)} />
+              <span>Remember me on this PC</span>
+              <span className="lock-remember-hint"
+                    title="The vault key is sealed with your Windows login (DPAPI). Only this Windows user on this PC can unlock it.">
+                ⓘ
+              </span>
+            </label>
+          )}
           <button type="submit" className="lock-btn" disabled={busy || !pw.length}>
-            {busy ? (isInit ? "Creating…" : "Unlocking…") : isInit ? "Create vault" : "Unlock"}
+            {busy ? (isInit ? "Setting up…" : "Opening…") : isInit ? "Create vault" : "Open vault"}
             <span className="lock-btn-arrow" aria-hidden="true">→</span>
           </button>
         </form>
         {err && <div className="lock-err">{err}</div>}
 
-        <footer className="lock-foot">
-          <span className="lock-foot-i">●</span> Vault file: <code>marvel-accounts/vault.json</code>
-          {!isInit && accountCount > 0 && (
-            <>
-              <span className="lock-foot-sep">·</span>
-              {accountCount} {accountCount === 1 ? "account" : "accounts"} stored
-            </>
-          )}
-        </footer>
+        {!isInit && accountCount > 0 && (
+          <footer className="lock-foot">
+            <span className="lock-foot-i">●</span>
+            {accountCount} {accountCount === 1 ? "account" : "accounts"} in your vault
+          </footer>
+        )}
       </main>
     </div>);
 
@@ -1418,6 +1428,8 @@ function App() {
           commit: s.commit || null,
           built_at: s.built_at || null,
           repo: s.repo || null,
+          remember_supported: !!s.remember_supported,
+          has_remembered_session: !!s.has_remembered_session,
         });
         refreshSyncStatus();
         if (!s.initialized) { setPhase("init"); return; }
@@ -1445,11 +1457,11 @@ function App() {
     setPhase("ready");
   }, [loadAccounts, syncLockout, refreshSyncStatus]);
 
-  const handleUnlock = async (password) => {
+  const handleUnlock = async (password, remember) => {
     const res = await fetch("/api/unlock", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, remember: !!remember }),
     });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
@@ -1461,11 +1473,11 @@ function App() {
     return null;
   };
 
-  const handleInit = async (password) => {
+  const handleInit = async (password, remember) => {
     const res = await fetch("/api/init", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, remember: !!remember }),
     });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
@@ -1489,8 +1501,26 @@ function App() {
   React.useEffect(() => {
     const ping = () => fetch("/api/heartbeat", { method: "POST" }).catch(() => {});
     ping();
-    const id = setInterval(ping, 30000);
-    return () => clearInterval(id);
+    const id = setInterval(ping, 10000);
+    // Tell the server we're closing so it can shut down right away instead
+    // of waiting for the idle timer. sendBeacon survives a tab close where
+    // a normal fetch would be aborted.
+    const onUnload = () => {
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon("/api/shutdown", new Blob([], { type: "application/json" }));
+        } else {
+          fetch("/api/shutdown", { method: "POST", keepalive: true }).catch(() => {});
+        }
+      } catch { /* best-effort */ }
+    };
+    window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("pagehide", onUnload);
+    };
   }, []);
 
   // ── active Steam account poll ─────────────────────────────────────────────
@@ -1849,6 +1879,7 @@ function App() {
       <LockScreen
         mode={phase}
         accountCount={accountCount}
+        rememberSupported={!!buildInfo?.remember_supported}
         onSubmit={phase === "init" ? handleInit : handleUnlock} />
     );
   }

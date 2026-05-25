@@ -1354,6 +1354,26 @@ html[data-theme="light"] .lad-peak-val {
 .lock-btn-arrow { transition: transform .15s; }
 .lock-btn:hover:not(:disabled) .lock-btn-arrow { transform: translateX(3px); }
 
+.lock-remember {
+  display: flex; align-items: center; gap: 9px;
+  margin: 6px 0 14px;
+  color: var(--fg-2);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.lock-remember input[type="checkbox"] {
+  width: 16px; height: 16px;
+  accent-color: var(--fg);
+  cursor: pointer;
+}
+.lock-remember:hover { color: var(--fg); }
+.lock-remember-hint {
+  color: var(--muted);
+  font-size: 11px;
+  cursor: help;
+}
+
 .lock-err {
   margin-top: 14px;
   color: var(--label-oaa);

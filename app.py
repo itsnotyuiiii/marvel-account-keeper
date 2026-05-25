@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "1.10.0"
+APP_VERSION = "2.0.0"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -645,6 +645,128 @@ def _encrypt(key: bytes, plaintext: str) -> dict[str, str]:
 def _decrypt(key: bytes, blob: dict[str, str]) -> str:
     aes = AESGCM(key)
     return aes.decrypt(bytes.fromhex(blob["nonce"]), bytes.fromhex(blob["ct"]), None).decode("utf-8")
+
+
+# ---------- "remember me" via Windows DPAPI ------------------------------------
+# When the user ticks "remember me" on unlock we stash the scrypt-derived vault
+# key in a small file, encrypted with the Windows logged-in user's credentials
+# (DPAPI). On next launch, if the file exists and decrypts, we skip the unlock
+# screen entirely. The blob can ONLY be decrypted by the same Windows user on
+# the same machine — copying the file to another PC/account makes it useless.
+#
+# Non-Windows platforms: the helpers no-op and remember-me is unavailable.
+
+REMEMBER_FILE = "remembered_key.bin"
+
+
+def _dpapi_call(func_name: str, in_bytes: bytes) -> bytes | None:
+    """Wrap CryptProtectData / CryptUnprotectData via ctypes. Returns the
+    transformed bytes, or None on any failure / non-Windows platform."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    import ctypes.wintypes as wt
+
+    class _Blob(ctypes.Structure):
+        _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    buf = ctypes.create_string_buffer(in_bytes, len(in_bytes))
+    in_blob = _Blob(len(in_bytes), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+    out_blob = _Blob()
+    try:
+        fn = getattr(ctypes.windll.crypt32, func_name)
+    except (AttributeError, OSError):
+        return None
+    # Signature: BOOL fn(BLOB* in, LPCWSTR descr, BLOB* entropy, void*, void*, DWORD flags, BLOB* out)
+    ok = fn(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob))
+    if not ok:
+        return None
+    try:
+        result = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+    except OSError:
+        return None
+    ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+    return result
+
+
+def _dpapi_protect(data: bytes) -> bytes | None:
+    return _dpapi_call("CryptProtectData", data)
+
+
+def _dpapi_unprotect(blob: bytes) -> bytes | None:
+    return _dpapi_call("CryptUnprotectData", blob)
+
+
+def remember_supported() -> bool:
+    """True when remember-me can actually persist (Windows + DPAPI usable)."""
+    return sys.platform == "win32"
+
+
+def _remember_path() -> Path:
+    return _data_dir() / REMEMBER_FILE
+
+
+def _save_remembered_key(key: bytes) -> bool:
+    """Stash the derived vault key via DPAPI. Best-effort — failures are
+    silently swallowed since the user can always type the password again."""
+    if not remember_supported():
+        return False
+    blob = _dpapi_protect(key)
+    if blob is None:
+        return False
+    try:
+        _remember_path().write_bytes(blob)
+        return True
+    except OSError:
+        return False
+
+
+def _load_remembered_key() -> bytes | None:
+    """Return the DPAPI-protected key, decrypted, or None if missing/corrupt."""
+    if not remember_supported():
+        return None
+    p = _remember_path()
+    if not p.exists():
+        return None
+    try:
+        blob = p.read_bytes()
+    except OSError:
+        return None
+    return _dpapi_unprotect(blob)
+
+
+def _clear_remembered_key() -> None:
+    """Wipe the persisted key. Called on explicit lock or password change."""
+    try:
+        _remember_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _try_remembered_unlock(vault: dict[str, Any]) -> bool:
+    """Verify a persisted key against the vault. On success, install it as the
+    active session key. Called once at startup so a remembered session skips
+    the unlock screen entirely."""
+    key = _load_remembered_key()
+    if key is None or not vault.get("initialized"):
+        return False
+    verifier = vault.get("verifier")
+    if not isinstance(verifier, dict):
+        return False
+    try:
+        plain = _decrypt(key, verifier)
+    except Exception:
+        # Stale key (probably from a password change) — wipe so we don't keep
+        # trying it.
+        _clear_remembered_key()
+        return False
+    if plain != VERIFIER_PLAINTEXT.decode("utf-8"):
+        _clear_remembered_key()
+        return False
+    with _state_lock:
+        _state["key"] = key
+        _state["last_activity"] = time.time()
+    return True
 
 
 # ---------- session ----------
@@ -1677,6 +1799,8 @@ def status():
         "commit": APP_COMMIT,
         "built_at": APP_BUILT_AT,
         "repo": GITHUB_REPO_SLUG,
+        "remember_supported": remember_supported(),
+        "has_remembered_session": _remember_path().exists() if remember_supported() else False,
     })
 
 
@@ -1725,7 +1849,9 @@ def init_vault():
     vault = _read_vault()
     if vault.get("initialized"):
         return jsonify({"error": "already_initialized"}), 400
-    password = (request.json or {}).get("password", "")
+    body = request.json or {}
+    password = body.get("password", "")
+    remember = bool(body.get("remember"))
     if len(password) < 6:
         return jsonify({"error": "password_too_short", "message": "Master password must be at least 6 characters."}), 400
     salt = secrets.token_bytes(16)
@@ -1742,7 +1868,9 @@ def init_vault():
     with _state_lock:
         _state["key"] = key
         _state["last_activity"] = time.time()
-    return jsonify({"ok": True})
+    if remember and remember_supported():
+        _save_remembered_key(key)
+    return jsonify({"ok": True, "remembered": remember and remember_supported()})
 
 
 @app.route("/api/unlock", methods=["POST"])
@@ -1750,7 +1878,9 @@ def unlock():
     vault = _read_vault()
     if not vault.get("initialized"):
         return jsonify({"error": "not_initialized"}), 400
-    password = (request.json or {}).get("password", "")
+    body = request.json or {}
+    password = body.get("password", "")
+    remember = bool(body.get("remember"))
     salt = bytes.fromhex(vault["kdf"]["salt"])
     key = _derive_key(password, salt)
     try:
@@ -1762,13 +1892,22 @@ def unlock():
     with _state_lock:
         _state["key"] = key
         _state["last_activity"] = time.time()
-    return jsonify({"ok": True})
+    # Persist via DPAPI if requested; otherwise wipe any prior remember-blob
+    # so a "do not remember" tick effectively forgets the last "remember" tick.
+    if remember and remember_supported():
+        _save_remembered_key(key)
+    else:
+        _clear_remembered_key()
+    return jsonify({"ok": True, "remembered": remember and remember_supported()})
 
 
 @app.route("/api/lock", methods=["POST"])
 def lock():
+    """Explicit lock — wipes both the in-memory key and any persisted
+    remember-me blob, so the next boot lands on the unlock screen."""
     with _state_lock:
         _state["key"] = None
+    _clear_remembered_key()
     return jsonify({"ok": True})
 
 
@@ -1974,6 +2113,13 @@ _migrate_from_app_folder()
 _migrate_vault_if_needed()
 _load_api_usage()
 _cleanup_post_update()
+# Attempt to install a remembered key from a previous "remember me" unlock.
+# Silent — if DPAPI is unavailable or the blob is stale, the app just starts
+# on the unlock screen like it always did.
+try:
+    _try_remembered_unlock(_read_vault())
+except Exception:
+    pass
 
 
 # ---------- liveness heartbeat ----------
@@ -1985,8 +2131,8 @@ _cleanup_post_update()
 _heartbeat_lock = threading.Lock()
 _last_heartbeat = 0.0
 _heartbeat_seen = False
-IDLE_SHUTDOWN_S = 120      # quit this long after the browser's last heartbeat
-STARTUP_GRACE_S = 300      # ...or this long if a browser never connects at all
+IDLE_SHUTDOWN_S = 20       # quit this long after the browser's last heartbeat
+STARTUP_GRACE_S = 120      # ...or this long if a browser never connects at all
 
 
 @app.route("/api/steam-active")
@@ -2241,6 +2387,15 @@ def heartbeat():
     with _heartbeat_lock:
         _last_heartbeat = time.time()
         _heartbeat_seen = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/shutdown", methods=["POST"])
+def shutdown_now():
+    """Browser told us it's closing — exit immediately instead of waiting
+    out the idle-shutdown timer. The frontend's beforeunload hook fires
+    this via navigator.sendBeacon so it survives tab closure."""
+    threading.Timer(0.1, lambda: _shutdown("Browser closed")).start()
     return jsonify({"ok": True})
 
 

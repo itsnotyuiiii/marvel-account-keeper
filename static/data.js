@@ -13,18 +13,22 @@ window.RANK_TIERS = [
   "One Above All",
 ];
 
-// Tier-family theme. Tuned for a dark background; same hue family across
-// aesthetics so the rank reads at a glance regardless of mode.
+// Tier-family theme. Palette matches the in-game / tracker.gg rank colors:
+//   Bronze brown · Silver cool-grey · Gold yellow · Platinum cyan ·
+//   Diamond saturated blue · Grandmaster purple · Celestial ORANGE-amber ·
+//   Eternity magenta · One Above All red.
+// (Celestial used to be styled pink; that was wrong — the in-game gradient
+// is orange/amber. Eternity used to be gold; in-game it's pink/magenta.)
 window.RANK_THEME = {
   Bronze:        { fg: "#c08a5b", glow: "#7a4a1f", accent: "#e0a16a" },
-  Silver:        { fg: "#c5cdd9", glow: "#5a6373", accent: "#dbe2ec" },
-  Gold:          { fg: "#e8b94a", glow: "#7d5e10", accent: "#f0c863" },
-  Platinum:      { fg: "#7fd9c8", glow: "#1f6a5e", accent: "#a3ecdd" },
-  Diamond:       { fg: "#7aa6ff", glow: "#1c3a82", accent: "#a4c2ff" },
-  Grandmaster:   { fg: "#b067ff", glow: "#4a1e88", accent: "#cf95ff" },
-  Celestial:     { fg: "#ff7adb", glow: "#7d1c63", accent: "#ffa3e6" },
-  Eternity:      { fg: "#ffce5c", glow: "#7d5a10", accent: "#ffe093" },
-  "One Above All": { fg: "#ff5560", glow: "#7d121b", accent: "#ff8a90" },
+  Silver:        { fg: "#a8b6c2", glow: "#5a6f7d", accent: "#cad6e0" },
+  Gold:          { fg: "#ffc83d", glow: "#8a5e10", accent: "#ffd870" },
+  Platinum:      { fg: "#58e1e8", glow: "#1c6a70", accent: "#9ff0f5" },
+  Diamond:       { fg: "#1680ff", glow: "#0a3c80", accent: "#62a8ff" },
+  Grandmaster:   { fg: "#9e4bff", glow: "#4a1e88", accent: "#c590ff" },
+  Celestial:     { fg: "#fe5a1d", glow: "#8a2d05", accent: "#ff8a5b" },
+  Eternity:      { fg: "#eb46ff", glow: "#7a1888", accent: "#f48aff" },
+  "One Above All": { fg: "#ff3344", glow: "#7d121b", accent: "#ff7a85" },
 };
 
 window.RANK_INDEX = Object.fromEntries(window.RANK_TIERS.map((r, i) => [r, i]));
