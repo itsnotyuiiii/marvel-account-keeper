@@ -29,7 +29,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "densityLadder": "regular",
   "hideDetails": false,
   "hideCopy": false,
-  "infoRailOpen": true,
+  "infoRailOpen": false,
   "lockoutMinutes": 30
 } /*EDITMODE-END*/;
 

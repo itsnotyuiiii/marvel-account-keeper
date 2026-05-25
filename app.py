@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -1133,15 +1133,59 @@ def _round_score(v: Any) -> int | None:
         return None
 
 
+_tracker_scraper = None
+_tracker_scraper_lock = threading.Lock()
+
+
+def _get_tracker_scraper():
+    """Lazy-init a cloudscraper session. Creating one is slow (it primes a
+    real Chrome JA3/TLS fingerprint), so we reuse a single instance across
+    calls. None on import failure — the caller falls back to plain urllib."""
+    global _tracker_scraper
+    with _tracker_scraper_lock:
+        if _tracker_scraper is not None:
+            return _tracker_scraper
+        try:
+            import cloudscraper
+            _tracker_scraper = cloudscraper.create_scraper(
+                browser={"browser": "chrome", "platform": "windows", "desktop": True},
+            )
+        except ImportError:
+            _tracker_scraper = False  # sentinel so we don't retry every call
+        return _tracker_scraper or None
+
+
 def _fetch_tracker_player(ign: str) -> tuple[int, dict[str, Any] | None, int | None]:
     """Call tracker.gg's player profile endpoint. Returns (status, body, retry_after).
 
-    A 200 with a 'data' object is a hit; 404 carries an `errors[]` array; 403
-    is usually Cloudflare's bot challenge (we treat it as transient, not a
-    privacy error — tracker.gg doesn't honor the in-game private flag).
-    Network failures raise to the caller like the marvelrivalsapi fetcher.
-    """
+    Uses cloudscraper to bypass Cloudflare's JS bot-challenge — without that,
+    tracker.gg returns 403 on every backend hit. Falls back to plain urllib
+    if cloudscraper isn't importable (e.g. source-run with deps missing)."""
     url = f"{TRACKER_API_BASE}/profile/ign/{urllib.parse.quote(ign, safe='')}"
+    scraper = _get_tracker_scraper()
+    if scraper is not None:
+        try:
+            r = scraper.get(url, timeout=TRACKER_TIMEOUT_S, headers={
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://tracker.gg/",
+                "Origin": "https://tracker.gg",
+            })
+        except Exception:
+            return 0, None, None
+        try:
+            body = r.json() if r.content else None
+        except (ValueError, json.JSONDecodeError):
+            body = None
+        retry = None
+        ra = r.headers.get("Retry-After") if hasattr(r, "headers") else None
+        try:
+            retry = int(ra) if ra else None
+        except (TypeError, ValueError):
+            pass
+        return r.status_code, body, retry
+
+    # Fallback path — plain urllib. Works for some accounts, blocked for most.
     headers = {
         "User-Agent": TRACKER_USER_AGENT,
         "Accept": "application/json",
@@ -1485,11 +1529,25 @@ def _load_api_usage() -> None:
                 _rivals_usage["count"] = 0
 
 
+def _tracker_says_private(payload: Any) -> bool:
+    """tracker.gg returns HTTP 400 with body.errors[].code == 'CollectorResultStatus::Private'
+    for accounts NetEase flagged as private. Detect that so we don't burn a
+    marvelrivalsapi fallback call (which will also say private)."""
+    if not isinstance(payload, dict):
+        return False
+    for e in (payload.get("errors") or []):
+        if isinstance(e, dict) and "private" in (e.get("code") or "").lower():
+            return True
+        if isinstance(e, dict) and "private" in (e.get("message") or "").lower():
+            return True
+    return False
+
+
 def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
     """Hit tracker.gg for one account. Returns a partial update dict on
-    a clean rank parse; returns None if tracker can't service this account
-    (no IGN to look up by, Cloudflare 403, 5xx, or rank fields missing).
-    The caller falls back to marvelrivalsapi on None.
+    a clean rank parse OR an explicit private/not_found from tracker.
+    Returns None for ambiguous failures (network, Cloudflare 5xx, etc.)
+    so the caller still tries marvelrivalsapi.
 
     Tracker.gg only supports IGN lookups (UID/platform-id slugs return 403).
     A UID alone is not enough — we need a name first."""
@@ -1500,10 +1558,28 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
         status, payload, _retry = _fetch_tracker_player(ign)
     except (urllib.error.URLError, TimeoutError, OSError):
         return None
+    # tracker tells us the upstream profile is private — short-circuit so
+    # we don't ping marvelrivalsapi just to hear the same thing back.
+    if status == 400 and _tracker_says_private(payload):
+        return {"last_refresh_status": "private",
+                "last_refresh_source": "tracker",
+                "last_refresh_error": "tracker.gg reports this profile as private."}
+    # 404 by IGN — only short-circuit when there's no UID for marvelrivalsapi
+    # to try a different lookup with. Otherwise let the fallback run.
+    if status == 404 and isinstance(payload, dict):
+        if not (acct.get("rivals_uid") or "").strip():
+            return {"last_refresh_status": "not_found",
+                    "last_refresh_source": "tracker",
+                    "last_refresh_error": "tracker.gg couldn't find a player with that name."}
+        return None
     if status != 200 or not isinstance(payload, dict):
         return None
     parsed = _parse_tracker_payload(payload)
-    if "current_rank" not in parsed:
+    # Accept the parse if EITHER current OR peak rank came back. Players who
+    # didn't play ranked this season have no current rank but a real peak
+    # from prior seasons — that's still useful data and beats silently
+    # falling through to marvelrivalsapi for nothing.
+    if "current_rank" not in parsed and "peak_rank" not in parsed:
         return None
     out: dict[str, Any] = {"last_refresh_status": "ok",
                           "last_refresh_source": "tracker"}
@@ -1511,6 +1587,19 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
     tracker_ign = parsed.pop("tracker_handle", None)
     if tracker_ign and tracker_ign != ign:
         out["in_game_name"] = tracker_ign
+    # Peak monotonicity: never overwrite a higher existing peak with a lower
+    # one. tracker.gg sometimes has incomplete season history for an account
+    # while marvelrivalsapi (or a prior refresh) captured a true higher peak.
+    new_peak = parsed.get("peak_rank")
+    if new_peak:
+        old_peak = acct.get("peak_rank")
+        old_score = acct.get("peak_points") or 0
+        new_score = parsed.get("peak_points") or 0
+        if old_peak and _RANK_INDEX.get(old_peak, -1) > _RANK_INDEX.get(new_peak, -1):
+            parsed.pop("peak_rank", None)
+            parsed.pop("peak_points", None)
+        elif old_peak == new_peak and old_score > new_score:
+            parsed.pop("peak_points", None)
     out.update(parsed)
     return out
 

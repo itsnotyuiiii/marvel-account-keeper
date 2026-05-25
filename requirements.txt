@@ -1,3 +1,6 @@
 # Runtime dependencies for Marvel Account Keeper.
 Flask>=3.0,<4.0
 cryptography>=42.0
+# tracker.gg sits behind Cloudflare bot protection — cloudscraper solves the
+# JS challenge transparently so the primary data source actually responds.
+cloudscraper>=1.2.71
