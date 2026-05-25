@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -1391,7 +1391,7 @@ def _queue_player_update(uid: Any, api_key: str) -> None:
 
 
 def _maybe_request_recrawl(acct: dict[str, Any], updates: dict[str, Any],
-                           api_key: str) -> None:
+                           api_key: str, force: bool = False) -> None:
     """Queue a marvelrivalsapi recrawl for this account — but only when it is
     actually warranted.
 
@@ -1400,8 +1400,18 @@ def _maybe_request_recrawl(acct: dict[str, Any], updates: dict[str, Any],
     fire at most once per RIVALS_UPDATE_COOLDOWN_S and only when the cached
     data is itself stale. Records rivals_update_requested_at into `updates`
     when it fires so the cooldown persists in the vault.
+
+    Pass force=True to bypass the "private" auto-skip — used by the manual
+    "Queue recrawl" button so the user can explicitly retry a private account
+    in case it's gone public.
     """
     if updates.get("last_refresh_status") == "bad_key":
+        return
+    # Private accounts: never auto-queue. Both providers agreed the profile
+    # is private, so a recrawl on marvelrivalsapi won't change that until
+    # the player flips their in-game setting. The manual recrawl button
+    # passes force=True to override this when the user knows it changed.
+    if not force and updates.get("last_refresh_status") == "private":
         return
     uid = updates.get("rivals_uid") or acct.get("rivals_uid")
     if not uid or not api_key:
@@ -2104,6 +2114,13 @@ def _apply_refresh_updates(vault: dict[str, Any], acct_id: str, updates: dict[st
     for acct in vault.get("accounts", []):
         if acct["id"] == acct_id:
             acct.update(updates)
+            # When the result is "private", clear any stale recrawl-pending
+            # flag so the UI stops showing "recrawl queued ~Nm". The user
+            # didn't auto-queue this round (per _maybe_request_recrawl's
+            # private-skip), so any leftover timestamp from a prior session
+            # is misleading.
+            if updates.get("last_refresh_status") == "private":
+                acct["rivals_update_requested_at"] = None
             acct["updated_at"] = int(time.time())
             return acct
     return None
