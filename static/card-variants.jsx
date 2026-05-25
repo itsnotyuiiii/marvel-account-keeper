@@ -106,7 +106,7 @@ function labelFor(acct) {
 // dark variant as CSS vars; --rank-ink (set per theme in styles.css) picks the
 // legible one — bright on the dark theme, the deep "glow" tone on light.
 function rankInk(t) {
-  return { "--rk-fg": t && t.fg, "--rk-glow": t && t.glow, color: "var(--rank-ink)" };
+  return { "--rk-fg": t && t.fg, "--rk-glow": t && t.glow };
 }
 
 // Map a stored border_color name -> hex for the tag-pill accent.

@@ -660,24 +660,29 @@ a.app-foot-commit:hover { color: var(--fg); text-decoration: underline; }
   box-shadow: 0 0 6px currentColor;
 }
 .rcard-rlbl {
-  color: var(--muted);
-  letter-spacing: .14em;
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--fg-2);
+  letter-spacing: .18em;
 }
 .rcard-rval {
-  font-weight: 700;
+  font-weight: 800;
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-display);
-  font-size: 13px;
+  font-size: 15px;
   letter-spacing: .02em;
   color: var(--rk-fg, var(--muted));
-  text-shadow: 0 0 8px color-mix(in oklab, var(--rk-fg, transparent) 35%, transparent);
+  text-shadow:
+    0 0 10px color-mix(in oklab, var(--rk-fg, transparent) 65%, transparent),
+    0 0 22px color-mix(in oklab, var(--rk-fg, transparent) 35%, transparent);
 }
 html[data-theme="light"] .rcard-rval {
   color: var(--rk-glow, var(--muted));
-  text-shadow: none;
+  text-shadow:
+    0 0 8px color-mix(in oklab, var(--rk-fg, transparent) 40%, transparent);
 }
 
 .rcard-foot {
@@ -813,10 +818,18 @@ html[data-theme="light"] .rcard-rval {
 .tbl-rank-cell {
   display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 700;
   letter-spacing: .01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tbl-rank-cell > span:last-child {
+  color: var(--rk-fg, var(--fg));
+  text-shadow: 0 0 8px color-mix(in oklab, var(--rk-fg, transparent) 45%, transparent);
+}
+html[data-theme="light"] .tbl-rank-cell > span:last-child {
+  color: var(--rk-glow, var(--fg));
+  text-shadow: none;
 }
 .tbl-rdot {
   width: 6px; height: 6px; border-radius: 50%;
@@ -961,7 +974,15 @@ html[data-theme="light"] .rcard-rval {
 .lad-div { color: var(--fg-3); font-weight: 500; }
 .lad-sep { color: var(--muted-2); }
 .lad-peak-lbl { color: var(--muted); }
-.lad-peak-val { font-weight: 600; }
+.lad-peak-val {
+  font-weight: 800;
+  color: var(--rk-fg, var(--fg));
+  text-shadow: 0 0 6px color-mix(in oklab, var(--rk-fg, transparent) 45%, transparent);
+}
+html[data-theme="light"] .lad-peak-val {
+  color: var(--rk-glow, var(--fg));
+  text-shadow: none;
+}
 
 /* ============================================================================
    DRAWER (edit panel)
