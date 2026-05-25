@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.9.0"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -81,6 +81,7 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "last_refresh_ts": None,       # epoch — when *we* last hit the API for this account
     "last_refresh_status": None,   # "ok" | "private" | "not_found" | "bad_key" | "error" | "missing_handle"
     "last_refresh_error": None,
+    "last_refresh_source": None,   # "tracker" | "marvelrivalsapi" — which provider gave us the rank
     "rivals_synced_at": None,      # epoch — when marvelrivalsapi last crawled this player
     "rivals_update_requested_at": None,  # epoch — when we last asked the API to recrawl
     # Match history (lazy — populated only when the drawer is opened for an account)
@@ -98,6 +99,17 @@ REFRESH_ALL_DELAY_S = 2.0  # polite spacing between calls in /refresh-all (30 re
 # (queue position resets, risk of a stuck processing loop) — never re-request
 # a recrawl for the same player inside this window.
 RIVALS_UPDATE_COOLDOWN_S = 30 * 60
+
+# tracker.gg integration (PRIMARY data source — marvelrivalsapi is fallback).
+# Tracker exposes richer data (per-season peak history, hero stats, lifetime
+# peak) and crucially bypasses the in-game "private" flag that gates
+# marvelrivalsapi. Undocumented though — schema may change, and the endpoint
+# sits behind Cloudflare, so realistic UA + sane request spacing matter.
+TRACKER_API_BASE = "https://api.tracker.gg/api/v2/marvel-rivals/standard"
+TRACKER_TIMEOUT_S = 15
+TRACKER_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36")
 
 
 # ---------- locations ----------
@@ -891,6 +903,143 @@ def _parse_api_timestamp(value: Any) -> int | None:
     return None
 
 
+def _parse_tracker_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Extract rank/score/peak from a tracker.gg `/profile/ign/<name>` response.
+
+    Schema (live, May 2026):
+      data.platformInfo.platformUserHandle    → IGN (canonical case)
+      data.metadata.isPC                      → bool
+      data.metadata.level                     → account level
+      data.metadata.isPrivateCareerOverview   → bool (rare even for private profiles)
+      data.segments[type=overview].stats.ranked        → {value, displayValue, metadata.tierName}
+      data.segments[type=overview].stats.peakRanked    → season peak (same tier object shape)
+      data.segments[type=overview].stats.lifetimePeakRanked → just value, no tier
+      data.segments[type=ranked-peaks].stats.peakTiers.value
+          → array of {value, metadata: {tierName, season, ...}} across all seasons
+    Lifetime peak tier comes from the max-value entry of the peakTiers array,
+    NOT lifetimePeakRanked alone (which carries no tier name).
+    """
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+
+    out: dict[str, Any] = {}
+
+    # Pull IGN canonical case from tracker (handles renames + casing).
+    pinfo = data.get("platformInfo") or {}
+    handle = pinfo.get("platformUserHandle")
+    if isinstance(handle, str) and handle.strip():
+        out["tracker_handle"] = handle.strip()
+
+    # Synced timestamp — tracker exposes a `lastUpdated` ISO field.
+    meta = data.get("metadata") or {}
+    last_updated = (meta.get("lastUpdated") or {}).get("value")
+    if isinstance(last_updated, str) and last_updated and not last_updated.startswith("2000-"):
+        parsed_ts = _parse_api_timestamp(last_updated)
+        if parsed_ts:
+            out["rivals_synced_at"] = parsed_ts
+
+    # Current rank + SR from overview segment, season-scoped to current season.
+    cur_tier = None
+    cur_score = None
+    season_peak_tier = None
+    season_peak_score = None
+    for seg in (data.get("segments") or []):
+        if seg.get("type") != "overview":
+            continue
+        stats = seg.get("stats") or {}
+        ranked = stats.get("ranked") or {}
+        rmeta = ranked.get("metadata") or {}
+        if rmeta.get("tierName"):
+            cur_tier = _normalize_rank(rmeta["tierName"])
+            cur_score = _round_score(ranked.get("value"))
+        peak_seg = stats.get("peakRanked") or {}
+        pmeta = peak_seg.get("metadata") or {}
+        if pmeta.get("tierName"):
+            season_peak_tier = _normalize_rank(pmeta["tierName"])
+            season_peak_score = _round_score(peak_seg.get("value"))
+        break
+
+    # Lifetime peak: scan ranked-peaks segment, pick max-value entry.
+    lifetime_peak_tier = None
+    lifetime_peak_score = None
+    for seg in (data.get("segments") or []):
+        if seg.get("type") != "ranked-peaks":
+            continue
+        peaks = ((seg.get("stats") or {}).get("peakTiers") or {}).get("value")
+        if isinstance(peaks, list):
+            best = max(peaks, key=lambda e: (e.get("value") or 0) if isinstance(e, dict) else 0,
+                       default=None)
+            if isinstance(best, dict):
+                bmeta = best.get("metadata") or {}
+                lifetime_peak_tier = _normalize_rank(bmeta.get("tierName"))
+                lifetime_peak_score = _round_score(best.get("value"))
+        break
+
+    # Lifetime peak wins over season peak; season peak wins over current.
+    peak_tier = lifetime_peak_tier or season_peak_tier or cur_tier
+    peak_score = lifetime_peak_score if lifetime_peak_tier else (
+        season_peak_score if season_peak_tier else cur_score
+    )
+
+    if cur_tier:
+        out["current_rank"] = cur_tier
+        if cur_score is not None:
+            out["current_points"] = cur_score
+    if peak_tier:
+        # Apply the same upward clamp the marvelrivalsapi parser uses: peak
+        # can't be lower than current. The two providers occasionally disagree
+        # on which season's data is fresh, so this keeps the UI consistent.
+        if cur_tier and _RANK_INDEX.get(cur_tier, -1) > _RANK_INDEX.get(peak_tier, -1):
+            peak_tier = cur_tier
+            peak_score = cur_score
+        out["peak_rank"] = peak_tier
+        if peak_score is not None:
+            out["peak_points"] = peak_score
+    return out
+
+
+def _round_score(v: Any) -> int | None:
+    """Tracker scores come as float (e.g. 5044.087); rank-score fields in
+    the vault are stored as int."""
+    if v is None:
+        return None
+    try:
+        return int(round(float(v)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_tracker_player(ign: str) -> tuple[int, dict[str, Any] | None, int | None]:
+    """Call tracker.gg's player profile endpoint. Returns (status, body, retry_after).
+
+    A 200 with a 'data' object is a hit; 404 carries an `errors[]` array; 403
+    is usually Cloudflare's bot challenge (we treat it as transient, not a
+    privacy error — tracker.gg doesn't honor the in-game private flag).
+    Network failures raise to the caller like the marvelrivalsapi fetcher.
+    """
+    url = f"{TRACKER_API_BASE}/profile/ign/{urllib.parse.quote(ign, safe='')}"
+    headers = {
+        "User-Agent": TRACKER_USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://tracker.gg/",
+        "Origin": "https://tracker.gg",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=TRACKER_TIMEOUT_S) as r:
+            return r.status, json.loads(r.read().decode("utf-8")), None
+    except urllib.error.HTTPError as e:
+        retry = _retry_after_s(e.headers) if hasattr(e, "headers") else None
+        body_raw = e.read() if hasattr(e, "read") else b""
+        try:
+            body = json.loads(body_raw.decode("utf-8")) if body_raw else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            body = None
+        return e.code, body, retry
+
+
 def _parse_rivals_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Extract the bits we care about from a marvelrivalsapi player response.
 
@@ -1213,32 +1362,71 @@ def _load_api_usage() -> None:
                 _rivals_usage["count"] = 0
 
 
+def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
+    """Hit tracker.gg for one account. Returns a partial update dict on
+    a clean rank parse; returns None if tracker can't service this account
+    (no IGN to look up by, Cloudflare 403, 5xx, or rank fields missing).
+    The caller falls back to marvelrivalsapi on None.
+
+    Tracker.gg only supports IGN lookups (UID/platform-id slugs return 403).
+    A UID alone is not enough — we need a name first."""
+    ign = (acct.get("in_game_name") or "").strip()
+    if not ign:
+        return None
+    try:
+        status, payload, _retry = _fetch_tracker_player(ign)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    parsed = _parse_tracker_payload(payload)
+    if "current_rank" not in parsed:
+        return None
+    out: dict[str, Any] = {"last_refresh_status": "ok",
+                          "last_refresh_source": "tracker"}
+    # Adopt tracker's canonical IGN spelling (handles renames / casing).
+    tracker_ign = parsed.pop("tracker_handle", None)
+    if tracker_ign and tracker_ign != ign:
+        out["in_game_name"] = tracker_ign
+    out.update(parsed)
+    return out
+
+
 def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]:
-    """Call marvelrivalsapi for one account; return a dict of fields to merge.
+    """Refresh one account's rank. Tries tracker.gg first (richer data, no
+    key, bypasses the in-game private flag), then falls back to marvelrivalsapi
+    when tracker can't service the request — Cloudflare 403, no IGN, or no
+    rank parse. The marvelrivalsapi path also handles UID-only accounts which
+    tracker can't look up.
 
     Always sets last_refresh_ts / last_refresh_status / last_refresh_error.
-    Sets rank/score/UID fields only on a successful parse.
+    Sets last_refresh_source to whichever provider produced the rank.
     """
     now = int(time.time())
     base: dict[str, Any] = {
         "last_refresh_ts": now,
         "last_refresh_status": None,
         "last_refresh_error": None,
+        "last_refresh_source": None,
     }
+
+    # 1. PRIMARY: tracker.gg by IGN.
+    tracker_result = _try_tracker(acct)
+    if tracker_result is not None:
+        return {**base, **tracker_result}
+
+    # 2. FALLBACK: marvelrivalsapi. Honors the global rate-limit cooldown
+    # and supports UID-only lookups, so it covers gaps tracker.gg can't.
     if not api_key:
         return {**base, "last_refresh_status": "bad_key",
-                "last_refresh_error": "No Marvel Rivals API key set in Options."}
+                "last_refresh_error": "No Marvel Rivals API key set in Options "
+                                      "(tracker.gg fallback also unavailable)."}
 
-    # Respect the global rate-limit cooldown set by a prior 429 — without
-    # this, spamming refresh during a cooldown burns the cooldown timer.
     cooldown_left = int(_rivals_rate_limited_until - time.time())
     if cooldown_left > 0:
         return {**base, "last_refresh_status": "error",
                 "last_refresh_error": f"Rate limit cooldown — wait ~{cooldown_left}s, then retry."}
 
-    # marvelrivalsapi indexes Marvel Rivals player names — look up by the
-    # in-game name, never the Steam `username` (a login credential the API
-    # has never heard of). Prefer the UID once a past refresh resolved one.
     handle = acct.get("rivals_uid") or acct.get("in_game_name") or ""
     handle = (handle or "").strip()
     if not handle:
@@ -1247,7 +1435,7 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
 
     url = f"{RIVALS_API_BASE}/player/{urllib.parse.quote(handle, safe='')}"
     headers = {"x-api-key": api_key, "Accept": "application/json",
-               "User-Agent": "MarvelAccountKeeper/1.0"}
+               "User-Agent": f"{APP_NAME}/{APP_VERSION}"}
     try:
         status, payload, retry_after = _http_get_json(url, headers)
     except (urllib.error.URLError, TimeoutError, OSError) as e:
@@ -1255,12 +1443,12 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
                 "last_refresh_error": f"Network error: {e}"}
     _note_api_call()
 
-    # 401/403 mean "auth rejected" *unless* the body specifically says "private".
-    # marvelrivalsapi uses 403 for both, so the message body is the tiebreaker.
     if status in (401, 403):
         if _is_private_payload(status, payload):
             return {**base, "last_refresh_status": "private",
-                    "last_refresh_error": "Profile is set to private in-game."}
+                    "last_refresh_source": "marvelrivalsapi",
+                    "last_refresh_error": "Profile is set to private in-game "
+                                          "(tracker.gg also couldn't fetch it)."}
         return {**base, "last_refresh_status": "bad_key",
                 "last_refresh_error": (
                     (isinstance(payload, dict) and (payload.get("error") or payload.get("message")))
@@ -1276,6 +1464,7 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
                 "last_refresh_error": f"Rate limited by marvelrivalsapi — wait ~{wait}s, then retry."}
     if _is_private_payload(status, payload):
         return {**base, "last_refresh_status": "private",
+                "last_refresh_source": "marvelrivalsapi",
                 "last_refresh_error": "Profile is set to private in-game."}
     if _is_bad_key_payload(payload):
         return {**base, "last_refresh_status": "bad_key",
@@ -1289,13 +1478,6 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         return {**base, "last_refresh_status": "not_found",
                 "last_refresh_error": "Response had no recognizable rank fields."}
 
-    # Sync the in-game name from the API response. The API's name is the
-    # canonical IGN — including charmap / superscript characters the user
-    # can't type into the form. We adopt it when the field is blank (covers
-    # UID-only adds) OR whenever the lookup ran by UID: a UID is the stable
-    # identity, so its name is authoritative and a plain-text approximation
-    # the user typed should follow it. A name-only lookup never overwrites,
-    # since there the typed name is itself the lookup key.
     extra: dict[str, Any] = {}
     api_name = payload.get("name")
     api_name = api_name.strip() if isinstance(api_name, str) else ""
@@ -1304,18 +1486,17 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
     if api_name and (not current_ign or (by_uid and api_name != current_ign)):
         extra["in_game_name"] = api_name
 
-    # Got something, but no rank fields means the upstream knows the player
-    # exists yet has stale/missing rank data ('Invalid level' etc.). Keep the
-    # UID (useful for future lookups) but flag as not_found so we don't
-    # silently leave the user thinking the refresh succeeded.
     if "current_rank" not in parsed:
         return {**base, "last_refresh_status": "not_found",
+                "last_refresh_source": "marvelrivalsapi",
                 "last_refresh_error": "marvelrivalsapi has stale/incomplete rank data for this player.",
                 **extra,
                 **{k: v for k, v in parsed.items()
                    if k in ("rivals_uid", "rivals_synced_at")}}
 
-    return {**base, "last_refresh_status": "ok", **extra, **parsed}
+    return {**base, "last_refresh_status": "ok",
+            "last_refresh_source": "marvelrivalsapi",
+            **extra, **parsed}
 
 
 # ---------- match history ----------
