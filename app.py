@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -1959,6 +1959,39 @@ def update_account(acct_id: str):
             _write_vault(vault)
             return jsonify({"ok": True})
     return jsonify({"error": "not_found"}), 404
+
+
+@app.route("/api/accounts/import-detected", methods=["POST"])
+def import_detected_accounts():
+    """Scaffold a vault entry for every Marvel Rivals UID detected on this PC
+    that isn't already linked to an account. Skeleton entries carry only the
+    UID — IGN, rank, and credentials are blank until the user fills them in
+    or hits refresh (which will fetch the IGN from tracker.gg)."""
+    key, err = _require_key()
+    if err:
+        return err
+    vault = _read_vault()
+    accounts = vault.setdefault("accounts", [])
+    claimed = {(a.get("rivals_uid") or "").strip() for a in accounts}
+    detected = _detected_rivals_uids()
+    created = 0
+    for uid in detected:
+        if uid in claimed:
+            continue
+        new = _account_from_payload({
+            "rivals_uid": uid,
+            "in_game_name": "",
+            "username": "",
+            "email": "",
+            "password": "",
+            "current_rank": "",
+            "peak_rank": "",
+        }, key)
+        accounts.append(new)
+        created += 1
+    if created:
+        _write_vault(vault)
+    return jsonify({"ok": True, "created": created})
 
 
 @app.route("/api/accounts/reorder", methods=["POST"])

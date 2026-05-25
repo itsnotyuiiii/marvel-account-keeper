@@ -523,6 +523,25 @@ html[data-theme="light"] .app-empty-hint {
   background: color-mix(in oklab, #0d7396 5%, transparent);
   color: #0d7396;
 }
+.app-empty-import {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  cursor: pointer;
+  transition: background .15s, transform .15s;
+}
+.app-empty-import:hover {
+  background: color-mix(in oklab, currentColor 15%, transparent);
+  transform: translateY(-1px);
+}
 
 .app-toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);

@@ -1604,6 +1604,20 @@ function App() {
     }
   }, [api]);
 
+  // Scaffold a vault entry for every locally-detected UID that isn't
+  // already linked. Bulk version of the drawer's UidSuggester for users
+  // bootstrapping their vault for the first time.
+  const onImportDetected = React.useCallback(async () => {
+    try {
+      const data = await api("/api/accounts/import-detected", { method: "POST" });
+      const n = data?.created || 0;
+      showToast(n ? `Imported ${n} ${n === 1 ? "account" : "accounts"}` : "Nothing new to import");
+      await loadAccounts();
+    } catch (e) {
+      if (!e.locked) showToast("Import failed — try again");
+    }
+  }, [api, loadAccounts]);
+
   // UIDs detected locally but not claimed by any vault account. Shown as
   // suggestion pills in the drawer's Identity section — click to assign +
   // auto-fill the IGN from the API.
@@ -1666,14 +1680,35 @@ function App() {
     return () => clearInterval(id);
   }, [ready, onLocked]);
 
-  // Esc closes the drawer (preserving any draft).
+  // Keyboard shortcuts:
+  //   Esc → close drawer (preserve draft)
+  //   /   → focus search
+  //   n   → new account (when no field focused)
+  //   r   → refresh-all  (when no field focused)
   React.useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape" && drawer.open) setDrawer({ open: false, acct: null });
+      if (e.key === "Escape" && drawer.open) {
+        setDrawer({ open: false, acct: null });
+        return;
+      }
+      const t = e.target;
+      const inField = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
+        || t.isContentEditable);
+      if (inField) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      } else if (e.key === "n" && ready) {
+        e.preventDefault();
+        setDrawer({ open: true, acct: { id: "", current_rank: "", peak_rank: "" } });
+      } else if (e.key === "r" && ready && !refreshingAll) {
+        e.preventDefault();
+        onRefreshAll();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drawer.open]);
+  }, [drawer.open, ready, refreshingAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
   const onCopy = (text, field) => {
@@ -1936,9 +1971,15 @@ function App() {
                   <h2>No accounts saved yet.</h2>
                   <p>Hit <b>New account</b> up top to drop one in. If Marvel Rivals has been played on this PC, the UID suggester will offer the player IDs it found locally.</p>
                   {localRivalsUids.size > 0 && (
-                    <p className="app-empty-hint">
-                      <b>{localRivalsUids.size}</b> Marvel Rivals {localRivalsUids.size === 1 ? "UID" : "UIDs"} detected on this PC — claim them as you add accounts.
-                    </p>
+                    <div className="app-empty-hint">
+                      <b>{localRivalsUids.size}</b> Marvel Rivals {localRivalsUids.size === 1 ? "UID" : "UIDs"} detected on this PC.
+                      {" "}
+                      <button type="button"
+                              className="app-empty-import"
+                              onClick={onImportDetected}>
+                        Import all as starter accounts →
+                      </button>
+                    </div>
                   )}
                 </div> :
                 <><b>No matches.</b> Try a different search.</>}
