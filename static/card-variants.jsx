@@ -376,12 +376,21 @@ function SyncChip({ acct, hasApiKey }) {
   }
 
   const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;
+  // Recrawl is a marvelrivalsapi-only mechanic. Suppress the verbose
+  // "recrawl queued / done" suffixes when:
+  //   1. the account is already fresh (state == current/fresh) — the data
+  //      is good, the recrawl is moot, and the chip is just noise.
+  //   2. tracker.gg sourced the latest refresh — recrawl wouldn't help
+  //      (tracker pulls live every call, no caching layer to thaw).
+  const showRecrawl = state !== "current"
+                   && state !== "fresh"
+                   && acct.last_refresh_source !== "tracker";
   return (
     <div className={"sync-chip sync-chip-" + cls} data-state={state}
          title={acct.last_refresh_error || text}>
       <span className="sync-chip-i" aria-hidden="true">{icon}</span>
       <span className="sync-chip-t">{text}</span>
-      {recrawlPending && (
+      {showRecrawl && recrawlPending && (
         <span className="sync-chip-pending"
               title={"Recrawl queued on marvelrivalsapi (fallback only) — "
                      + "their backend is re-fetching this player's live stats. "
@@ -392,7 +401,7 @@ function SyncChip({ acct, hasApiKey }) {
           · recrawl queued · ~{recrawlMins}m
         </span>
       )}
-      {recrawlReady && (
+      {showRecrawl && recrawlReady && (
         <span className="sync-chip-ready"
               title={"The 30-min marvelrivalsapi recrawl window has elapsed. "
                      + "Hit ↻ to pull the recrawled rank — relevant only if "
