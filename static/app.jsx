@@ -763,14 +763,16 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
             <Field label="Marvel Rivals UID" value={form.rivals_uid}
             onChange={(v) => set("rivals_uid", v)}
             placeholder="recommended — numeric player ID" />
-            <UidSuggester
-              currentUid={form.rivals_uid}
-              unclaimedUids={unclaimedUids}
-              onResolveUid={onResolveUid}
-              onPick={(uid, name) => {
-                set("rivals_uid", uid);
-                if (name) set("in_game_name", name);
-              }} />
+            {isNew && (
+              <UidSuggester
+                currentUid={form.rivals_uid}
+                unclaimedUids={unclaimedUids}
+                onResolveUid={onResolveUid}
+                onPick={(uid, name) => {
+                  set("rivals_uid", uid);
+                  if (name) set("in_game_name", name);
+                }} />
+            )}
             <p className="dr-field-note">
               <strong>A UID is the preferred way to link an account.</strong> It's
               the most reliable lookup — it works for private or renamed accounts,
