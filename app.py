@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.3.4"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -497,6 +497,35 @@ app = Flask(
     template_folder=str(RESOURCE_DIR / "templates"),
 )
 
+
+@app.errorhandler(OSError)
+def _os_error_handler(e: OSError):
+    """Return a structured JSON error for any filesystem failure inside a
+    route — primarily _write_vault hitting a Windows lock contention that
+    didn't clear within the retry budget. The frontend toast pulls the
+    `message` field so the user sees the actual culprit instead of a
+    generic 'try again'."""
+    return jsonify({
+        "error": "io_error",
+        "message": f"Couldn't write to vault.json — {e.__class__.__name__}: {e}",
+    }), 500
+
+
+@app.errorhandler(Exception)
+def _generic_error_handler(e: Exception):
+    """Last-resort JSON wrapper so unhandled exceptions don't fall through
+    to Flask's HTML debug page, which the fetch-based UI can't parse."""
+    # Let Werkzeug's HTTPException subclasses (404, 405, etc.) through with
+    # their normal status — only wrap genuine 5xx surprises.
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e
+    app.logger.exception("Unhandled exception in route")
+    return jsonify({
+        "error": "server_error",
+        "message": f"{e.__class__.__name__}: {e}",
+    }), 500
+
 _state_lock = threading.Lock()
 _state: dict[str, Any] = {
     "key": None,            # bytes | None
@@ -552,7 +581,25 @@ def _write_vault(vault: dict[str, Any]) -> None:
     VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = VAULT_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(vault, indent=2), encoding="utf-8")
-    os.replace(tmp, VAULT_PATH)
+    # os.replace on Windows can transiently fail with PermissionError when an
+    # antivirus / backup tool (OneDrive, Defender real-time scan, etc.) has
+    # the destination open. Retry a few times with a short backoff before
+    # giving up — most lock contention clears in <1s.
+    last_err: OSError | None = None
+    for attempt in range(5):
+        try:
+            os.replace(tmp, VAULT_PATH)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(0.15 * (attempt + 1))
+    # Final failure — clean up the orphaned tmp file so the next save isn't
+    # blocked by leftover state, then re-raise so the route can surface it.
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+    raise last_err  # type: ignore[misc]
 
 
 # ---------- config / lockout ----------

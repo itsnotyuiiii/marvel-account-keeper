@@ -1749,7 +1749,17 @@ function App() {
       showToast(next.id ? "Saved" : "Account created");
       return true;
     } catch (e) {
-      if (!e.locked) showToast("Save failed — try again");
+      if (!e.locked) {
+        // Surface the real reason — generic "try again" leaves the user
+        // guessing whether it's a backend write failure, a validation
+        // error, or a stale session. Backend always returns
+        // { error, message? } on failure; fall back to the HTTP code if
+        // even that's missing (network blip / proxy 502).
+        const detail = (e.data && (e.data.message || e.data.error))
+                    || (e.status ? `HTTP ${e.status}` : e.message);
+        showToast(`Save failed — ${detail}`);
+        console.error("Save failed:", e.status, e.data || e);
+      }
       return false;
     }
   };
@@ -1764,7 +1774,12 @@ function App() {
       showToast("Deleted");
       return true;
     } catch (e) {
-      if (!e.locked) showToast("Delete failed — try again");
+      if (!e.locked) {
+        const detail = (e.data && (e.data.message || e.data.error))
+                    || (e.status ? `HTTP ${e.status}` : e.message);
+        showToast(`Delete failed — ${detail}`);
+        console.error("Delete failed:", e.status, e.data || e);
+      }
       return false;
     }
   };
