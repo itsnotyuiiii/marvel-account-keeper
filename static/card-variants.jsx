@@ -171,10 +171,11 @@ function chip({ label, value, field, onCopy, cls = "tk-chip" }) {
 }
 
 // ── Per-account sync state ───────────────────────────────────────────────────
-// marvelrivalsapi data older than this is shown as "stale" — the rank may no
-// longer be current. Server-side recrawls are gated to ~30 min, so anything
-// inside a day counts as fresh.
-const SYNC_STALE_AFTER_MS = 24 * 3600 * 1000;
+// Rank doesn't decay on its own — it only changes when the account plays
+// ranked games. Lots of alts sit dormant for weeks, so old crawls aren't
+// "stale" in any meaningful sense; the rank we have is still the rank they
+// hold. We surface the crawl age but stay green.
+const SYNC_DORMANT_AFTER_MS = 24 * 3600 * 1000;
 const RECRAWL_PENDING_MS = 30 * 60 * 1000;
 // A crawl this recent means the data is as live as the 30-min recrawl gate
 // allows — shown as "current" (green ✓) rather than just "synced".
@@ -229,8 +230,10 @@ function useSecondTick(active) {
 // Collapse an account's refresh fields into one state token. Drives both the
 // SyncChip and the refresh-button badge so they always agree.
 //   none → never refreshed       current → ok & crawled within the last 30 min
-//   fresh → ok & under a day old  stale → ok but crawl is over a day old
+//   fresh → ok & under a day old dormant → ok, crawl is older than a day
 //   private / not_found / bad_key / error / missing_handle → see SYNC_META
+// "dormant" is still a clean green state — rank only changes when the account
+// plays, so an old crawl on an inactive alt isn't actually outdated.
 function syncState(acct) {
   const st = acct.last_refresh_status;
   if (!st) return "none";
@@ -238,15 +241,15 @@ function syncState(acct) {
   const synced = toMs(acct.rivals_synced_at);
   if (synced == null) return "fresh";
   const age = Date.now() - synced;
-  if (age > SYNC_STALE_AFTER_MS) return "stale";
+  if (age > SYNC_DORMANT_AFTER_MS) return "dormant";
   return age <= SYNC_CURRENT_MS ? "current" : "fresh";
 }
 
-// Icon + copy for each non-clean sync state. 'fresh'/'none' render no badge on
-// the refresh button — a clean account needs no marker. tracker.gg is the
-// primary data source; marvelrivalsapi is the fallback. Copy reflects that.
+// Icon + copy for each non-clean sync state. 'current' / 'fresh' / 'dormant' /
+// 'none' render no badge on the refresh button — a clean (or simply old but
+// uncontested) account needs no marker. tracker.gg is the primary data source;
+// marvelrivalsapi is the fallback. Copy reflects that.
 const SYNC_META = {
-  stale:          { sym: "▲",  cls: "warn",  text: "Rank data is stale — hit ↻ for a fresh pull" },
   private:        { sym: "🔒", cls: "warn",  text: "Both tracker.gg and marvelrivalsapi reported this profile as private — set rank manually" },
   not_found:      { sym: "?",  cls: "muted", text: "No data for this player on tracker.gg or marvelrivalsapi — IGN may be wrong" },
   bad_key:        { sym: "!",  cls: "err",   text: "marvelrivalsapi key rejected (fallback only) — tracker.gg should still work" },
@@ -366,24 +369,30 @@ function SyncChip({ acct, hasApiKey }) {
     icon = "●";
     text = synced ? `Rank synced ${fmtRelative(synced)}${srcSuffix}`
                   : `Rank synced${srcSuffix}`;
+  } else if (state === "dormant") {
+    // Rank only moves when the account plays — an old crawl on a dormant
+    // account isn't outdated, it's just unchanged. Stay green, note the age.
+    cls = "ok";
+    icon = "●";
+    text = synced ? `Rank from ${fmtRelative(synced)} · dormant${srcSuffix}`
+                  : `Rank from earlier · dormant${srcSuffix}`;
   } else {
     const m = SYNC_META[state] || SYNC_META.error;
     cls = m.cls;
     icon = m.sym;
-    text = (state === "stale" && synced)
-      ? `Rank from ${fmtRelative(synced)} — may be outdated${srcSuffix}`
-      : m.text;
+    text = m.text;
   }
 
   const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;
   // Recrawl is a marvelrivalsapi-only mechanic. Suppress the verbose
   // "recrawl queued / done" suffixes when:
-  //   1. the account is already fresh (state == current/fresh) — the data
-  //      is good, the recrawl is moot, and the chip is just noise.
+  //   1. the account has any ok-status sync (current/fresh/dormant) — the
+  //      data is good, the recrawl is moot, and the chip is just noise.
   //   2. tracker.gg sourced the latest refresh — recrawl wouldn't help
   //      (tracker pulls live every call, no caching layer to thaw).
   const showRecrawl = state !== "current"
                    && state !== "fresh"
+                   && state !== "dormant"
                    && acct.last_refresh_source !== "tracker";
   return (
     <div className={"sync-chip sync-chip-" + cls} data-state={state}
