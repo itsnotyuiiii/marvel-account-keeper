@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.3.4"
+APP_VERSION = "2.3.5"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -2317,8 +2317,15 @@ except Exception:
 _heartbeat_lock = threading.Lock()
 _last_heartbeat = 0.0
 _heartbeat_seen = False
-IDLE_SHUTDOWN_S = 20       # quit this long after the browser's last heartbeat
-STARTUP_GRACE_S = 120      # ...or this long if a browser never connects at all
+# Quit this long after the browser's last heartbeat. Heartbeats fire every
+# 10 s while the tab is in the foreground, but background tabs get throttled
+# (Chrome/Brave coalesce to 1/min). 20 s was way too aggressive — the process
+# would die out from under a user who tabbed away to look up a username, and
+# the next refresh would dangle on a dead backend looking like a wrong
+# password. 5 minutes survives normal alt-tabbing and tab-throttling without
+# leaving an orphaned process running forever after the browser truly closes.
+IDLE_SHUTDOWN_S = 300
+STARTUP_GRACE_S = 180      # ...or this long if a browser never connects at all
 
 
 @app.route("/api/steam-active")
