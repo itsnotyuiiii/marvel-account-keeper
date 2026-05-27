@@ -30,7 +30,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "hideDetails": false,
   "hideCopy": false,
   "infoRailOpen": false,
-  "lockoutMinutes": 30
+  "lockoutMinutes": 30,
+  "srTierRelative": false
 } /*EDITMODE-END*/;
 
 // User-facing options persisted to localStorage so they survive refresh /
@@ -39,7 +40,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // authoritative and is synced back into this store on every boot/unlock.
 const OPTIONS_KEY = "marvel-tracker-options";
 const OPTION_KEYS = ["view", "theme", "densityCards", "densityTable", "densityLadder",
-  "hideDetails", "hideCopy", "infoRailOpen", "lockoutMinutes"];
+  "hideDetails", "hideCopy", "infoRailOpen", "lockoutMinutes", "srTierRelative"];
 // Density is stored per view, so each layout keeps its own compact/comfy choice.
 const DENSITY_KEY = { cards: "densityCards", table: "densityTable", ladder: "densityLadder" };
 const DENSITY_VIEW_LABEL = { cards: "Cards", table: "Table", ladder: "Ladder" };
@@ -1926,7 +1927,7 @@ function App() {
   })();
 
   const sortLabel = (SORT_OPTIONS.find((o) => o.value === sort) || SORT_OPTIONS[0]).label.toLowerCase();
-  const opts = { hideDetails: t.hideDetails, hideCopy: t.hideCopy };
+  const opts = { hideDetails: t.hideDetails, hideCopy: t.hideCopy, srTierRelative: t.srTierRelative };
 
   // ── render ────────────────────────────────────────────────────────────────
   if (phase === "loading") {
@@ -2090,6 +2091,8 @@ function App() {
           onChange={(v) => setTweak("hideDetails", v)} />
           <TweakToggle label="Hide copy buttons" value={t.hideCopy}
           onChange={(v) => setTweak("hideCopy", v)} />
+          <TweakToggle label="Show SR as N/100 within tier" value={t.srTierRelative}
+          onChange={(v) => setTweak("srTierRelative", v)} />
         </TweakSection>
 
         <TweakSection label="Security">

@@ -11,13 +11,21 @@
 
 const { tierOf, themeFor, fmtRelative, RANK_INDEX, RANK_TIERS } = window;
 
-// Display string for a rank with its absolute MMR/SR score. Marvel Rivals'
-// ranked system uses absolute points across every tier, so the score reads
-// the same for Bronze through One Above All — e.g. "Celestial II · 4897 SR".
-function rankDisplay(rank, points) {
+// Display string for a rank with its score. Two modes:
+//   • absolute (default): "Celestial II · 4897 SR" — the raw API value.
+//   • tier-relative (opts.tierRelative): "Celestial II · 47/100" — progress
+//     within the current division. Marvel Rivals divisions step in 100-SR
+//     blocks (Bronze III 0–99, Bronze II 100–199, …), so `points % 100`
+//     is the live in-tier progress. Eternity and One Above All have no
+//     sub-divisions and are open-ended, so we keep the raw value for them.
+function rankDisplay(rank, points, opts) {
   if (!rank) return "—";
-  if (points != null && points !== "") return `${rank} · ${points} SR`;
-  return rank;
+  if (points == null || points === "") return rank;
+  if (opts && opts.tierRelative && rank !== "Eternity" && rank !== "One Above All") {
+    const inTier = ((Number(points) % 100) + 100) % 100;
+    return `${rank} · ${inTier}/100`;
+  }
+  return `${rank} · ${points} SR`;
 }
 
 // True when the vault entry's Steam username matches the currently signed-in
@@ -485,12 +493,12 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: cur?.fg }} />
           <span className="rcard-rlbl">CURRENT</span>
-          <span className="rcard-rval" style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points)}</span>
+          <span className="rcard-rval" style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}</span>
         </div>
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: peak?.fg }} />
           <span className="rcard-rlbl">PEAK</span>
-          <span className="rcard-rval" style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points)}</span>
+          <span className="rcard-rval" style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}</span>
         </div>
       </div>
 
@@ -584,12 +592,12 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
 
         <div className="tbl-rank-cell">
           <span className="tbl-rdot" style={{ background: cur?.fg }} />
-          <span style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points)}</span>
+          <span style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}</span>
         </div>
 
         <div className="tbl-rank-cell">
           <span className="tbl-rdot" style={{ background: peak?.fg }} />
-          <span style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points)}</span>
+          <span style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}</span>
         </div>
 
         <div className="tbl-time" title={updatedTitle(acct)}>{fmtRelative(acct.updated_at)}</div>
@@ -728,7 +736,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
         {division && <span className="lad-sep">·</span>}
         <span className="lad-peak-lbl">peak</span>
         <span className="lad-peak-val" style={rankInk(peak)}>
-          {rankDisplay(acct.peak_rank, acct.peak_points)}
+          {rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}
         </span>
       </div>
     </article>
