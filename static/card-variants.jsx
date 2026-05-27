@@ -25,7 +25,10 @@ function rankDisplay(rank, points, opts) {
     const inTier = ((Number(points) % 100) + 100) % 100;
     return `${rank} · ${inTier}/100`;
   }
-  return `${rank} · ${points} SR`;
+  // No "SR" suffix — the units are obvious from the context (the row label
+  // is CURRENT / PEAK) and dropping the suffix keeps the value on one line in
+  // the narrow card column even at the longest ranks ("Grandmaster I · 4704").
+  return `${rank} · ${points}`;
 }
 
 // True when the vault entry's Steam username matches the currently signed-in
@@ -501,12 +504,18 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: cur?.fg }} />
           <span className="rcard-rlbl">CURRENT</span>
-          <span className="rcard-rval" style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}</span>
+          <span className="rcard-rval" style={rankInk(cur)}
+                title={rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}>
+            {rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}
+          </span>
         </div>
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: peak?.fg }} />
           <span className="rcard-rlbl">PEAK</span>
-          <span className="rcard-rval" style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}</span>
+          <span className="rcard-rval" style={rankInk(peak)}
+                title={rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}>
+            {rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}
+          </span>
         </div>
       </div>
 

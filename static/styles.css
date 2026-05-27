@@ -754,9 +754,9 @@ a.about-v:hover { color: rgba(41,38,27,1); border-bottom-color: currentColor; }
 }
 .rcard-rank {
   display: grid;
-  grid-template-columns: 8px 60px 1fr;
+  grid-template-columns: 8px 52px 1fr;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
 }
@@ -768,15 +768,21 @@ a.about-v:hover { color: rgba(41,38,27,1); border-bottom-color: currentColor; }
   font-weight: 700;
   font-size: 11px;
   color: var(--fg-2);
-  letter-spacing: .18em;
+  letter-spacing: .16em;
 }
+/* Rank value must never wrap — wrapping pushed neighboring cards' rank rows
+   out of vertical alignment. Keep it one line; if the string ever exceeds
+   the column, clip without ellipsis (the long form is in the cell's title). */
 .rcard-rval {
   font-weight: 700;
   text-align: right;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  min-width: 0;
   font-family: var(--font-display);
-  font-size: 12.5px;
-  letter-spacing: .02em;
+  font-size: 11.5px;
+  letter-spacing: .01em;
   color: var(--rk-fg, var(--muted));
   text-shadow:
     0 0 10px color-mix(in oklab, var(--rk-fg, transparent) 65%, transparent),
