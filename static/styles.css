@@ -543,13 +543,16 @@ html[data-theme="light"] .app-empty-hint {
   transform: translateY(-1px);
 }
 
+/* Shortcuts + About lists live inside the cream Options panel, so colors
+   are hard-coded against that cream surface instead of using the dark-theme
+   --fg-2 / --muted tokens (which rendered as low-contrast light grey on cream). */
 .shortcuts-list, .about-list {
   list-style: none;
   padding: 0;
   margin: 0;
   display: flex; flex-direction: column; gap: 8px;
   font-size: 13px;
-  color: var(--fg-2);
+  color: rgba(41,38,27,.88);
 }
 .shortcuts-list li, .about-list li {
   display: flex; align-items: center; gap: 10px;
@@ -558,31 +561,31 @@ html[data-theme="light"] .app-empty-hint {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 26px; height: 22px;
   padding: 0 6px;
-  border: 1px solid var(--border-2);
+  border: 1px solid rgba(0,0,0,.18);
   border-radius: 5px;
-  background: var(--panel-2);
-  color: var(--fg);
+  background: rgba(255,255,255,.85);
+  color: rgba(41,38,27,.92);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
-  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 1px 0 rgba(0,0,0,.4);
+  box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 1px 0 rgba(0,0,0,.08);
 }
 .about-k {
   min-width: 110px;
-  color: var(--muted);
+  color: rgba(41,38,27,.6);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
 .about-v {
-  color: var(--fg);
+  color: rgba(41,38,27,.92);
   font-family: var(--font-mono);
   font-size: 12px;
   word-break: break-all;
 }
-a.about-v { text-decoration: none; border-bottom: 1px dotted var(--muted-2); }
-a.about-v:hover { color: var(--fg); border-bottom-color: currentColor; }
+a.about-v { text-decoration: none; border-bottom: 1px dotted rgba(41,38,27,.4); }
+a.about-v:hover { color: rgba(41,38,27,1); border-bottom-color: currentColor; }
 
 .app-toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
@@ -693,8 +696,12 @@ a.about-v:hover { color: var(--fg); border-bottom-color: currentColor; }
 
 .rcard-name-row {
   display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
   min-width: 0;
 }
+/* Name shows in full — wraps onto a second line for long IGNs instead of
+   ellipsizing. The tag pill + presence badge wrap down with it when the row
+   overflows, so nothing clips the name. */
 .rcard-ign {
   margin: 0;
   font-family: var(--font-display);
@@ -703,11 +710,9 @@ a.about-v:hover { color: var(--fg); border-bottom-color: currentColor; }
   letter-spacing: -.015em;
   color: var(--fg);
   line-height: 1.15;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
 }
 
 /* ── Tag pill (shared across all views) ─────────────────────────────────── */
@@ -723,10 +728,7 @@ a.about-v:hover { color: var(--fg); border-bottom-color: currentColor; }
   letter-spacing: .04em;
   line-height: 1.4;
   flex-shrink: 0;
-  max-width: 140px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .tag-pill-dot {
   width: 4px; height: 4px; border-radius: 50%;
@@ -742,9 +744,7 @@ a.about-v:hover { color: var(--fg); border-bottom-color: currentColor; }
   color: var(--fg-3);
 }
 .rcard-meta-line {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .rcard-trunc { color: var(--muted); }
 
@@ -773,9 +773,7 @@ a.about-v:hover { color: var(--fg); border-bottom-color: currentColor; }
 .rcard-rval {
   font-weight: 700;
   text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   font-family: var(--font-display);
   font-size: 12.5px;
   letter-spacing: .02em;
@@ -904,7 +902,8 @@ html[data-theme="light"] .rcard-rval {
   font-weight: 600;
   color: var(--fg);
   letter-spacing: -.01em;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .tbl-tag {
   font-family: var(--font-mono);
@@ -926,7 +925,8 @@ html[data-theme="light"] .rcard-rval {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: .01em;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .tbl-rank-cell > span:last-child {
   color: var(--rk-fg, var(--fg));
@@ -1063,7 +1063,8 @@ html[data-theme="light"] .tbl-rank-cell > span:last-child {
   font-weight: 600;
   color: var(--fg);
   letter-spacing: -.01em;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .lad-icon {
   display: inline-flex; flex-shrink: 0;
@@ -1497,6 +1498,18 @@ html[data-theme="light"] .lad-peak-val {
 .lock-foot-i { color: #4ea160; margin-right: 4px; }
 .lock-foot-sep { margin: 0 8px; opacity: .5; }
 
+/* Version + commit at very bottom of lock screen so the user can confirm
+   which build is running before they even unlock. */
+.lock-build {
+  margin-top: 36px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted-2);
+  letter-spacing: .06em;
+  opacity: .8;
+}
+.lock-build-sha { color: var(--muted); }
+
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 @media (max-width: 880px) {
   .tbl-cols { grid-template-columns: 28px 1fr 130px 130px 0 32px; }
@@ -1655,7 +1668,7 @@ html[data-theme="light"] .lad-peak-val {
   color:var(--muted-2,#9aa3b2);
 }
 .sync-chip-i{font-size:10px;line-height:1;flex-shrink:0}
-.sync-chip-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sync-chip-t{flex:1;min-width:0;overflow-wrap:anywhere}
 .sync-chip-pending{flex-shrink:0;opacity:.7;font-style:italic}
 .sync-chip-ready{flex-shrink:0;font-weight:600;color:#79e6a4}
 .sync-chip-ok{
@@ -1979,7 +1992,7 @@ html[data-theme="light"] .local-rivals-icon{
 .match-hero-name{
   font-weight:600;
   color:var(--fg);
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  overflow-wrap:anywhere;
 }
 .match-badge{
   display:inline-block;

@@ -982,7 +982,7 @@ function RankPicker({ label, value, onChange }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // LOCK SCREEN  — init (set master password) and unlock both run through here.
 // ─────────────────────────────────────────────────────────────────────────────
-function LockScreen({ mode, accountCount, rememberSupported, onSubmit }) {
+function LockScreen({ mode, accountCount, rememberSupported, buildInfo, onSubmit }) {
   const isInit = mode === "init";
   const [pw, setPw] = React.useState("");
   const [confirm, setConfirm] = React.useState("");
@@ -1089,6 +1089,15 @@ function LockScreen({ mode, accountCount, rememberSupported, onSubmit }) {
             <span className="lock-foot-i">●</span>
             {accountCount} {accountCount === 1 ? "account" : "accounts"} in your vault
           </footer>
+        )}
+
+        {buildInfo?.version && (
+          <div className="lock-build">
+            v{buildInfo.version}
+            {buildInfo.commit && buildInfo.commit !== "dev" && (
+              <> · <span className="lock-build-sha">{buildInfo.commit}</span></>
+            )}
+          </div>
         )}
       </main>
     </div>);
@@ -1938,6 +1947,7 @@ function App() {
         mode={phase}
         accountCount={accountCount}
         rememberSupported={!!buildInfo?.remember_supported}
+        buildInfo={buildInfo}
         onSubmit={phase === "init" ? handleInit : handleUnlock} />
     );
   }
