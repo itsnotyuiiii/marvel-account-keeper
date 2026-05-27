@@ -257,12 +257,20 @@ function syncState(acct) {
 // 'none' render no badge on the refresh button — a clean (or simply old but
 // uncontested) account needs no marker. tracker.gg is the primary data source;
 // marvelrivalsapi is the fallback. Copy reflects that.
+// Short labels for chip body — the chip is clamped to a single line so it
+// can't push the rank rows around. The full long-form message is also passed
+// through to the chip's `title` attribute as a native hover tooltip.
 const SYNC_META = {
-  private:        { sym: "🔒", cls: "warn",  text: "Both tracker.gg and marvelrivalsapi reported this profile as private — set rank manually" },
-  not_found:      { sym: "?",  cls: "muted", text: "No data for this player on tracker.gg or marvelrivalsapi — IGN may be wrong" },
-  bad_key:        { sym: "!",  cls: "err",   text: "marvelrivalsapi key rejected (fallback only) — tracker.gg should still work" },
-  missing_handle: { sym: "?",  cls: "muted", text: "No in-game name set — refresh skipped" },
-  error:          { sym: "!",  cls: "err",   text: "Last refresh failed — retry shortly" },
+  private:        { sym: "🔒", cls: "warn",  text: "Private profile — set rank manually",
+                    long: "Both tracker.gg and marvelrivalsapi reported this profile as private — set rank manually" },
+  not_found:      { sym: "?",  cls: "muted", text: "Player not found — check IGN",
+                    long: "No data for this player on tracker.gg or marvelrivalsapi — IGN may be wrong" },
+  bad_key:        { sym: "!",  cls: "err",   text: "marvelrivalsapi key rejected",
+                    long: "marvelrivalsapi key rejected (fallback only) — tracker.gg should still work" },
+  missing_handle: { sym: "?",  cls: "muted", text: "No IGN set — refresh skipped",
+                    long: "No in-game name set — refresh skipped" },
+  error:          { sym: "!",  cls: "err",   text: "Refresh failed — retry shortly",
+                    long: "Last refresh failed — retry shortly" },
 };
 
 // Short human label for the data source field on each account.
@@ -366,7 +374,7 @@ function SyncChip({ acct, hasApiKey }) {
 
   const srcLabel = SOURCE_LABEL[acct.last_refresh_source] || null;
   const srcSuffix = srcLabel ? ` · ${srcLabel}` : "";
-  let cls, icon, text;
+  let cls, icon, text, longText;
   if (state === "current") {
     cls = "ok";
     icon = "✓";
@@ -389,6 +397,7 @@ function SyncChip({ acct, hasApiKey }) {
     cls = m.cls;
     icon = m.sym;
     text = m.text;
+    longText = m.long || m.text;
   }
 
   const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;
@@ -404,7 +413,7 @@ function SyncChip({ acct, hasApiKey }) {
                    && acct.last_refresh_source !== "tracker";
   return (
     <div className={"sync-chip sync-chip-" + cls} data-state={state}
-         title={acct.last_refresh_error || text}>
+         title={acct.last_refresh_error || longText || text}>
       <span className="sync-chip-i" aria-hidden="true">{icon}</span>
       <span className="sync-chip-t">{text}</span>
       {showRecrawl && recrawlPending && (

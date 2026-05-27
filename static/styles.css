@@ -1674,7 +1674,13 @@ html[data-theme="light"] .lad-peak-val {
   color:var(--muted-2,#9aa3b2);
 }
 .sync-chip-i{font-size:10px;line-height:1;flex-shrink:0}
-.sync-chip-t{flex:1;min-width:0;overflow-wrap:anywhere}
+/* Single-line clamp keeps the chip a uniform height across every card so the
+   rank rows above it land in the same vertical slot. Full text is in the
+   chip's title attribute (native tooltip on hover). */
+.sync-chip-t{
+  flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
 .sync-chip-pending{flex-shrink:0;opacity:.7;font-style:italic}
 .sync-chip-ready{flex-shrink:0;font-weight:600;color:#79e6a4}
 .sync-chip-ok{
