@@ -1125,6 +1125,12 @@ html[data-theme="light"] .lad-peak-val {
   font-size: 10px; letter-spacing: .22em;
   color: var(--muted);
 }
+.drawer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .drawer-title {
   margin: 4px 0 0;
   font-family: var(--font-display);

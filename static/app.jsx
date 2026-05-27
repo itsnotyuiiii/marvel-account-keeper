@@ -668,7 +668,7 @@ function UidSuggester({ currentUid, unclaimedUids, onResolveUid, onPick }) {
 }
 
 function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, syncingMatches,
-                  unclaimedUids, onResolveUid }) {
+                  unclaimedUids, onResolveUid, activeSteam, localRivalsUids }) {
   const isNew = !acct?.id;
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [form, setForm] = React.useState(() => baseFormFor(null));
@@ -740,7 +740,15 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
         <header className="drawer-head">
           <div>
             <div className="drawer-eyebrow">{isNew ? "NEW ACCOUNT" : "EDIT ACCOUNT"}</div>
-            <h2 className="drawer-title">{isNew ? "Add an account" : form.in_game_name || "Untitled"}</h2>
+            <div className="drawer-title-row">
+              <h2 className="drawer-title">{isNew ? "Add an account" : form.in_game_name || "Untitled"}</h2>
+              {!isNew && acct && (
+                <window.PresenceBadge acct={acct}
+                                      activeSteam={activeSteam}
+                                      localRivalsUids={localRivalsUids}
+                                      compact />
+              )}
+            </div>
           </div>
           <button className="drawer-x" onClick={onClose} aria-label="Close">×</button>
         </header>
@@ -789,8 +797,6 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
             <div className="drawer-section-lbl">Credentials</div>
             <Field label="Steam username" value={form.username}
             onChange={(v) => set("username", v)} />
-            <Field label="Email" value={form.email}
-            onChange={(v) => set("email", v)} type="email" />
             <div className="drawer-pw">
               <Field
                 label="Password"
@@ -801,6 +807,8 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
               <button className="drawer-pw-toggle" type="button"
               onClick={() => setShowPw((p) => !p)}>{showPw ? "hide" : "show"}</button>
             </div>
+            <Field label="Email (optional)" value={form.email}
+            onChange={(v) => set("email", v)} type="email" />
           </section>
 
           <section className="drawer-section">
@@ -2062,7 +2070,9 @@ function App() {
           onSyncMatches={onSyncMatches}
           syncingMatches={syncingMatches}
           unclaimedUids={unclaimedUids}
-          onResolveUid={onResolveUid} />
+          onResolveUid={onResolveUid}
+          activeSteam={activeSteam}
+          localRivalsUids={localRivalsUids} />
 
       </div>
 

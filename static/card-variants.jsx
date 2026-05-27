@@ -478,7 +478,6 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         <h3 className={"rcard-ign" + (acct.in_game_name ? "" : " rcard-ign-empty")}>
           {acct.in_game_name || "No IGN set"}
         </h3>
-        <PresenceBadge acct={acct} activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
         <TagPill acct={acct} />
       </div>
 
@@ -586,7 +585,6 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
           </span>
           {lab.kind === "main" && <span className="tbl-tag">main</span>}
           {lab.kind === "oaa"  && <span className="tbl-tag tbl-tag-oaa">peak oaa</span>}
-          <PresenceBadge acct={acct} activeSteam={activeSteam} localRivalsUids={localRivalsUids} compact />
           <TagPill acct={acct} />
         </div>
 
@@ -720,7 +718,6 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
           {acct.in_game_name || "No IGN set"}
         </span>
         <div className="lad-line-r">
-          <PresenceBadge acct={acct} activeSteam={activeSteam} localRivalsUids={localRivalsUids} compact />
           <TagPill acct={acct} />
           <RefreshBtn acct={acct} refreshing={refreshing}
                       onRefresh={onRefresh} hasApiKey={hasApiKey} size="xs" />
@@ -744,5 +741,5 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
 }
 
 Object.assign(window, {
-  CardRefined, TableView, LadderView, labelFor,
+  CardRefined, TableView, LadderView, labelFor, PresenceBadge,
 });
