@@ -2114,3 +2114,33 @@ html[data-theme="light"] .uid-pill{
   border-color:color-mix(in oklab, #0d7396 60%, transparent);
   color:#0d7396;
 }
+
+/* ── Accessibility ─────────────────────────────────────────────────────────
+   Single global focus ring for keyboard users. :focus-visible only fires on
+   keyboard focus, so mouse clicks don't get the ring — earlier `outline:none`
+   rules left keyboard users with no visible focus at all. */
+:focus-visible{
+  outline:2px solid var(--accent);
+  outline-offset:2px;
+  border-radius:4px;
+}
+
+/* The toast lives inside an always-present aria-live region so screen readers
+   announce it; the wrapper must never eat clicks. */
+.app-toast-live{
+  position:fixed;
+  left:0; right:0; bottom:0;
+  pointer-events:none;
+  z-index:60;
+}
+
+/* Respect the OS "reduce motion" setting — kill the spinners, pulses, shakes,
+   slides, and the duck bob for users who get motion sick. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }
+}

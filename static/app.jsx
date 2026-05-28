@@ -734,8 +734,8 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
   return (
     <>
       <div className={"drawer-backdrop" + (open ? " open" : "")}
-           onDoubleClick={onClose}
-           title="Double-click to close" />
+           onClick={onClose}
+           title="Click to close (your draft is kept)" />
       <aside className={"drawer" + (open ? " open" : "")} aria-hidden={!open}>
         <header className="drawer-head">
           <div>
@@ -805,6 +805,8 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
                 type={showPw ? "text" : "password"} />
 
               <button className="drawer-pw-toggle" type="button"
+              aria-label={showPw ? "Hide password" : "Show password"}
+              aria-pressed={showPw}
               onClick={() => setShowPw((p) => !p)}>{showPw ? "hide" : "show"}</button>
             </div>
             <Field label="Email (optional)" value={form.email}
@@ -1091,7 +1093,7 @@ function LockScreen({ mode, accountCount, rememberSupported, buildInfo, onSubmit
             <span className="lock-btn-arrow" aria-hidden="true">→</span>
           </button>
         </form>
-        {err && <div className="lock-err">{err}</div>}
+        {err && <div className="lock-err" role="alert">{err}</div>}
 
         {!isInit && accountCount > 0 && (
           <footer className="lock-foot">
@@ -1173,6 +1175,8 @@ function ApiKeyControl({ hasKey, onSave }) {
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }} />
             <button type="button" className="api-key-toggle"
+                    aria-label={show ? "Hide API key" : "Show API key"}
+                    aria-pressed={show}
                     onClick={() => setShow((s) => !s)}>
               {show ? "hide" : "show"}
             </button>
@@ -1386,7 +1390,9 @@ function App() {
   const showToast = (msg) => {
     setToast(msg);
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => setToast(null), 1600);
+    // Hold failures long enough to actually read them; success is brief.
+    const isError = /fail|couldn't|wait |error|blocked/i.test(msg);
+    showToast._t = setTimeout(() => setToast(null), isError ? 4500 : 1600);
   };
 
   // Reset the client countdown — mirrors the server resetting last_activity
@@ -1729,10 +1735,32 @@ function App() {
   }, [drawer.open, ready, refreshingAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
-  const onCopy = (text, field) => {
+  const onCopy = async (text, field) => {
     if (!text) return;
-    try { navigator.clipboard?.writeText(text); } catch { /* no-op */ }
-    showToast(`Copied ${field}`);
+    // Prefer the async Clipboard API (works on the 127.0.0.1 secure context),
+    // but only claim success once it actually resolves. Fall back to a hidden
+    // textarea + execCommand if it's unavailable or rejects, and only toast a
+    // failure if both paths fail — never a false "Copied".
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        showToast(`Copied ${field}`);
+        return;
+      }
+    } catch { /* fall through to the legacy path */ }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      showToast(ok ? `Copied ${field}` : `Couldn't copy ${field}`);
+    } catch {
+      showToast(`Couldn't copy ${field}`);
+    }
   };
 
   const onOpen = (acct) => setDrawer({ open: true, acct });
@@ -2043,7 +2071,9 @@ function App() {
           </div>
         </main>
 
-        {toast && <div className="app-toast">{toast}</div>}
+        <div className="app-toast-live" role="status" aria-live="polite">
+          {toast && <div className="app-toast">{toast}</div>}
+        </div>
 
         <footer className="app-foot">
           <span>Created by Yui</span>

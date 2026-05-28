@@ -273,9 +273,13 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
     // defer one tick so the same click that opened the panel doesn't
     // immediately close it
     const id = setTimeout(() => document.addEventListener('mousedown', onDown), 0);
+    // ESC closes the panel too — matches the drawer and standard modal behavior.
+    const onKey = (e) => { if (e.key === 'Escape') dismiss(); };
+    document.addEventListener('keydown', onKey);
     return () => {
       clearTimeout(id);
       document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
     };
   }, [open]);
 
