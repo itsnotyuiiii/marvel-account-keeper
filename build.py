@@ -74,9 +74,21 @@ def main() -> None:
         "--add-data", f"templates{sep}templates",  # Flask templates
         "--add-data", f"static{sep}static",        # JS / CSS / vendored libs
         "--add-data", f"_build_info.json{sep}.",   # commit SHA + build timestamp
+        # pywebview (native window) + its data/backends. PyInstaller's stock
+        # hooks miss some pieces, so pull the whole package in.
+        "--collect-all", "webview",
         "--noconfirm",
         "--clean",
     ]
+    # The Windows native backend (EdgeChromium) loads through pythonnet/clr,
+    # which needs its managed runtime + metadata bundled explicitly. Harmless
+    # to omit elsewhere (mac/Linux use Cocoa/GTK backends instead).
+    if sys.platform == "win32":
+        cmd += [
+            "--collect-all", "clr_loader",
+            "--collect-all", "pythonnet",
+            "--copy-metadata", "pythonnet",
+        ]
     # .ico is a Windows resource format; macOS would need an .icns. Only wire
     # the icon up where it applies so the build doesn't fail elsewhere.
     if icon.exists() and sys.platform == "win32":

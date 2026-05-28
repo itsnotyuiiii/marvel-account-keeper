@@ -2685,6 +2685,117 @@ def _idle_watch() -> None:
             _shutdown("Browser never opened")
 
 
+def _wait_until_serving(port: int, timeout: float = 10.0) -> bool:
+    """Block until the Flask server on `port` accepts a connection, so the
+    native window doesn't load before the server is listening."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.25)
+            try:
+                s.connect(("127.0.0.1", port))
+                return True
+            except OSError:
+                time.sleep(0.05)
+    return False
+
+
+def _serve_background(port: int) -> None:
+    """Run Flask on a daemon thread so the main thread is free for the native
+    window's UI loop. threaded=True lets the page's asset + API requests be
+    served concurrently while the window loads."""
+    threading.Thread(
+        target=lambda: app.run(host="127.0.0.1", port=port, debug=False,
+                               use_reloader=False, threaded=True),
+        daemon=True,
+    ).start()
+
+
+def _native_backend_available() -> bool:
+    """True if the OS has a webview backend pywebview can actually host in.
+
+    On Windows that means the Evergreen WebView2 Runtime. We locate the
+    runtime *folder* (not just a registry flag) and pin pywebview to it via
+    WEBVIEW2_BROWSER_EXECUTABLE_FOLDER. This is deliberate: the WebView2Loader
+    bundled with pywebview can fail its own auto-detection even when the
+    runtime is installed and current — it throws "Package dependency criteria
+    could not be resolved" and opens a blank window. Pointing it straight at
+    the runtime binary sidesteps that loader entirely. If no runtime folder is
+    found we return False so the caller falls back to the browser instead of
+    showing a blank frame. Non-Windows platforms return True and let
+    _run_native_window's try/except handle a missing backend at start()."""
+    if sys.platform != "win32":
+        return True
+    # Respect an explicit override if the user already set one.
+    env = os.environ.get("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER")
+    if env and Path(env, "msedgewebview2.exe").exists():
+        return True
+    bases = [
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+             "Microsoft", "EdgeWebView", "Application"),
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files"),
+             "Microsoft", "EdgeWebView", "Application"),
+        Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")),
+             "Microsoft", "EdgeWebView", "Application"),
+    ]
+    candidates = []
+    for base in bases:
+        try:
+            for child in base.iterdir():
+                if (child / "msedgewebview2.exe").exists():
+                    candidates.append(child)
+        except OSError:
+            continue
+    if not candidates:
+        return False
+    # Highest version folder wins (Evergreen keeps the newest installed).
+    best = max(candidates, key=lambda p: _version_tuple(p.name))
+    os.environ["WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"] = str(best)
+    return True
+
+
+def _run_native_window(url: str, port: int) -> bool:
+    """Open the app in a native OS webview window instead of the browser.
+
+    Returns True if the native window ran (and the process should exit when
+    it closes), or False if pywebview isn't available so the caller can fall
+    back to the browser. The native window's close *is* the app lifecycle —
+    no heartbeat/idle-watch needed; closing it ends the process.
+    """
+    try:
+        import webview  # optional dependency; absent in headless/source setups
+    except ImportError:
+        return False  # Flask not started yet — caller runs the browser path.
+
+    if not _native_backend_available():
+        # No WebView2 runtime (or equivalent) — opening a window would just
+        # show a blank frame. Bail before starting Flask so the caller's
+        # browser path runs cleanly.
+        print("  No native webview runtime found — opening in your browser.")
+        return False
+
+    # From here on we own the process lifecycle. Flask runs on a daemon thread
+    # so we never start app.run() twice (which would fail with the port held).
+    _serve_background(port)
+    _wait_until_serving(port)
+
+    try:
+        webview.create_window(
+            "Marvel Account Keeper", url,
+            width=1240, height=860, min_size=(900, 640),
+        )
+        webview.start()  # blocks until the window is closed
+    except Exception as e:  # no webview backend (e.g. Linux w/o WebKitGTK)
+        print(f"  Native window unavailable ({e}) — opening in your browser.")
+        # The server is already up on the daemon thread; just point a browser
+        # at it and fall back to the heartbeat/idle lifecycle.
+        webbrowser.open(url)
+        _idle_watch()  # blocks forever; _shutdown() ends the process
+        return True
+    _shutdown("Window closed")
+    return True
+
+
 def main() -> None:
     # Zero arguments is the intended path — a double-clicked .exe just works.
     # The flags below exist only for the rare headless / power-user case.
@@ -2714,23 +2825,30 @@ def main() -> None:
     print(line)
     print("  Marvel Account Keeper")
     print("  " + "-" * 56)
-    print(f"  Open in browser : {url}")
-    print(f"  Vault file      : {VAULT_PATH}")
+    print(f"  Address    : {url}")
+    print(f"  Vault file : {VAULT_PATH}")
     print()
-    if open_browser:
-        print("  Your browser should open automatically.")
-    else:
+    if not open_browser:
         print("  Open the address above in your browser.")
-    if auto_stop:
-        print("  Done? Just close the browser — this window closes itself.")
-    else:
         print("  Keep this window open while you use the app; Ctrl+C quits.")
+    elif auto_stop:
+        # Default mode — a native window or the browser opens automatically,
+        # and closing it quits the app. The native path prints its own line.
+        print("  Opening Marvel Account Keeper… close it when you're done.")
+    else:
+        print("  Your browser will open; this window stays up (Ctrl+C quits).")
     print(line)
 
-    # Open the browser shortly after the server starts listening.
+    # Default mode: try a native OS window first. It owns the process
+    # lifecycle (close the window = quit) and, if it runs, never returns here.
+    # Falls through to the browser path only when pywebview isn't installed.
+    if auto_stop and _run_native_window(url, port):
+        return
+
+    # Browser path: open the default browser shortly after the server starts
+    # listening, and (in app mode) quit once the browser is gone.
     if open_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    # In the default app-like mode, quit once the browser is gone.
     if auto_stop:
         threading.Thread(target=_idle_watch, daemon=True).start()
 
