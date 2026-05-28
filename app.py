@@ -469,6 +469,25 @@ def _sha256_of_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _is_github_download_url(url: str | None) -> bool:
+    """True if a URL is an HTTPS GitHub release-download host. The download
+    URLs come from the GitHub API response (fetched over TLS), but we re-check
+    the host before fetching so a spoofed/MITM'd API body can't redirect the
+    download — and therefore the eventual exe swap — to an attacker host."""
+    if not url:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    return parts.scheme == "https" and (
+        host == "github.com" or host.endswith(".github.com")
+        or host == "objects.githubusercontent.com"
+        or host.endswith(".githubusercontent.com")
+    )
+
+
 def _is_packaged() -> bool:
     """True when running as the PyInstaller-built .exe — the only path where
     self-update is meaningful. Running from source returns False and the
@@ -758,9 +777,15 @@ def _decrypt(key: bytes, blob: dict[str, str]) -> str:
 REMEMBER_FILE = "remembered_key.bin"
 
 
-def _dpapi_call(func_name: str, in_bytes: bytes) -> bytes | None:
+def _dpapi_call(func_name: str, in_bytes: bytes, entropy: bytes | None) -> bytes | None:
     """Wrap CryptProtectData / CryptUnprotectData via ctypes. Returns the
-    transformed bytes, or None on any failure / non-Windows platform."""
+    transformed bytes, or None on any failure / non-Windows platform.
+
+    `entropy` is the optional secondary entropy BLOB (pOptionalEntropy): the
+    same value must be supplied to protect and unprotect. It binds the blob to
+    this app + vault so a process that just sweeps DPAPI blobs (common in
+    credential-stealer malware) can't decrypt it by calling CryptUnprotectData
+    with no entropy."""
     if sys.platform != "win32":
         return None
     import ctypes
@@ -769,15 +794,22 @@ def _dpapi_call(func_name: str, in_bytes: bytes) -> bytes | None:
     class _Blob(ctypes.Structure):
         _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
 
-    buf = ctypes.create_string_buffer(in_bytes, len(in_bytes))
-    in_blob = _Blob(len(in_bytes), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+    def _mk_blob(b: bytes):
+        buf = ctypes.create_string_buffer(b, len(b))
+        return _Blob(len(b), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), buf
+
+    in_blob, _in_buf = _mk_blob(in_bytes)
+    ent_ref = None
+    if entropy:
+        ent_blob, _ent_buf = _mk_blob(entropy)
+        ent_ref = ctypes.byref(ent_blob)
     out_blob = _Blob()
     try:
         fn = getattr(ctypes.windll.crypt32, func_name)
     except (AttributeError, OSError):
         return None
     # Signature: BOOL fn(BLOB* in, LPCWSTR descr, BLOB* entropy, void*, void*, DWORD flags, BLOB* out)
-    ok = fn(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob))
+    ok = fn(ctypes.byref(in_blob), None, ent_ref, None, None, 0, ctypes.byref(out_blob))
     if not ok:
         return None
     try:
@@ -788,12 +820,31 @@ def _dpapi_call(func_name: str, in_bytes: bytes) -> bytes | None:
     return result
 
 
+# App + vault-bound secondary entropy for the remember-me blob. The static tag
+# alone defeats blind entropy-less DPAPI sweeps; mixing in the per-vault scrypt
+# salt also binds the blob to this specific vault, so a remembered_key.bin can't
+# be reused against a different vault even under the same Windows user.
+_REMEMBER_ENTROPY_TAG = b"MarvelAccountKeeper::remember-me::v1"
+
+
+def _remember_entropy() -> bytes:
+    """Secondary DPAPI entropy: the app tag plus this vault's scrypt salt
+    (best-effort — falls back to just the tag if the salt can't be read)."""
+    salt = b""
+    try:
+        kdf = (_read_vault() or {}).get("kdf") or {}
+        salt = bytes.fromhex(kdf.get("salt") or "")
+    except (OSError, ValueError, json.JSONDecodeError):
+        salt = b""
+    return _REMEMBER_ENTROPY_TAG + salt
+
+
 def _dpapi_protect(data: bytes) -> bytes | None:
-    return _dpapi_call("CryptProtectData", data)
+    return _dpapi_call("CryptProtectData", data, _remember_entropy())
 
 
 def _dpapi_unprotect(blob: bytes) -> bytes | None:
-    return _dpapi_call("CryptUnprotectData", blob)
+    return _dpapi_call("CryptUnprotectData", blob, _remember_entropy())
 
 
 def remember_supported() -> bool:
@@ -2442,6 +2493,12 @@ def apply_update():
     this even while the process is running — rename is a metadata op), then
     write the download to the original path. On next launch, the new exe
     deletes the .old leftover via `_cleanup_post_update`."""
+    # Require an unlocked vault: swapping the running executable is a sensitive
+    # action, so don't let an unauthenticated local caller trigger it. (The
+    # cross-origin guard already blocks remote pages; this adds local authz.)
+    _, err = _require_key()
+    if err:
+        return err
     if not _is_packaged():
         return jsonify({"error": "not_packaged",
                         "message": "Self-update only works from the packaged .exe. "
@@ -2457,6 +2514,9 @@ def apply_update():
     if not asset_url:
         return jsonify({"error": "no_asset",
                         "message": f"Release {latest_tag} has no {UPDATE_ASSET_NAME} asset."}), 502
+    if not _is_github_download_url(asset_url):
+        return jsonify({"error": "bad_asset_host",
+                        "message": "Update download URL isn't a GitHub host — aborted."}), 502
     if _version_tuple(latest_tag) <= _version_tuple(APP_VERSION):
         return jsonify({"error": "not_newer",
                         "message": f"Already on the latest version (v{APP_VERSION})."}), 400
@@ -2497,25 +2557,36 @@ def apply_update():
                         "message": "Download was suspiciously small — aborted."}), 502
 
     # 3b. Verify the SHA256 against the sibling .sha256 published by the
-    # release workflow. Releases >= v1.7.0 publish this file; older ones
-    # (v1.6.0 and below) don't, and we allow the update through with a flag
-    # in the response so the UI can mention that verification was skipped.
+    # release workflow. This is mandatory: if the checksum asset is missing,
+    # on a non-GitHub host, or can't be fetched, we refuse to install rather
+    # than swap in an unverified binary (closes a strip/downgrade attack where
+    # a release without a checksum would otherwise be installed unchecked).
+    # Every release since v1.7.0 publishes it; the current line is well past
+    # that, so a missing checksum now signals tampering, not an old release.
     checksum_url = _release_checksum_url(release)
-    expected = _fetch_expected_checksum(checksum_url) if checksum_url else None
-    verified = False
-    if expected is not None:
-        actual = _sha256_of_file(new_path)
-        if actual.lower() != expected:
-            new_path.unlink(missing_ok=True)
-            return jsonify({
-                "error": "checksum_mismatch",
-                "message": f"Downloaded file failed SHA256 verification. "
-                           f"Expected {expected[:12]}…, got {actual[:12]}…. "
-                           f"Update aborted — your current install is untouched.",
-                "expected": expected,
-                "actual": actual,
-            }), 502
-        verified = True
+    if not _is_github_download_url(checksum_url):
+        new_path.unlink(missing_ok=True)
+        return jsonify({"error": "no_checksum",
+                        "message": "Release is missing its SHA256 checksum — "
+                                   "refusing to install an unverified update."}), 502
+    expected = _fetch_expected_checksum(checksum_url)
+    if expected is None:
+        new_path.unlink(missing_ok=True)
+        return jsonify({"error": "checksum_unavailable",
+                        "message": "Couldn't fetch the update's SHA256 checksum — "
+                                   "refusing to install an unverified update."}), 502
+    actual = _sha256_of_file(new_path)
+    if actual.lower() != expected:
+        new_path.unlink(missing_ok=True)
+        return jsonify({
+            "error": "checksum_mismatch",
+            "message": f"Downloaded file failed SHA256 verification. "
+                       f"Expected {expected[:12]}…, got {actual[:12]}…. "
+                       f"Update aborted — your current install is untouched.",
+            "expected": expected,
+            "actual": actual,
+        }), 502
+    verified = True
 
     # 4. Wipe any older .old from a prior update so the rename has room.
     if old_path.exists():
