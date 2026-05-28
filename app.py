@@ -497,6 +497,51 @@ app = Flask(
     template_folder=str(RESOURCE_DIR / "templates"),
 )
 
+# Methods that can't change state — no CSRF protection needed.
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+# Hostnames the app is ever served from (it binds 127.0.0.1 only).
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _is_loopback_origin(value: str) -> bool:
+    """True if an Origin/Referer header points at our own loopback host.
+
+    Port is intentionally ignored: the app binds an ephemeral port, and the
+    threat we're blocking is a *remote* site (a different host), not another
+    local port. Any non-loopback host — or an unparseable value — fails.
+    """
+    if not value:
+        return False
+    try:
+        host = urllib.parse.urlsplit(value).hostname
+    except ValueError:
+        return False
+    return (host or "").lower() in _LOOPBACK_HOSTS
+
+
+@app.before_request
+def _block_cross_origin():
+    """Reject state-changing requests that didn't originate from the app's
+    own page. This closes the localhost-CSRF surface: because the server is
+    bound to 127.0.0.1 on a random port with no CORS headers, a malicious web
+    page can't *read* responses, but without this guard it could still fire
+    blind cross-site POST/PUT/DELETE side effects (delete accounts, force an
+    exe self-update, shut the app down). We trust the browser-set Origin /
+    Referer headers, which cannot be forged by cross-site JavaScript."""
+    if request.method in _SAFE_METHODS:
+        return None
+    origin = request.headers.get("Origin")
+    # Origin is sent by browsers on every non-safe cross-origin request
+    # (fetch, sendBeacon, and cross-site form posts). Prefer it.
+    if origin is not None:
+        if _is_loopback_origin(origin):
+            return None
+    # Some same-origin requests omit Origin; fall back to Referer's host.
+    elif _is_loopback_origin(request.headers.get("Referer", "")):
+        return None
+    return jsonify({"error": "forbidden",
+                    "message": "Cross-origin request blocked."}), 403
+
 
 @app.errorhandler(OSError)
 def _os_error_handler(e: OSError):
@@ -505,9 +550,14 @@ def _os_error_handler(e: OSError):
     didn't clear within the retry budget. The frontend toast pulls the
     `message` field so the user sees the actual culprit instead of a
     generic 'try again'."""
+    app.logger.warning("Filesystem error in route: %s: %s", e.__class__.__name__, e)
+    # Keep the class name (helps the user distinguish "file locked" from "disk
+    # full") but don't echo the full exception string — it can carry absolute
+    # filesystem paths.
     return jsonify({
         "error": "io_error",
-        "message": f"Couldn't write to vault.json — {e.__class__.__name__}: {e}",
+        "message": f"Couldn't write to vault.json ({e.__class__.__name__}). "
+                   "Close anything that may have it open and try again.",
     }), 500
 
 
@@ -521,9 +571,11 @@ def _generic_error_handler(e: Exception):
     if isinstance(e, HTTPException):
         return e
     app.logger.exception("Unhandled exception in route")
+    # Don't reflect the exception text (class name + message, sometimes paths
+    # or internal detail) to the client — it's logged above for debugging.
     return jsonify({
         "error": "server_error",
-        "message": f"{e.__class__.__name__}: {e}",
+        "message": "Something went wrong handling that request.",
     }), 500
 
 _state_lock = threading.Lock()
