@@ -2,7 +2,10 @@
 
 A small, local desktop app for tracking your Marvel Rivals / Steam accounts —
 in-game name, username, email, password, and current / peak rank. It runs
-entirely on your machine; nothing is sent anywhere.
+entirely on your machine: your vault never leaves your PC, and the only time
+the app touches the internet is when *you* refresh a rank (it looks the player
+up on public Marvel Rivals stat sites) or when it quietly checks GitHub for a
+newer version. Your accounts and passwords are never uploaded anywhere.
 
 ![icon](icon.png)
 
@@ -23,14 +26,18 @@ There's nothing to "install" — Marvel Account Keeper is a single file you run.
 4. **When you're done, close the browser tab.** The app shuts itself down a
    couple of minutes later — nothing is left running in the background.
 
-No Python, no installer, no internet connection — everything runs on your own
-PC, and it works completely offline.
+No Python, no installer, no setup — everything runs on your own PC. The app
+works fully offline; the only features that reach the internet are the
+optional **rank refresh** (looks your players up on public Marvel Rivals stat
+sites) and a background **update check** against GitHub. Your vault is never
+uploaded.
 
 > [!NOTE]
 > The first time you run it, Windows may show a blue **"Windows protected your
 > PC"** box, because the app isn't code-signed. Click **More info → Run
-> anyway**. It's safe — the source code is public and the app never connects
-> to the internet.
+> anyway**. It's safe — the source code is public, and the app only ever talks
+> to the internet to refresh ranks or check for an update; your saved accounts
+> never leave your PC.
 
 ## Mac & Linux
 
@@ -72,6 +79,10 @@ automatically the first time the new app starts.
 - The decryption key is held in memory only. The vault auto-locks after a
   configurable idle period (default 30 min — change it under **Options**), on
   quit, or when you click **Lock**.
+- The only outbound network calls are: rank refreshes (sends a player's
+  in-game name / UID to public Marvel Rivals stat sites — `tracker.gg` and
+  `marvelrivalsapi.com`) and a version check against `api.github.com`. Your
+  vault contents — emails, usernames, passwords — are never sent anywhere.
 
 ---
 

@@ -1714,10 +1714,12 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
 
     if status in (401, 403):
         if _is_private_payload(status, payload):
+            tried_tracker = bool((acct.get("in_game_name") or "").strip())
+            tail = (" (tracker.gg also couldn't fetch it)." if tried_tracker
+                    else " (no in-game name set, so tracker.gg wasn't tried — add one to bypass.)")
             return {**base, "last_refresh_status": "private",
                     "last_refresh_source": "marvelrivalsapi",
-                    "last_refresh_error": "Profile is set to private in-game "
-                                          "(tracker.gg also couldn't fetch it)."}
+                    "last_refresh_error": "Profile is set to private in-game" + tail}
         return {**base, "last_refresh_status": "bad_key",
                 "last_refresh_error": (
                     (isinstance(payload, dict) and (payload.get("error") or payload.get("message")))
@@ -1732,9 +1734,12 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         return {**base, "last_refresh_status": "error",
                 "last_refresh_error": f"Rate limited by marvelrivalsapi — wait ~{wait}s, then retry."}
     if _is_private_payload(status, payload):
+        tried_tracker = bool((acct.get("in_game_name") or "").strip())
+        tail = (" (tracker.gg also couldn't fetch it)." if tried_tracker
+                else " (no in-game name set, so tracker.gg wasn't tried — add one to bypass.)")
         return {**base, "last_refresh_status": "private",
                 "last_refresh_source": "marvelrivalsapi",
-                "last_refresh_error": "Profile is set to private in-game."}
+                "last_refresh_error": "Profile is set to private in-game" + tail}
     if _is_bad_key_payload(payload):
         return {**base, "last_refresh_status": "bad_key",
                 "last_refresh_error": payload.get("error") or payload.get("message")}
