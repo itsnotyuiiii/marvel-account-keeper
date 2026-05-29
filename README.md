@@ -1,66 +1,64 @@
 # Marvel Account Keeper
 
-A small, local desktop app for tracking your Marvel Rivals / Steam accounts —
-in-game name, username, email, password, and current / peak rank. Everything
-lives on your own machine. The only time it touches the internet is when *you*
-refresh a rank (a player lookup on public Marvel Rivals stat sites) or when it
-checks GitHub for a newer version — your accounts and passwords are never
-uploaded anywhere.
+Keep track of your Marvel Rivals / Steam accounts in one place: in-game name,
+rank, and — if you want — username, email, and password. It runs on your own
+PC. Your data stays there. The only time it goes online is when you refresh a
+rank or it checks GitHub for an update.
+
+Don't want to store logins? You don't have to. Username, email, and password
+are all optional — you can use it purely to track ranks if that's all you want.
 
 ![icon](icon.png)
 
 ![Marvel Account Keeper demo](demo.gif)
 
-## Get started (Windows — this is almost everyone)
+## Download (Windows)
 
-There's nothing to "install" — Marvel Account Keeper is a single file you run.
-
-1. **Download the app.** On the
-   [**Releases page**](https://github.com/itsnotyuiiii/marvel-account-keeper/releases),
-   open the newest release and grab **`MarvelAccountKeeper-windows.exe`** under
-   **Assets**. That's the file 99% of people want.
-2. **Put it somewhere handy** — Desktop, or a folder like
-   `Documents\Marvel Account Keeper`. It runs fine from anywhere.
-3. **Double-click it.** The app opens in its own window — no terminal, no
-   installer, no setup screen. (On the rare PC missing the built-in window
-   component, it opens in your web browser instead.)
-4. **When you're done, close the window** and the app quits with it — nothing
-   left running. (If it opened in your browser, close the tab; it shuts down a
-   couple of minutes later.)
+1. Go to the
+   [**Releases page**](https://github.com/itsnotyuiiii/marvel-account-keeper/releases).
+2. Download **`MarvelAccountKeeper-windows.exe`** from the newest release.
+3. Double-click it. That's it — no install, no setup. The app opens in a window.
+4. Done? Close the window. It shuts down with it.
 
 > [!NOTE]
-> ### "Windows protected your PC"?
-> The first launch may show a blue SmartScreen box. **This is expected and the
-> app is safe to run** — Windows shows it for any program that isn't signed
-> with a paid certificate, which independent free apps like this one don't buy.
-> It is *not* a virus warning.
+> ### If Windows says "Windows protected your PC"
+> That's normal. Windows shows this for any free app that isn't signed with an
+> expensive certificate. It's **not** a virus warning, and the app is safe.
 >
-> Click **More info → Run anyway**. You only do this once.
+> Click **More info**, then **Run anyway**. You only do this once.
 >
-> Why you can trust it: the entire source code is public in this repo, so
-> anyone can read exactly what it does. It keeps your vault on your own PC and
-> only reaches the internet to refresh ranks or check for updates. If you like,
-> you can verify your download is untampered — every release ships a
-> `.sha256` file next to the `.exe`; compare it with
-> `Get-FileHash MarvelAccountKeeper-windows.exe` in PowerShell.
+> Want to be sure? The whole source code is right here in this repo for anyone
+> to read, and every download comes with a `.sha256` file you can check (see
+> [Verify your download](#verify-your-download-optional)).
 
-## Mac & Linux
+## Download (Mac & Linux)
 
-Download `MarvelAccountKeeper-macos` or `MarvelAccountKeeper-linux` from the
-[Releases page](https://github.com/itsnotyuiiii/marvel-account-keeper/releases)
-instead. Make it runnable once in a terminal —
-`chmod +x MarvelAccountKeeper-macos` — then double-click or run it. On macOS
-you may also need *System Settings → Privacy & Security → Open Anyway*.
+Grab `MarvelAccountKeeper-macos` or `MarvelAccountKeeper-linux` from the
+[Releases page](https://github.com/itsnotyuiiii/marvel-account-keeper/releases).
+Run `chmod +x MarvelAccountKeeper-macos` once in a terminal, then open it. On
+macOS you may also need *System Settings → Privacy & Security → Open Anyway*.
 
-## First launch — set your password
+## First launch
 
-The first time it opens, the app asks you to **create a master password**. It
-locks the account passwords you save (strong encryption — scrypt key
-derivation + AES-256-GCM) and is **never written down anywhere**.
+You set a **master password** the first time you open it. This is the password
+that unlocks the app — it locks any account passwords you save (scrypt +
+AES-256-GCM encryption) and is never stored anywhere.
 
-Pick something you'll remember: if you forget it, the saved passwords can't be
-recovered. Everything else (in-game name, email, ranks, notes) is stored
-normally and stays readable.
+Pick one you'll remember. If you forget it, saved passwords can't be recovered.
+Everything else (names, ranks, notes) stays readable.
+
+If you only want to track ranks, you still set a master password to open the
+app — you just don't have to save any logins behind it.
+
+## Verify your download (optional)
+
+Every release ships a `.sha256` file next to the `.exe`. To confirm your
+download wasn't tampered with, run this in PowerShell (it prints `True`):
+
+```powershell
+(Get-FileHash MarvelAccountKeeper-windows.exe).Hash -eq `
+  (Get-Content MarvelAccountKeeper-windows.exe.sha256).Trim()
+```
 
 ## Where your data lives
 
