@@ -2042,10 +2042,17 @@ html[data-theme="light"] .local-rivals-icon{
   color:var(--muted);
   font-family:var(--font-mono);
   font-size:11px;
+  min-width:0;
+  overflow:hidden;
+  white-space:nowrap;
 }
+/* KDA + duration stay fixed; the mode label gives up space (ellipsis) first
+   so the line never spills under the SR/date column at narrow widths. */
+.match-kda, .match-dur, .match-sep{ flex-shrink:0; }
+.match-mode{ min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .match-kda b{ color:var(--fg-2); font-weight:600; }
 .match-sep{ opacity:.45; }
-.match-right{ display:flex; flex-direction:row; align-items:center; gap:8px; padding-right:10px; }
+.match-right{ display:flex; flex-direction:row; align-items:center; gap:8px; padding-right:10px; flex-shrink:0; }
 .match-right-stack{ display:flex; flex-direction:column; align-items:flex-end; gap:2px; text-align:right; }
 .match-sr{
   font-family:var(--font-mono);
