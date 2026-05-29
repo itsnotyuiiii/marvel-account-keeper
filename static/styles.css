@@ -2006,14 +2006,18 @@ html[data-theme="light"] .local-rivals-icon{
   border:1px solid var(--border);
 }
 .match-info{ min-width:0; display:flex; flex-direction:column; gap:2px; }
-.match-line1{ display:flex; align-items:center; gap:6px; }
+.match-line1{ display:flex; align-items:center; gap:6px; min-width:0; }
 .match-hero-name{
   font-weight:600;
   color:var(--fg);
-  overflow-wrap:anywhere;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  min-width:0;
 }
 .match-badge{
   display:inline-block;
+  flex-shrink:0;
   padding:1px 5px;
   border-radius:4px;
   font-family:var(--font-mono);
