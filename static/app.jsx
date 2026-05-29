@@ -504,7 +504,10 @@ function baseFormFor(acct) {
 // Render one match-history row. Win/loss is encoded as a left color stripe;
 // SR delta is green/red; MVP/SVP get a small badge. Hero/map artwork is loaded
 // from marvelrivalsapi.com which hosts the assets (URLs come back relative).
+// Clicking the row expands a detail panel with the full, untruncated fields —
+// add more entries to `details` below as the backend exposes more per-match data.
 function MatchRow({ m }) {
+  const [open, setOpen] = React.useState(false);
   const sr = typeof m.sr_delta === "number" ? m.sr_delta : 0;
   const ago = (() => {
     if (!m.ts) return "";
@@ -521,8 +524,35 @@ function MatchRow({ m }) {
   const heroSrc = m.hero_image
     ? `https://marvelrivalsapi.com${m.hero_image}`
     : "";
+  const mapSrc = m.map_thumbnail
+    ? `https://marvelrivalsapi.com${m.map_thumbnail}`
+    : "";
+  const srStr = sr > 0 ? `+${sr.toFixed(1)}` : sr.toFixed(1);
+
+  // Full-field list for the expanded panel. Falsy values are dropped, so new
+  // fields can be appended freely without rendering blanks for older matches.
+  const details = [
+    ["Result", m.is_win ? "Victory" : "Defeat"],
+    ["Hero", m.hero_name || "Unknown"],
+    ["K / D / A", `${m.kda[0]} / ${m.kda[1]} / ${m.kda[2]}`],
+    ["Mode", m.mode_label],
+    ["Duration", duration],
+    ["SR change", srStr],
+    ["SR after", typeof m.sr_after === "number" && m.sr_after ? m.sr_after.toFixed(1) : ""],
+    ["Season", m.season ? `Season ${m.season}` : ""],
+    ["Played", m.ts ? new Date(m.ts * 1000).toLocaleString() : ""],
+  ].filter(([, v]) => v !== "" && v != null);
+
+  const toggle = () => setOpen((o) => !o);
+
   return (
-    <div className={"match-row " + (m.is_win ? "match-win" : "match-loss")}>
+    <div className={"match-row " + (m.is_win ? "match-win" : "match-loss")
+                    + (open ? " is-open" : "")}
+         role="button" tabIndex={0} aria-expanded={open}
+         onClick={toggle}
+         onKeyDown={(e) => {
+           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+         }}>
       <span className="match-stripe" />
       {heroSrc && (
         <img className="match-hero-img" src={heroSrc} alt=""
@@ -546,11 +576,30 @@ function MatchRow({ m }) {
         </div>
       </div>
       <div className="match-right">
-        <span className={"match-sr " + (sr > 0 ? "match-sr-up" : sr < 0 ? "match-sr-down" : "")}>
-          {sr > 0 ? `+${sr.toFixed(1)}` : sr.toFixed(1)}
-        </span>
-        <span className="match-ago">{ago}</span>
+        <div className="match-right-stack">
+          <span className={"match-sr " + (sr > 0 ? "match-sr-up" : sr < 0 ? "match-sr-down" : "")}>
+            {srStr}
+          </span>
+          <span className="match-ago">{ago}</span>
+        </div>
+        <span className="match-chev" aria-hidden="true">▸</span>
       </div>
+      {open && (
+        <div className="match-details" onClick={(e) => e.stopPropagation()}>
+          {mapSrc && (
+            <img className="match-map-img" src={mapSrc} alt=""
+                 onError={(e) => { e.currentTarget.style.display = "none"; }} />
+          )}
+          <dl className="match-detail-grid">
+            {details.map(([k, v]) => (
+              <div className="md-item" key={k}>
+                <dt className="md-k">{k}</dt>
+                <dd className="md-v">{v}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
     </div>
   );
 }
