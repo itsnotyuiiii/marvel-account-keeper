@@ -1,11 +1,11 @@
 # Marvel Account Keeper
 
 A small, local desktop app for tracking your Marvel Rivals / Steam accounts —
-in-game name, username, email, password, and current / peak rank. It runs
-entirely on your machine: your vault never leaves your PC, and the only time
-the app touches the internet is when *you* refresh a rank (it looks the player
-up on public Marvel Rivals stat sites) or when it quietly checks GitHub for a
-newer version. Your accounts and passwords are never uploaded anywhere.
+in-game name, username, email, password, and current / peak rank. Everything
+lives on your own machine. The only time it touches the internet is when *you*
+refresh a rank (a player lookup on public Marvel Rivals stat sites) or when it
+checks GitHub for a newer version — your accounts and passwords are never
+uploaded anywhere.
 
 ![icon](icon.png)
 
@@ -15,31 +15,34 @@ newer version. Your accounts and passwords are never uploaded anywhere.
 
 There's nothing to "install" — Marvel Account Keeper is a single file you run.
 
-1. **Download the app.** Open the
+1. **Download the app.** On the
    [**Releases page**](https://github.com/itsnotyuiiii/marvel-account-keeper/releases),
-   find the newest release at the top, and under **Assets** download
-   **`MarvelAccountKeeper-windows.exe`**. That's the file 99% of people want.
-2. **Put it somewhere handy** — your Desktop, or a folder like
+   open the newest release and grab **`MarvelAccountKeeper-windows.exe`** under
+   **Assets**. That's the file 99% of people want.
+2. **Put it somewhere handy** — Desktop, or a folder like
    `Documents\Marvel Account Keeper`. It runs fine from anywhere.
-3. **Double-click it.** The app opens in its own window — no terminal
-   window, no setup screen, nothing else to click. (On the rare PC without a
-   built-in app window component, it opens in your web browser instead.)
-4. **When you're done, close the window.** The app quits with it — nothing is
-   left running in the background. (If it opened in your browser instead,
-   close the tab and it shuts down a couple of minutes later.)
-
-No Python, no installer, no setup — everything runs on your own PC. The app
-works fully offline; the only features that reach the internet are the
-optional **rank refresh** (looks your players up on public Marvel Rivals stat
-sites) and a background **update check** against GitHub. Your vault is never
-uploaded.
+3. **Double-click it.** The app opens in its own window — no terminal, no
+   installer, no setup screen. (On the rare PC missing the built-in window
+   component, it opens in your web browser instead.)
+4. **When you're done, close the window** and the app quits with it — nothing
+   left running. (If it opened in your browser, close the tab; it shuts down a
+   couple of minutes later.)
 
 > [!NOTE]
-> The first time you run it, Windows may show a blue **"Windows protected your
-> PC"** box, because the app isn't code-signed. Click **More info → Run
-> anyway**. It's safe — the source code is public, and the app only ever talks
-> to the internet to refresh ranks or check for an update; your saved accounts
-> never leave your PC.
+> ### "Windows protected your PC"?
+> The first launch may show a blue SmartScreen box. **This is expected and the
+> app is safe to run** — Windows shows it for any program that isn't signed
+> with a paid certificate, which independent free apps like this one don't buy.
+> It is *not* a virus warning.
+>
+> Click **More info → Run anyway**. You only do this once.
+>
+> Why you can trust it: the entire source code is public in this repo, so
+> anyone can read exactly what it does. It keeps your vault on your own PC and
+> only reaches the internet to refresh ranks or check for updates. If you like,
+> you can verify your download is untampered — every release ships a
+> `.sha256` file next to the `.exe`; compare it with
+> `Get-FileHash MarvelAccountKeeper-windows.exe` in PowerShell.
 
 ## Mac & Linux
 
@@ -95,7 +98,7 @@ It only covers running from source or building the executable yourself.
 
 ### Running from source
 
-You don't need the executable — with Python 3.10+ installed:
+With Python 3.10+ installed:
 
 ```sh
 pip install -r requirements.txt
