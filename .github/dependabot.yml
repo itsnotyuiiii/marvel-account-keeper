@@ -3,14 +3,17 @@
 
 version: 2
 updates:
-  # Python deps (requirements.txt)
+  # Python deps (requirements.txt / requirements-dev.txt)
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
 
-  # GitHub Actions used in the release workflow (flags action version bumps automatically)
+  # GitHub Actions in the release workflow. Actions are SHA-pinned with a
+  # version comment; Dependabot bumps both the SHA and the comment.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
