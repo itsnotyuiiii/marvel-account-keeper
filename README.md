@@ -8,10 +8,6 @@ rank or it checks GitHub for an update.
 Don't want to store logins? You don't have to. Username, email, and password
 are all optional — you can use it purely to track ranks if that's all you want.
 
-![icon](icon.png)
-
-![Marvel Rivals Account Tracker demo](demo.gif)
-
 ## Download (Windows)
 
 1. Go to the
