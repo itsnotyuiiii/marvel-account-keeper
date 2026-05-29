@@ -7,4 +7,4 @@ cloudscraper>=1.2.71
 # Native OS window (EdgeWebView2 on Windows, WKWebView on macOS, WebKitGTK on
 # Linux). Imported lazily — the app falls back to the default browser if it's
 # missing or has no platform backend (e.g. Linux without WebKitGTK).
-pywebview>=5.0
+pywebview>=6.2.1
