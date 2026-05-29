@@ -85,17 +85,19 @@ jobs:
       - name: Create / update the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Passed via env, never interpolated into the script body, so a
+          # crafted tag name can't inject shell commands.
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          tag="${{ github.ref_name }}"
-          repo="${{ github.repository }}"
           # Idempotent: create on first run; if the release already exists for
           # this tag, just (re)upload the assets, replacing any of the same name.
-          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            gh release upload "$tag" --repo "$repo" --clobber artifacts/*
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" --clobber artifacts/*
           else
-            gh release create "$tag" \
-              --repo "$repo" \
-              --title "$tag" \
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TAG" \
               --generate-notes \
               artifacts/*
           fi
