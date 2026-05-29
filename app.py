@@ -49,7 +49,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.6.2"
+APP_VERSION = "2.7.0"
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
 # Update-check / self-apply settings. The packaged .exe checks the GitHub
@@ -178,6 +178,10 @@ DATA_DIR = _data_dir()
 VAULT_PATH = DATA_DIR / "vault.json"
 BACKUP_DIR = DATA_DIR / "backups"
 EXTRA_BACKUP_DIR = Path.home() / "Documents" / "MarvelAccountsBackups"
+# Single-instance guard: an OS-locked file plus the running instance's URL, so a
+# second launch can detect the first and surface it instead of starting again.
+INSTANCE_LOCK_PATH = DATA_DIR / "instance.lock"
+INSTANCE_URL_PATH = DATA_DIR / "instance.url"
 
 
 # ---------- Steam install detection ----------
@@ -2732,6 +2736,13 @@ def _free_port() -> int:
 def _shutdown(reason: str) -> None:
     """Print a parting line and end the process."""
     print(f"\n  {reason} — Marvel Rivals Account Tracker stopped. Your vault is saved.")
+    # os._exit skips atexit, so drop the instance URL marker here. The OS frees
+    # the lock itself on exit; a leftover marker is harmless either way.
+    if _INSTANCE_LOCK is not None:
+        try:
+            INSTANCE_URL_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
     os._exit(0)
 
 
@@ -2867,6 +2878,28 @@ def _run_native_window(url: str, port: int) -> bool:
     return True
 
 
+_INSTANCE_LOCK = None  # held file object; kept alive for the whole process
+
+
+def _acquire_single_instance(lock_path: Path):
+    """Take an exclusive OS lock so only one packaged instance runs per data
+    dir. Returns the held file object on success, or None if another instance
+    already holds it. The OS releases the lock when the process exits — even on
+    a crash — so there is no stale-lock file to clean up."""
+    f = open(lock_path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
 def main() -> None:
     # Zero arguments is the intended path — a double-clicked .exe just works.
     # The flags below exist only for the rare headless / power-user case.
@@ -2883,10 +2916,36 @@ def main() -> None:
                         help="open the browser but don't quit when it closes")
     args = parser.parse_args()
 
+    # Single-instance guard (packaged builds only — running from source stays
+    # unrestricted for dev/tests). The lock is scoped to the data dir, so a
+    # separate MARVEL_KEEPER_DATA vault is allowed its own instance.
+    global _INSTANCE_LOCK
+    if _is_packaged():
+        _INSTANCE_LOCK = _acquire_single_instance(INSTANCE_LOCK_PATH)
+        if _INSTANCE_LOCK is None:
+            try:
+                running_url = INSTANCE_URL_PATH.read_text(encoding="utf-8").strip()
+            except OSError:
+                running_url = ""
+            print("  Marvel Rivals Account Tracker is already running.")
+            if running_url:
+                print(f"  Opening the running app at {running_url}")
+                try:
+                    webbrowser.open(running_url)
+                except Exception:
+                    pass
+            sys.exit(0)
+
     # Quiet the per-request Werkzeug log lines — the banner is what matters.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}"
+    # Record where this instance is serving so a second launch can surface it.
+    if _INSTANCE_LOCK is not None:
+        try:
+            INSTANCE_URL_PATH.write_text(url, encoding="utf-8")
+        except OSError:
+            pass
     open_browser = not args.no_browser
     # Default: behave like an app — quit shortly after the browser closes so
     # nothing is left running. Headless or --keep-alive opt out of that.
@@ -2931,6 +2990,12 @@ def main() -> None:
         print(f"\n  Could not start on port {port}: {e}")
         print("  Try a different --port, or omit it to pick one automatically.")
         return
+    finally:
+        if _INSTANCE_LOCK is not None:
+            try:
+                INSTANCE_URL_PATH.unlink(missing_ok=True)
+            except OSError:
+                pass
     print("\n  Marvel Rivals Account Tracker stopped. Your vault is saved.")
 
 
