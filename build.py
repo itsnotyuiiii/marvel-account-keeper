@@ -1,8 +1,8 @@
-"""Build a single-file executable for Marvel Account Keeper.
+"""Build a single-file executable for Marvel Rivals Account Tracker.
 
     python build.py
 
-Produces dist/MarvelAccountKeeper(.exe) with PyInstaller. The artifact is
+Produces dist/MarvelRivalsAccountTracker(.exe) with PyInstaller. The artifact is
 native to whichever OS you run this on (Windows .exe, macOS/Linux binary).
 See BUILDING.md for the full walkthrough.
 """
@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-NAME = "MarvelAccountKeeper"
+NAME = "MarvelRivalsAccountTracker"
 BUILD_INFO_PATH = ROOT / "_build_info.json"
 
 

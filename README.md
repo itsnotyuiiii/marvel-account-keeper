@@ -1,4 +1,4 @@
-# Marvel Account Keeper
+# Marvel Rivals Account Tracker
 
 Keep track of your Marvel Rivals / Steam accounts in one place: in-game name,
 rank, and — if you want — username, email, and password. It runs on your own
@@ -10,13 +10,13 @@ are all optional — you can use it purely to track ranks if that's all you want
 
 ![icon](icon.png)
 
-![Marvel Account Keeper demo](demo.gif)
+![Marvel Rivals Account Tracker demo](demo.gif)
 
 ## Download (Windows)
 
 1. Go to the
    [**Releases page**](https://github.com/itsnotyuiiii/marvel-account-keeper/releases).
-2. Download **`MarvelAccountKeeper-windows.exe`** from the newest release.
+2. Download **`MarvelRivalsAccountTracker-windows.exe`** from the newest release.
 3. Double-click it. That's it — no install, no setup. The app opens in a window.
 4. Done? Close the window. It shuts down with it.
 
@@ -33,9 +33,9 @@ are all optional — you can use it purely to track ranks if that's all you want
 
 ## Download (Mac & Linux)
 
-Grab `MarvelAccountKeeper-macos` or `MarvelAccountKeeper-linux` from the
+Grab `MarvelRivalsAccountTracker-macos` or `MarvelRivalsAccountTracker-linux` from the
 [Releases page](https://github.com/itsnotyuiiii/marvel-account-keeper/releases).
-Run `chmod +x MarvelAccountKeeper-macos` once in a terminal, then open it. On
+Run `chmod +x MarvelRivalsAccountTracker-macos` once in a terminal, then open it. On
 macOS you may also need *System Settings → Privacy & Security → Open Anyway*.
 
 ## First launch
@@ -56,8 +56,8 @@ Every release ships a `.sha256` file next to the `.exe`. To confirm your
 download wasn't tampered with, run this in PowerShell (it prints `True`):
 
 ```powershell
-(Get-FileHash MarvelAccountKeeper-windows.exe).Hash -eq `
-  (Get-Content MarvelAccountKeeper-windows.exe.sha256).Trim()
+(Get-FileHash MarvelRivalsAccountTracker-windows.exe).Hash -eq `
+  (Get-Content MarvelRivalsAccountTracker-windows.exe.sha256).Trim()
 ```
 
 ## Where your data lives

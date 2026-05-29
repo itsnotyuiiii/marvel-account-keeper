@@ -1,4 +1,4 @@
-# Building Marvel Account Keeper
+# Building Marvel Rivals Account Tracker
 
 How to produce the standalone executable yourself — locally, without GitHub
 Actions. The CI workflow (`.github/workflows/release.yml`) does exactly these
@@ -40,9 +40,9 @@ Output:
 
 | OS      | File                          |
 |---------|-------------------------------|
-| Windows | `dist/MarvelAccountKeeper.exe` |
-| macOS   | `dist/MarvelAccountKeeper`     |
-| Linux   | `dist/MarvelAccountKeeper`     |
+| Windows | `dist/MarvelRivalsAccountTracker.exe` |
+| macOS   | `dist/MarvelRivalsAccountTracker`     |
+| Linux   | `dist/MarvelRivalsAccountTracker`     |
 
 The build is clean each time — `build.py` deletes `build/`, `dist/` and the
 generated `.spec` before running.
@@ -53,9 +53,9 @@ Just run the produced file:
 
 ```sh
 # Windows
-dist\MarvelAccountKeeper.exe
+dist\MarvelRivalsAccountTracker.exe
 # macOS / Linux
-./dist/MarvelAccountKeeper
+./dist/MarvelRivalsAccountTracker
 ```
 
 It should print a banner with a `http://127.0.0.1:<port>` URL and open your

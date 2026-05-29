@@ -17,7 +17,7 @@
 
   // ── caption track — 7 beats, loops every TOTAL ms ──────────────────────────
   var BEATS = [
-    { tag: "Marvel Account Keeper",
+    { tag: "Marvel Rivals Account Tracker",
       text: "A local, encrypted vault for all your Marvel Rivals accounts." },
     { tag: "Cards view",
       text: "Every account at a glance — rank-colored, with neon borders on your mains." },

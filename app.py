@@ -56,7 +56,7 @@ GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 # release feed on boot and offers a one-click update when a newer tag is
 # available. Running from source (not frozen) hides the banner entirely.
 GITHUB_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO_SLUG}/releases/latest"
-UPDATE_ASSET_NAME = "MarvelAccountKeeper-windows.exe"
+UPDATE_ASSET_NAME = "MarvelRivalsAccountTracker-windows.exe"
 UPDATE_CHECKSUM_NAME = UPDATE_ASSET_NAME + ".sha256"
 UPDATE_MIN_DOWNLOAD_BYTES = 1_000_000  # PyInstaller exes are 10MB+; anything smaller is junk
 VERIFIER_PLAINTEXT = b"VAULT_OK::v1"
@@ -2731,7 +2731,7 @@ def _free_port() -> int:
 
 def _shutdown(reason: str) -> None:
     """Print a parting line and end the process."""
-    print(f"\n  {reason} — Marvel Account Keeper stopped. Your vault is saved.")
+    print(f"\n  {reason} — Marvel Rivals Account Tracker stopped. Your vault is saved.")
     os._exit(0)
 
 
@@ -2852,7 +2852,7 @@ def _run_native_window(url: str, port: int) -> bool:
 
     try:
         webview.create_window(
-            "Marvel Account Keeper", url,
+            "Marvel Rivals Account Tracker", url,
             width=1240, height=860, min_size=(900, 640),
         )
         webview.start()  # blocks until the window is closed
@@ -2871,7 +2871,7 @@ def main() -> None:
     # Zero arguments is the intended path — a double-clicked .exe just works.
     # The flags below exist only for the rare headless / power-user case.
     parser = argparse.ArgumentParser(
-        prog="MarvelAccountKeeper",
+        prog="MarvelRivalsAccountTracker",
         description="Local encrypted Marvel Rivals account vault. "
                     "Just run it with no arguments — the flags are optional.")
     parser.add_argument("--no-browser", action="store_true",
@@ -2894,7 +2894,7 @@ def main() -> None:
 
     line = "=" * 60
     print(line)
-    print("  Marvel Account Keeper")
+    print("  Marvel Rivals Account Tracker")
     print("  " + "-" * 56)
     print(f"  Address    : {url}")
     print(f"  Vault file : {VAULT_PATH}")
@@ -2905,7 +2905,7 @@ def main() -> None:
     elif auto_stop:
         # Default mode — a native window or the browser opens automatically,
         # and closing it quits the app. The native path prints its own line.
-        print("  Opening Marvel Account Keeper… close it when you're done.")
+        print("  Opening Marvel Rivals Account Tracker… close it when you're done.")
     else:
         print("  Your browser will open; this window stays up (Ctrl+C quits).")
     print(line)
@@ -2931,7 +2931,7 @@ def main() -> None:
         print(f"\n  Could not start on port {port}: {e}")
         print("  Try a different --port, or omit it to pick one automatically.")
         return
-    print("\n  Marvel Account Keeper stopped. Your vault is saved.")
+    print("\n  Marvel Rivals Account Tracker stopped. Your vault is saved.")
 
 
 if __name__ == "__main__":

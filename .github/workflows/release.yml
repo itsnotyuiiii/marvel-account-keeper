@@ -22,14 +22,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            built: dist/MarvelAccountKeeper.exe
-            asset: MarvelAccountKeeper-windows.exe
+            built: dist/MarvelRivalsAccountTracker.exe
+            asset: MarvelRivalsAccountTracker-windows.exe
           - os: macos-latest
-            built: dist/MarvelAccountKeeper
-            asset: MarvelAccountKeeper-macos
+            built: dist/MarvelRivalsAccountTracker
+            asset: MarvelRivalsAccountTracker-macos
           - os: ubuntu-latest
-            built: dist/MarvelAccountKeeper
-            asset: MarvelAccountKeeper-linux
+            built: dist/MarvelRivalsAccountTracker
+            asset: MarvelRivalsAccountTracker-linux
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:

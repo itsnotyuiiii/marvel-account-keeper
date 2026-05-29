@@ -344,7 +344,7 @@ function Header({ count, lockIn, lockoutMinutes, onLock, onSettings, theme, onTo
       <div className="app-head-l">
         <DuckMark onQuack={quack} />
         <div className="app-title-wrap">
-          <span className="app-eyebrow">MARVEL · ACCOUNT KEEPER</span>
+          <span className="app-eyebrow">MARVEL RIVALS · ACCOUNT TRACKER</span>
           <span className="app-aesth">by Yui</span>
         </div>
       </div>
@@ -1032,7 +1032,7 @@ function LockScreen({ mode, accountCount, rememberSupported, buildInfo, onSubmit
       <div className="lock-grid" aria-hidden="true" />
 
       <main className="lock-main">
-        <div className="lock-eyebrow">MARVEL RIVALS · ACCOUNT KEEPER</div>
+        <div className="lock-eyebrow">MARVEL RIVALS · ACCOUNT TRACKER</div>
         <h1 className="lock-title">
           {isInit ? (
             <>

@@ -1,6 +1,6 @@
 # Security
 
-Marvel Account Keeper is a **local-only** desktop app. It has no user accounts,
+Marvel Rivals Account Tracker is a **local-only** desktop app. It has no user accounts,
 no backend server, and no network service beyond a loopback web UI.
 
 ## How your data is protected
