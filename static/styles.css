@@ -2200,24 +2200,40 @@ html[data-theme="light"] .uid-pill{
 
 /* Top-of-window progress bar shown while a "Refresh stats" (refresh-all) is in
    flight. The server runs the refresh as one blocking request with no per-
-   account progress events, so this is an indeterminate sweep, not a percentage.
-   Under prefers-reduced-motion the global rule below freezes the animation —
-   the bar stays visible as a static activity indicator. */
+   account progress events, so this is an indeterminate slide, not a percentage. */
 .app-progress{
   position:fixed;
   top:0; left:0; right:0;
-  height:3px;
+  height:4px;
   z-index:80;
-  background:linear-gradient(90deg,
-    transparent 0%, var(--accent) 45%, var(--accent) 55%, transparent 100%);
-  background-size:40% 100%;
-  background-repeat:no-repeat;
-  animation:app-progress-sweep 1.1s ease-in-out infinite;
+  overflow:hidden;
+  /* faint track so the bar's lane reads even between sweeps */
+  background:rgba(109,91,240,.20);
   pointer-events:none;
 }
-@keyframes app-progress-sweep{
-  0%{ background-position:-40% 0; }
-  100%{ background-position:140% 0; }
+/* A vivid segment that slides fully across on the brand gradient (matches the
+   app icon). Uses transform (GPU-composited, reliably animates in WebView2)
+   instead of the old near-white background-position sweep that read as a static
+   glow. */
+.app-progress::before{
+  content:"";
+  position:absolute;
+  top:0; bottom:0; left:0;
+  width:42%;
+  border-radius:0 3px 3px 0;
+  background:linear-gradient(90deg,#3B82F6 0%,#6D5BF0 50%,#E5267F 100%);
+  box-shadow:0 0 8px rgba(109,91,240,.7);
+  animation:app-progress-slide 1.15s cubic-bezier(.65,0,.35,1) infinite;
+}
+@keyframes app-progress-slide{
+  0%{ transform:translateX(-110%); }
+  100%{ transform:translateX(338%); }
+}
+/* Reduced motion: the global rule below freezes the slide, so pin the segment
+   to full width — a static vivid bar still clearly signals "working" rather
+   than a segment stuck mid-track. */
+@media (prefers-reduced-motion: reduce){
+  .app-progress::before{ width:100%; }
 }
 
 /* The toast lives inside an always-present aria-live region so screen readers
