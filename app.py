@@ -50,7 +50,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.8.3"
+APP_VERSION = "2.8.4"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -2693,38 +2693,20 @@ def apply_update():
         return jsonify({"error": "install_failed",
                         "message": f"Could not install the update: {e}"}), 500
 
-    # 6. Relaunch automatically. Spawn the freshly-installed exe with
-    # --post-update (it waits for us to release the single-instance lock), then
-    # shut ourselves down. Our exit unlocks the renamed .old.exe so the new
-    # process's _cleanup_post_update can delete it — fixing both the leftover
-    # .old.exe AND the "you must reopen it yourself" step. Best-effort: if the
-    # spawn fails we still report success and fall back to manual reopen.
-    import subprocess
-    restarted = False
-    try:
-        creationflags = 0
-        if os.name == "nt":
-            creationflags = (getattr(subprocess, "DETACHED_PROCESS", 0)
-                             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-        subprocess.Popen([str(exe), "--post-update"], cwd=str(parent),
-                         close_fds=True, creationflags=creationflags)
-        restarted = True
-    except OSError:
-        restarted = False
-
-    if restarted:
-        # Let the HTTP response reach the client before we exit.
-        threading.Timer(1.0, lambda: _shutdown("Updated — restarting")).start()
-
+    # NOTE: auto-restart was tried in 2.8.2/2.8.3 and REVERTED here. Spawning
+    # this same PyInstaller-onefile exe as a child made the child inherit the
+    # parent's _MEIPASS2 env var, so it reused the parent's extraction dir
+    # instead of unpacking its own — the child crashed with TemplateNotFound
+    # and the parent couldn't remove its _MEIxxxx temp dir on exit. Back to the
+    # proven behavior: install, then ask the user to reopen. The startup
+    # _cleanup_post_update reaper still deletes the leftover .old.exe on the
+    # next launch, so the "old exe on the Desktop" complaint stays fixed.
     return jsonify({
         "ok": True,
         "installed": latest_tag.lstrip("vV"),
         "verified": verified,
-        "restarting": restarted,
-        "message": (f"v{latest_tag.lstrip('vV')} installed — restarting…"
-                    if restarted else
-                    f"v{latest_tag.lstrip('vV')} downloaded. Close the app and reopen "
-                    f"it to run the new version."),
+        "message": f"v{latest_tag.lstrip('vV')} installed. Close the app and reopen "
+                   f"it to run the new version.",
     })
 
 
@@ -3030,11 +3012,6 @@ def main() -> None:
                         help="serve on a fixed port instead of a random one")
     parser.add_argument("--keep-alive", action="store_true",
                         help="open the browser but don't quit when it closes")
-    # Internal: set by the self-updater when it relaunches the new exe. Tells us
-    # to wait for the prior (exiting) instance to release the single-instance
-    # lock instead of treating it as "already running" and bailing.
-    parser.add_argument("--post-update", action="store_true",
-                        help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     # Single-instance guard (packaged builds only — running from source stays
@@ -3043,14 +3020,6 @@ def main() -> None:
     global _INSTANCE_LOCK
     if _is_packaged():
         _INSTANCE_LOCK = _acquire_single_instance(INSTANCE_LOCK_PATH)
-        if _INSTANCE_LOCK is None and args.post_update:
-            # Relaunched by the self-updater: the prior instance is shutting
-            # down but may still hold the lock. Wait for it to release rather
-            # than bail, otherwise the update would never actually start.
-            deadline = time.time() + 15
-            while _INSTANCE_LOCK is None and time.time() < deadline:
-                time.sleep(0.3)
-                _INSTANCE_LOCK = _acquire_single_instance(INSTANCE_LOCK_PATH)
         if _INSTANCE_LOCK is None:
             # Already running — surface the existing window instead of starting
             # a second copy (which previously fell through to the browser path).
