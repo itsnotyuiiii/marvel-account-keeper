@@ -554,10 +554,10 @@ function MatchRow({ m }) {
            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
          }}>
       <span className="match-stripe" />
-      {heroSrc && (
-        <img className="match-hero-img" src={heroSrc} alt=""
-             onError={(e) => { e.currentTarget.style.display = "none"; }} />
-      )}
+      {heroSrc
+        ? <img className="match-hero-img" src={heroSrc} alt=""
+               onError={(e) => { e.currentTarget.classList.add("is-broken"); }} />
+        : <span className="match-hero-img match-hero-ph" aria-hidden="true" />}
       <div className="match-info">
         <div className="match-line1">
           <span className="match-hero-name">{m.hero_name || "Unknown"}</span>
