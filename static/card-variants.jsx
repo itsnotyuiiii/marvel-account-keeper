@@ -460,7 +460,6 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         "--label-fg":  lab.color || "var(--muted)",
         "--neon-fg":   acct.neon ? (TAG_COLORS[acct.border_color] || cur?.fg || "#9aa3b2") : "transparent",
       }}
-      role="button"
       tabIndex={0}
       aria-label={"Open " + (acct.in_game_name || "account")}
       onClick={() => onOpen(acct)}
@@ -589,9 +588,8 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
       data-label={lab.kind}
     >
       <div className="tbl-row-main"
-           role="button"
            tabIndex={0}
-           aria-expanded={open}
+           aria-label={(open ? "Collapse " : "Expand ") + (acct.in_game_name || "account") + " details"}
            onClick={() => setOpen((p) => !p)}
            onKeyDown={(e) => {
              if (e.target !== e.currentTarget) return;
@@ -744,7 +742,6 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
     <article
       className={"lad-card lad-card-" + lab.kind + (isIncomplete(acct) ? " is-incomplete" : "")}
       style={{ "--tier-fg": cur?.fg || "var(--muted)" }}
-      role="button"
       tabIndex={0}
       aria-label={"Open " + (acct.in_game_name || "account")}
       onClick={() => onOpen(acct)}

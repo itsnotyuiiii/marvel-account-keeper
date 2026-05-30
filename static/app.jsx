@@ -731,20 +731,29 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
   const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]),' +
     ' textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-  // Move focus into the drawer on open and restore it to the trigger on close,
+  // Capture the triggering element on open and restore focus to it on close,
   // so keyboard users aren't stranded in the background grid behind the panel.
+  // Keyed on `open` only: fires on the open/close transition, not when the
+  // account swaps while the drawer stays open.
   React.useEffect(() => {
     if (!open) return;
     restoreFocusRef.current = document.activeElement;
-    const t = setTimeout(() => {
-      asideRef.current?.querySelector(FOCUSABLE)?.focus();
-    }, 0);
     return () => {
-      clearTimeout(t);
       const prev = restoreFocusRef.current;
       if (prev && typeof prev.focus === "function") prev.focus();
     };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Move focus into the drawer's first control on open AND whenever the account
+  // changes while it's already open (swapping accounts re-points the content,
+  // so focus should follow into the new fields rather than stay put).
+  React.useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => {
+      asideRef.current?.querySelector(FOCUSABLE)?.focus();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [open, acct?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Trap Tab within the drawer while it's open (Esc-to-close is handled
   // globally in App). Wraps at both ends so focus never escapes to the grid.

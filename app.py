@@ -50,7 +50,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.8.1"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -1789,11 +1789,20 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
     tracker_ign = parsed.pop("tracker_handle", None)
     if tracker_ign and tracker_ign != ign:
         out["in_game_name"] = tracker_ign
-    # Never clobber an already-verified UID with tracker's — only backfill when
-    # the account has none. (Tracker's platformUserId is authoritative for the
-    # looked-up name, but a stored UID was claimed deliberately.)
-    if (acct.get("rivals_uid") or "").strip():
-        parsed.pop("rivals_uid", None)
+    # Guard the auto-backfilled UID two ways before adopting it:
+    #   1. Never clobber an already-verified UID — a stored UID was claimed
+    #      deliberately; only fill when the account has none.
+    #   2. Only accept it when tracker's returned handle matches the name we
+    #      queried (case-insensitively). tracker.gg does an exact ign lookup,
+    #      so a mismatch means a rename or a fuzzy/ambiguous match — binding the
+    #      wrong NetEase UID there would silently poison every later UID-keyed
+    #      call. On a mismatch we still adopt the rank + corrected name above;
+    #      the next refresh (name now matching) will bind the UID safely.
+    if parsed.get("rivals_uid"):
+        existing_uid = (acct.get("rivals_uid") or "").strip()
+        handle_matches = bool(tracker_ign) and tracker_ign.strip().lower() == ign.lower()
+        if existing_uid or not handle_matches:
+            parsed.pop("rivals_uid", None)
     # Peak monotonicity: never overwrite a higher existing peak with a lower
     # one. tracker.gg sometimes has incomplete season history for an account
     # while marvelrivalsapi (or a prior refresh) captured a true higher peak.
@@ -1944,11 +1953,16 @@ def _slim_match(raw: dict[str, Any], player_uid: int | str | None) -> dict[str, 
     mp = raw.get("match_player") if isinstance(raw.get("match_player"), dict) else {}
     hero = mp.get("player_hero") if isinstance(mp.get("player_hero"), dict) else {}
     score = mp.get("score_info") if isinstance(mp.get("score_info"), dict) else {}
-    # is_win may arrive as a plain bool/int OR (an older shape) a nested
-    # object. Handle both so wins aren't silently reported as losses depending
-    # on which the API returns.
+    # is_win may arrive as a bool/int, a nested object {is_win: ...}, or a
+    # string ("true"/"false"/"0"). Normalize all three — note bool("false")
+    # is True, so strings must be parsed explicitly rather than coerced.
     iw = mp.get("is_win")
-    is_win_val = bool(iw.get("is_win")) if isinstance(iw, dict) else bool(iw)
+    if isinstance(iw, dict):
+        iw = iw.get("is_win")
+    if isinstance(iw, str):
+        is_win_val = iw.strip().lower() in ("1", "true", "yes", "win", "t")
+    else:
+        is_win_val = bool(iw)
 
     try:
         own_uid = int(player_uid) if player_uid is not None else None
