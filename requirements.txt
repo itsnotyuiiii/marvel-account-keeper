@@ -3,7 +3,7 @@ Flask>=3.0,<4.0
 cryptography>=42.0
 # tracker.gg sits behind Cloudflare bot protection — cloudscraper solves the
 # JS challenge transparently so the primary data source actually responds.
-cloudscraper>=1.2.71
+cloudscraper>=1.2.71,<2.0
 # Native OS window (EdgeWebView2 on Windows, WKWebView on macOS, WebKitGTK on
 # Linux). Imported lazily — the app falls back to the default browser if it's
 # missing or has no platform backend (e.g. Linux without WebKitGTK).

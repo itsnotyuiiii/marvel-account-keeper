@@ -460,7 +460,14 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         "--label-fg":  lab.color || "var(--muted)",
         "--neon-fg":   acct.neon ? (TAG_COLORS[acct.border_color] || cur?.fg || "#9aa3b2") : "transparent",
       }}
+      role="button"
+      tabIndex={0}
+      aria-label={"Open " + (acct.in_game_name || "account")}
       onClick={() => onOpen(acct)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(acct); }
+      }}
     >
       <div className="rcard-wash" aria-hidden="true" />
 
@@ -581,7 +588,15 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
       className={"tbl-row" + (open ? " is-open" : "") + (isIncomplete(acct) ? " is-incomplete" : "")}
       data-label={lab.kind}
     >
-      <div className="tbl-row-main" onClick={() => setOpen((p) => !p)}>
+      <div className="tbl-row-main"
+           role="button"
+           tabIndex={0}
+           aria-expanded={open}
+           onClick={() => setOpen((p) => !p)}
+           onKeyDown={(e) => {
+             if (e.target !== e.currentTarget) return;
+             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((p) => !p); }
+           }}>
         <button
           type="button"
           className="tbl-pin"
@@ -729,7 +744,14 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
     <article
       className={"lad-card lad-card-" + lab.kind + (isIncomplete(acct) ? " is-incomplete" : "")}
       style={{ "--tier-fg": cur?.fg || "var(--muted)" }}
+      role="button"
+      tabIndex={0}
+      aria-label={"Open " + (acct.in_game_name || "account")}
       onClick={() => onOpen(acct)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(acct); }
+      }}
     >
       <div className="lad-line">
         <span className={"lad-ign" + (acct.in_game_name ? "" : " lad-ign-empty")}>

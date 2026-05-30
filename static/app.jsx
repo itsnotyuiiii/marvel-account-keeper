@@ -725,6 +725,42 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
   // Timestamp of a restored draft, or null. Drives the banner.
   const [draftAt, setDraftAt] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
+  const asideRef = React.useRef(null);
+  const restoreFocusRef = React.useRef(null);
+
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]),' +
+    ' textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  // Move focus into the drawer on open and restore it to the trigger on close,
+  // so keyboard users aren't stranded in the background grid behind the panel.
+  React.useEffect(() => {
+    if (!open) return;
+    restoreFocusRef.current = document.activeElement;
+    const t = setTimeout(() => {
+      asideRef.current?.querySelector(FOCUSABLE)?.focus();
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      const prev = restoreFocusRef.current;
+      if (prev && typeof prev.focus === "function") prev.focus();
+    };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Trap Tab within the drawer while it's open (Esc-to-close is handled
+  // globally in App). Wraps at both ends so focus never escapes to the grid.
+  const onTrapKey = (e) => {
+    if (e.key !== "Tab") return;
+    const root = asideRef.current;
+    if (!root) return;
+    const f = root.querySelectorAll(FOCUSABLE);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  };
 
   // (Re)hydrate the form whenever the drawer opens. A saved draft for this
   // account is overlaid on top of the persisted values. (item 6)
@@ -784,8 +820,10 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
     <>
       <div className={"drawer-backdrop" + (open ? " open" : "")}
            onClick={onClose}
+           aria-hidden="true"
            title="Click to close (your draft is kept)" />
-      <aside className={"drawer" + (open ? " open" : "")} aria-hidden={!open}>
+      <aside ref={asideRef} onKeyDown={onTrapKey}
+             className={"drawer" + (open ? " open" : "")} aria-hidden={!open}>
         <header className="drawer-head">
           <div>
             <div className="drawer-eyebrow">{isNew ? "NEW ACCOUNT" : "EDIT ACCOUNT"}</div>
@@ -902,7 +940,8 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
                 <button key={c || "none"} type="button"
                 className={"drawer-sw" + (form.border_color === c ? " on" : "") + (c ? "" : " none")}
                 data-color={c}
-                aria-label={c || "none"}
+                aria-label={"Tag color: " + (c || "none")}
+                aria-pressed={form.border_color === c}
                 onClick={() => set("border_color", c)} />
                 )}
               </div>
@@ -1064,7 +1103,7 @@ function LockScreen({ mode, accountCount, rememberSupported, buildInfo, onSubmit
     if (busy || !pw.length) return;
     setErr("");
     if (isInit) {
-      if (pw.length < 6) { fail("Pick a password with at least 6 characters."); return; }
+      if (pw.length < 12) { fail("Pick a password with at least 12 characters."); return; }
       if (pw !== confirm) { fail("Passwords don't match."); return; }
     }
     setBusy(true);
@@ -1103,26 +1142,26 @@ function LockScreen({ mode, accountCount, rememberSupported, buildInfo, onSubmit
 
         <form className={"lock-form" + (shake ? " shake" : "")} onSubmit={submit}>
           <div className="lock-field">
-            <span className="lock-field-lbl">{isInit ? "PASSWORD" : "PASSWORD"}</span>
+            <label className="lock-field-lbl" htmlFor="lock-pw">PASSWORD</label>
             <input
+              id="lock-pw"
               ref={ref}
               type="password"
               autoComplete={isInit ? "new-password" : "current-password"}
               value={pw}
               onChange={(e) => { setPw(e.target.value); setErr(""); }}
-              placeholder="• • • • • • • •"
-              aria-label="Password" />
+              placeholder="• • • • • • • •" />
           </div>
           {isInit && (
             <div className="lock-field">
-              <span className="lock-field-lbl">CONFIRM</span>
+              <label className="lock-field-lbl" htmlFor="lock-confirm">CONFIRM</label>
               <input
+                id="lock-confirm"
                 type="password"
                 autoComplete="new-password"
                 value={confirm}
                 onChange={(e) => { setConfirm(e.target.value); setErr(""); }}
-                placeholder="• • • • • • • •"
-                aria-label="Confirm password" />
+                placeholder="• • • • • • • •" />
             </div>
           )}
           {rememberSupported && (

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -49,7 +50,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.7.2"
+APP_VERSION = "2.8.0"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -624,7 +625,14 @@ _rivals_quota: dict[str, Any] = {"limit": None, "remaining": None,
 def _read_vault() -> dict[str, Any]:
     if not VAULT_PATH.exists():
         return {"initialized": False, "accounts": []}
-    return json.loads(VAULT_PATH.read_text(encoding="utf-8"))
+    try:
+        return json.loads(VAULT_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        # A corrupt vault (truncated write, disk error, AV mangling the tmp
+        # file) must not blow up mid-route with an opaque JSONDecodeError.
+        # Re-raise as OSError so the existing OSError-aware callers and the
+        # @app.errorhandler(OSError) path surface a clean "vault unreadable".
+        raise OSError(f"vault.json is corrupt or unreadable: {e}") from e
 
 
 def _backup_current_vault() -> None:
@@ -651,8 +659,14 @@ def _backup_current_vault() -> None:
             pass
 
 
-def _write_vault(vault: dict[str, Any]) -> None:
-    _backup_current_vault()
+def _write_vault(vault: dict[str, Any], backup: bool = True) -> None:
+    # Rank refreshes and match-history pulls rewrite the vault constantly but
+    # never touch credentials, so snapshotting the whole file (to two dirs,
+    # one OneDrive-synced) on every one of those is what drives the antivirus
+    # lock-contention retries below. Callers that only change metadata pass
+    # backup=False; anything touching password_enc keeps the default.
+    if backup:
+        _backup_current_vault()
     VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = VAULT_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(vault, indent=2), encoding="utf-8")
@@ -914,7 +928,7 @@ def _try_remembered_unlock(vault: dict[str, Any]) -> bool:
         # trying it.
         _clear_remembered_key()
         return False
-    if plain != VERIFIER_PLAINTEXT.decode("utf-8"):
+    if not hmac.compare_digest(plain, VERIFIER_PLAINTEXT.decode("utf-8")):
         _clear_remembered_key()
         return False
     with _state_lock:
@@ -1166,13 +1180,19 @@ def _current_from_seasons(player: dict[str, Any]) -> tuple[str, int | None]:
 
 
 def _parse_api_timestamp(value: Any) -> int | None:
-    """marvelrivalsapi 'updates' timestamps look like '12/16/2025, 7:20:27 AM'
-    (US Eastern). Returns an epoch int, or None when unparseable. A few hours
-    of timezone slop is irrelevant for the 'X days ago' display this feeds.
+    """Parse the assorted timestamp shapes the two providers emit into an epoch
+    int (None when unparseable). marvelrivalsapi 'updates' look like
+    '12/16/2025, 7:20:27 AM' (US Eastern); tracker.gg's `lastUpdated` is ISO
+    8601 like '2026-05-29T19:00:27Z'. Without the ISO formats below the tracker
+    path never set rivals_synced_at, so the 'synced X ago' freshness indicator
+    was blank on every tracker-served account. A few hours of timezone slop is
+    irrelevant for the 'X days ago' display this feeds.
     """
     if not value or not isinstance(value, str):
         return None
-    for fmt in ("%m/%d/%Y, %I:%M:%S %p", "%m/%d/%Y, %H:%M:%S", "%m/%d/%Y"):
+    for fmt in ("%m/%d/%Y, %I:%M:%S %p", "%m/%d/%Y, %H:%M:%S", "%m/%d/%Y",
+                "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S"):
         try:
             return calendar.timegm(time.strptime(value.strip(), fmt))
         except ValueError:
@@ -1207,6 +1227,18 @@ def _parse_tracker_payload(payload: dict[str, Any]) -> dict[str, Any]:
     handle = pinfo.get("platformUserHandle")
     if isinstance(handle, str) and handle.strip():
         out["tracker_handle"] = handle.strip()
+
+    # NetEase UID — tracker carries it in platformInfo. Capturing it here is
+    # what lets name-based accounts (the common case tracker serves on the
+    # primary path) finally populate a rivals_uid, which unlocks match history
+    # and UID-keyed lookups. Without this the UID only ever arrives via the
+    # marvelrivalsapi fallback, so a healthy tracker-served account stays
+    # UID-less indefinitely. Guard to a plausible UID shape (digits, 6-11 long
+    # — matching _detected_rivals_uids) so a platform slug never lands here.
+    uid_raw = pinfo.get("platformUserId") or pinfo.get("platformUserIdentifier")
+    uid_digits = re.sub(r"\D", "", str(uid_raw or ""))
+    if 6 <= len(uid_digits) <= 11:
+        out["rivals_uid"] = uid_digits
 
     # Synced timestamp — tracker exposes a `lastUpdated` ISO field.
     meta = data.get("metadata") or {}
@@ -1722,12 +1754,18 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
         status, payload, _retry = _fetch_tracker_player(ign)
     except (urllib.error.URLError, TimeoutError, OSError):
         return None
-    # tracker tells us the upstream profile is private — short-circuit so
-    # we don't ping marvelrivalsapi just to hear the same thing back.
+    # tracker.gg's collector returns 400 CollectorResultStatus::Private for
+    # ANY profile it hasn't successfully crawled — new accounts, transient
+    # collector misses, and genuinely-private ones alike. It is NOT a reliable
+    # privacy signal: tracker is the PRIMARY source precisely because it
+    # bypasses the in-game private flag, so if it had crawled a private profile
+    # it would return the data, not "Private". Treating this as authoritative
+    # permanently strands public-but-uncrawled profiles as "private" (the only
+    # escape being to recreate the card UID-only, which skips tracker). Fall
+    # through to marvelrivalsapi, which is the authority on genuine privacy:
+    # it returns the rank for a public profile and "private" for a real one.
     if status == 400 and _tracker_says_private(payload):
-        return {"last_refresh_status": "private",
-                "last_refresh_source": "tracker",
-                "last_refresh_error": "tracker.gg reports this profile as private."}
+        return None
     # 404 by IGN — only short-circuit when there's no UID for marvelrivalsapi
     # to try a different lookup with. Otherwise let the fallback run.
     if status == 404 and isinstance(payload, dict):
@@ -1751,6 +1789,11 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
     tracker_ign = parsed.pop("tracker_handle", None)
     if tracker_ign and tracker_ign != ign:
         out["in_game_name"] = tracker_ign
+    # Never clobber an already-verified UID with tracker's — only backfill when
+    # the account has none. (Tracker's platformUserId is authoritative for the
+    # looked-up name, but a stored UID was claimed deliberately.)
+    if (acct.get("rivals_uid") or "").strip():
+        parsed.pop("rivals_uid", None)
     # Peak monotonicity: never overwrite a higher existing peak with a lower
     # one. tracker.gg sometimes has incomplete season history for an account
     # while marvelrivalsapi (or a prior refresh) captured a true higher peak.
@@ -1901,7 +1944,11 @@ def _slim_match(raw: dict[str, Any], player_uid: int | str | None) -> dict[str, 
     mp = raw.get("match_player") if isinstance(raw.get("match_player"), dict) else {}
     hero = mp.get("player_hero") if isinstance(mp.get("player_hero"), dict) else {}
     score = mp.get("score_info") if isinstance(mp.get("score_info"), dict) else {}
-    iw = mp.get("is_win") if isinstance(mp.get("is_win"), dict) else {}
+    # is_win may arrive as a plain bool/int OR (an older shape) a nested
+    # object. Handle both so wins aren't silently reported as losses depending
+    # on which the API returns.
+    iw = mp.get("is_win")
+    is_win_val = bool(iw.get("is_win")) if isinstance(iw, dict) else bool(iw)
 
     try:
         own_uid = int(player_uid) if player_uid is not None else None
@@ -1929,7 +1976,7 @@ def _slim_match(raw: dict[str, Any], player_uid: int | str | None) -> dict[str, 
         "hero_name": (hero.get("hero_name") or "").title(),
         "hero_image": hero.get("hero_type") or "",
         "kda": [_i(mp.get("kills")), _i(mp.get("deaths")), _i(mp.get("assists"))],
-        "is_win": bool(iw.get("is_win")),
+        "is_win": is_win_val,
         "is_mvp": own_uid is not None and _i(raw.get("mvp_uid")) == own_uid,
         "is_svp": own_uid is not None and _i(raw.get("svp_uid")) == own_uid,
         "sr_delta": round(_f(score.get("add_score")), 1),
@@ -2110,8 +2157,8 @@ def init_vault():
     body = request.json or {}
     password = body.get("password", "")
     remember = bool(body.get("remember"))
-    if len(password) < 6:
-        return jsonify({"error": "password_too_short", "message": "Master password must be at least 6 characters."}), 400
+    if len(password) < 12:
+        return jsonify({"error": "password_too_short", "message": "Master password must be at least 12 characters."}), 400
     salt = secrets.token_bytes(16)
     key = _derive_key(password, salt)
     verifier = _encrypt(key, VERIFIER_PLAINTEXT.decode("utf-8"))
@@ -2145,7 +2192,7 @@ def unlock():
         plain = _decrypt(key, vault["verifier"])
     except Exception:
         return jsonify({"error": "bad_password"}), 401
-    if plain != VERIFIER_PLAINTEXT.decode("utf-8"):
+    if not hmac.compare_digest(plain, VERIFIER_PLAINTEXT.decode("utf-8")):
         return jsonify({"error": "bad_password"}), 401
     with _state_lock:
         _state["key"] = key
@@ -2321,7 +2368,7 @@ def refresh_account_stats(acct_id: str):
     _maybe_request_recrawl(target, updates, api_key)
     merged = _apply_refresh_updates(vault, acct_id, updates)
     _persist_api_usage(vault)
-    _write_vault(vault)
+    _write_vault(vault, backup=False)  # metadata-only (rank/match/api-usage); no credential change
     return jsonify({"ok": True, "account": _public_account(merged, key),
                     "sync": _sync_status()})
 
@@ -2385,7 +2432,7 @@ def refresh_all_accounts():
         if i < len(ids) - 1:
             time.sleep(REFRESH_ALL_DELAY_S)
     _persist_api_usage(vault)
-    _write_vault(vault)
+    _write_vault(vault, backup=False)  # metadata-only (rank/match/api-usage); no credential change
     return jsonify({"ok": True, "summary": summary, "accounts": updated_accounts,
                     "sync": _sync_status()})
 
@@ -2700,8 +2747,12 @@ def fetch_match_history(acct_id: str):
     api_key = _marvel_rivals_api_key()
     updates = _fetch_match_history(target, api_key)
     merged = _apply_refresh_updates(vault, acct_id, updates)
+    if merged is None:
+        # Defensive: the account was found above, so this can't normally happen
+        # on the same in-memory vault — but never pass None into _public_account.
+        return jsonify({"error": "not_found"}), 404
     _persist_api_usage(vault)
-    _write_vault(vault)
+    _write_vault(vault, backup=False)  # metadata-only (rank/match/api-usage); no credential change
     return jsonify({"ok": True, "account": _public_account(merged, key),
                     "sync": _sync_status()})
 
