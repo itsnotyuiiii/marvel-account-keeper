@@ -2198,6 +2198,28 @@ html[data-theme="light"] .uid-pill{
   border-radius:4px;
 }
 
+/* Top-of-window progress bar shown while a "Refresh stats" (refresh-all) is in
+   flight. The server runs the refresh as one blocking request with no per-
+   account progress events, so this is an indeterminate sweep, not a percentage.
+   Under prefers-reduced-motion the global rule below freezes the animation —
+   the bar stays visible as a static activity indicator. */
+.app-progress{
+  position:fixed;
+  top:0; left:0; right:0;
+  height:3px;
+  z-index:80;
+  background:linear-gradient(90deg,
+    transparent 0%, var(--accent) 45%, var(--accent) 55%, transparent 100%);
+  background-size:40% 100%;
+  background-repeat:no-repeat;
+  animation:app-progress-sweep 1.1s ease-in-out infinite;
+  pointer-events:none;
+}
+@keyframes app-progress-sweep{
+  0%{ background-position:-40% 0; }
+  100%{ background-position:140% 0; }
+}
+
 /* The toast lives inside an always-present aria-live region so screen readers
    announce it; the wrapper must never eat clicks. */
 .app-toast-live{

@@ -222,21 +222,17 @@ function DuckMark({ onQuack }) {
       title="Quack!"
     >
       <svg viewBox="0 0 40 36" width="32" height="28" aria-hidden="true">
-        {/* head — mallard green */}
-        <circle cx="18" cy="17" r="13" fill="#3fbf4a" stroke="#0e2c12" strokeWidth="1.4" />
-        {/* iridescent sheen */}
-        <path d="M8 16a13 13 0 0 1 20-6" fill="none" stroke="#6fe57c" strokeWidth="1.6" strokeLinecap="round" opacity=".85" />
-        <path d="M10 21a13 13 0 0 0 16 6" fill="none" stroke="#2a8a36" strokeWidth="1.4" strokeLinecap="round" opacity=".7" />
+        {/* head — gold, matching the new app icon */}
+        <circle cx="17" cy="17" r="13" fill="#FFCF45" stroke="#A9791B" strokeWidth="1.3" />
+        {/* cheek blush */}
+        <circle cx="12.5" cy="20" r="3" fill="#FFB7C8" />
         {/* bill */}
-        <path d="M27 16c5 0 9 1.5 9 3.6S32 23.2 27 23.2c-2.7 0-4-1-4-3.6s1.3-3.6 4-3.6Z"
-              fill="#ff9b2f" stroke="#1a1500" strokeWidth="1.4" strokeLinejoin="round" />
-        <path d="M24 19.6h11" stroke="#1a1500" strokeWidth="1" opacity=".55" />
+        <path d="M27 14.6c5.5 0 9 1.2 9 3.4s-3.5 3.4-9 3.4c-2 0-3-1-3-3.4s1-3.4 3-3.4Z"
+              fill="#FF7A2F" stroke="#A33C12" strokeWidth="1.2" strokeLinejoin="round" />
+        <path d="M25 18h10" stroke="#D9531B" strokeWidth="1" opacity=".7" strokeLinecap="round" />
         {/* eye */}
-        <circle cx="20" cy="14" r="2.2" fill="#0e2c12" />
-        <circle cx="20.7" cy="13.4" r="0.7" fill="#fff" />
-        {/* tuft */}
-        <path d="M14 5.5c0-2 1-3 2-3s1 1 2 1 1.5-1 2.5-1 1.5 1.2 1.5 2.5"
-              fill="none" stroke="#0e2c12" strokeWidth="1.4" strokeLinecap="round" />
+        <circle cx="19.5" cy="13.5" r="2.4" fill="#1A1330" />
+        <circle cx="20.4" cy="12.7" r="0.8" fill="#fff" />
       </svg>
       <span className="app-duck-quack" aria-hidden="true">quack!</span>
     </button>
@@ -2089,6 +2085,10 @@ function App() {
   return (
     <>
       <div className="app-shell">
+        {refreshingAll && (
+          <div className="app-progress" role="progressbar"
+               aria-label="Refreshing all accounts" />
+        )}
         <Header
           count={accounts.length}
           lockIn={lockInLabel}

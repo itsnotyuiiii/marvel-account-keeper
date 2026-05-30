@@ -1,0 +1,35 @@
+<svg viewBox="0 0 512 512" width="512" height="512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="sq"><rect x="0" y="0" width="512" height="512" rx="116"></rect></clipPath>
+    <linearGradient id="flatBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B82F6"></stop>
+      <stop offset="0.55" stop-color="#6D5BF0"></stop>
+      <stop offset="1" stop-color="#E5267F"></stop>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#sq)">
+    <rect width="512" height="512" fill="url(#flatBg)"></rect>
+    <circle cx="380" cy="120" r="170" fill="#ffffff" opacity="0.08"></circle>
+    <g transform="translate(86 92) scale(2.55)">
+      
+      <path d="M24 70 q-12 -3 -11 7 q1 9 15 3 z" fill="#F0AE34"></path>
+      <ellipse cx="60" cy="82" rx="46" ry="31" fill="#FFCF45"></ellipse>
+      <path d="M30 86 a34 24 0 0 0 62 4 a40 30 0 0 1 -62 -4 z" fill="#FFE69B"></path>
+      <path d="M44 78 q16 -11 34 -3 q-13 17 -34 7 z" fill="#F0AE34"></path>
+      <circle cx="82" cy="44" r="28" fill="#FFCF45"></circle>
+      <circle cx="74" cy="52" r="6.5" fill="#FFB7C8"></circle>
+      <path d="M104 35 q22 1 22 10 q0 9 -22 10 q-7 -10 0 -20 z" fill="#FF7A2F"></path>
+      <path d="M104 46 q12 0 21 0" stroke="#D9531B" stroke-width="1.6" fill="none" stroke-linecap="round"></path>
+      <circle cx="84" cy="37" r="5.4" fill="#1A1330"></circle>
+      <circle cx="86.2" cy="34.8" r="1.9" fill="#ffffff"></circle>
+      
+      <g transform="translate(58 100) scale(1.05)">
+        <path d="M-11 -3 a11 13 0 0 1 22 0 v6" fill="none" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round"></path>
+        <rect x="-16" y="-1" width="32" height="26" rx="6" fill="#16224A"></rect>
+        <rect x="-16" y="-1" width="32" height="13" rx="6" fill="#ffffff" opacity="0.14"></rect>
+        <circle cx="0" cy="9" r="3.6" fill="#FFCF45"></circle>
+        <rect x="-1.8" y="9" width="3.6" height="8" rx="1.8" fill="#FFCF45"></rect>
+      </g>
+    </g>
+  </g>
+</svg>
