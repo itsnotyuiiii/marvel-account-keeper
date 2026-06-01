@@ -50,7 +50,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.8.4"
+APP_VERSION = "2.9.0"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 

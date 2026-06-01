@@ -27,6 +27,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "densityCards": "regular",
   "densityTable": "regular",
   "densityLadder": "regular",
+  "ladderSort": "current_desc",
   "hideDetails": false,
   "hideCopy": false,
   "infoRailOpen": false,
@@ -40,7 +41,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // authoritative and is synced back into this store on every boot/unlock.
 const OPTIONS_KEY = "marvel-tracker-options";
 const OPTION_KEYS = ["view", "theme", "densityCards", "densityTable", "densityLadder",
-  "hideDetails", "hideCopy", "infoRailOpen", "lockoutMinutes", "srTierRelative"];
+  "ladderSort", "hideDetails", "hideCopy", "infoRailOpen", "lockoutMinutes", "srTierRelative"];
 // Density is stored per view, so each layout keeps its own compact/comfy choice.
 const DENSITY_KEY = { cards: "densityCards", table: "densityTable", ladder: "densityLadder" };
 const DENSITY_VIEW_LABEL = { cards: "Cards", table: "Table", ladder: "Ladder" };
@@ -81,6 +82,11 @@ const SORT_OPTIONS = [
 { value: "peak_desc", label: "Peak rank ↓" },
 { value: "ign", label: "IGN A→Z" },
 { value: "recent", label: "Recently edited" }];
+
+// Ladder is always a ranked descent; only the rank column can change.
+const LADDER_SORT_OPTIONS = [
+{ value: "current_desc", label: "By current rank" },
+{ value: "peak_desc", label: "By peak rank" }];
 
 
 function sortAccounts(items, mode) {
@@ -372,6 +378,7 @@ function Header({ count, lockIn, lockoutMinutes, onLock, onSettings, theme, onTo
 // ─────────────────────────────────────────────────────────────────────────────
 const Toolbar = React.forwardRef(function Toolbar(
 { query, onQuery, sort, onSort, view, onView, onNew,
+  ladderSort, onLadderSort,
   onRefreshAll, refreshingAll, hasApiKey, accountsCount }, searchRef)
 {
   return (
@@ -406,7 +413,12 @@ const Toolbar = React.forwardRef(function Toolbar(
         )}
       </div>
 
-      {view !== "ladder" &&
+      {view === "ladder" ?
+      <select className="app-select" value={ladderSort}
+              onChange={(e) => onLadderSort(e.target.value)}
+              aria-label="Ladder sort">
+          {LADDER_SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select> :
       <select className="app-select" value={sort} onChange={(e) => onSort(e.target.value)}>
           {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -2044,7 +2056,7 @@ function App() {
   };
 
   // ── derived ───────────────────────────────────────────────────────────────
-  const effectiveSort = t.view === "ladder" ? "current_desc" : sort;
+  const effectiveSort = t.view === "ladder" ? t.ladderSort : sort;
   const visible = React.useMemo(
     () => filterAccounts(sortAccounts(accounts, effectiveSort), query),
     [accounts, effectiveSort, query]
@@ -2110,6 +2122,7 @@ function App() {
             ref={searchRef}
             query={query} onQuery={setQuery}
             sort={sort} onSort={setSort}
+            ladderSort={t.ladderSort} onLadderSort={(v) => setTweak("ladderSort", v)}
             view={t.view} onView={(v) => setTweak("view", v)}
             onNew={onNew}
             onRefreshAll={onRefreshAll}
@@ -2151,6 +2164,7 @@ function App() {
               sortLabel={sortLabel} /> :
               t.view === "ladder" ?
               <LadderView accounts={visible} opts={opts}
+              rankField={t.ladderSort === "peak_desc" ? "peak_rank" : "current_rank"}
               onOpen={onOpen} onCopy={onCopy} onPin={onPin}
               onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
               activeSteam={activeSteam} localRivalsUids={localRivalsUids} /> :

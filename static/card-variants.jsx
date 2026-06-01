@@ -677,24 +677,25 @@ const TIER_ORDER = [
   "Celestial", "Grandmaster", "Diamond", "Platinum", "Gold", "Silver", "Bronze",
 ];
 
-function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids }) {
-  // Group by tier of current_rank
+function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids, rankField }) {
+  // Group by tier of the chosen rank field (current_rank or peak_rank).
+  const field = rankField === "peak_rank" ? "peak_rank" : "current_rank";
   const groups = React.useMemo(() => {
     const m = new Map();
     for (const t of TIER_ORDER) m.set(t, []);
     m.set("Unranked", []);
     for (const a of accounts) {
-      const t = tierOf(a.current_rank) || "Unranked";
+      const t = tierOf(a[field]) || "Unranked";
       if (!m.has(t)) m.set(t, []);
       m.get(t).push(a);
     }
     return [...m.entries()].filter(([_, list]) => list.length > 0);
-  }, [accounts]);
+  }, [accounts, field]);
 
   return (
     <div className="ladder">
       {groups.map(([tier, list]) => (
-        <LadderGroup key={tier} tier={tier} list={list}
+        <LadderGroup key={tier} tier={tier} list={list} rankField={field}
                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                      onRefresh={onRefresh} refreshingIds={refreshingIds} hasApiKey={hasApiKey}
                      activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
@@ -703,7 +704,7 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
   );
 }
 
-function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids }) {
+function LadderGroup({ tier, list, rankField, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids }) {
   const t = themeFor(tier === "One Above All" ? "One Above All" : tier + " I") || { fg: "#9aa3b2" };
   return (
     <section className="ladder-group" style={{ "--tier-fg": t.fg }}>
@@ -714,7 +715,7 @@ function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refre
       </header>
       <div className="ladder-grid">
         {list.map((a) => (
-          <LadderCard key={a.id} acct={a}
+          <LadderCard key={a.id} acct={a} rankField={rankField}
                       opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                       onRefresh={onRefresh}
                       refreshing={refreshingIds && refreshingIds.has(a.id)}
@@ -726,22 +727,30 @@ function LadderGroup({ tier, list, opts, onOpen, onCopy, onPin, onRefresh, refre
   );
 }
 
-function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids }) {
-  const cur = themeFor(acct.current_rank);
-  const peak = themeFor(acct.peak_rank);
+function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids, rankField }) {
+  // Ladder can be grouped by current or peak rank; the chosen field is the
+  // card's primary line, the other becomes the small sub-line.
+  const byPeak = rankField === "peak_rank";
+  const primaryRank   = byPeak ? acct.peak_rank   : acct.current_rank;
+  const primaryPoints = byPeak ? acct.peak_points : acct.current_points;
+  const secRank   = byPeak ? acct.current_rank   : acct.peak_rank;
+  const secPoints = byPeak ? acct.current_points : acct.peak_points;
+  const secLabel  = byPeak ? "now" : "peak";
+  const primaryTheme = themeFor(primaryRank);
+  const secTheme = themeFor(secRank);
   const lab = labelFor(acct);
   const division = (() => {
-    if (!acct.current_rank) return "";
-    if (acct.current_rank === "Eternity" || acct.current_rank === "One Above All") {
-      return acct.current_points ? String(acct.current_points) : "";
+    if (!primaryRank) return "";
+    if (primaryRank === "Eternity" || primaryRank === "One Above All") {
+      return primaryPoints ? String(primaryPoints) : "";
     }
-    return acct.current_rank.split(" ")[1] || ""; // I / II / III
+    return primaryRank.split(" ")[1] || ""; // I / II / III
   })();
 
   return (
     <article
       className={"lad-card lad-card-" + lab.kind + (isIncomplete(acct) ? " is-incomplete" : "")}
-      style={{ "--tier-fg": cur?.fg || "var(--muted)" }}
+      style={{ "--tier-fg": primaryTheme?.fg || "var(--muted)" }}
       tabIndex={0}
       aria-label={"Open " + (acct.in_game_name || "account")}
       onClick={() => onOpen(acct)}
@@ -768,9 +777,9 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
       <div className="lad-sub">
         {division && <span className="lad-div">{division}</span>}
         {division && <span className="lad-sep">·</span>}
-        <span className="lad-peak-lbl">peak</span>
-        <span className="lad-peak-val" style={rankInk(peak)}>
-          {rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}
+        <span className="lad-peak-lbl">{secLabel}</span>
+        <span className="lad-peak-val" style={rankInk(secTheme)}>
+          {rankDisplay(secRank, secPoints, { tierRelative: opts.srTierRelative })}
         </span>
       </div>
     </article>
