@@ -23,6 +23,7 @@ import re
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -527,6 +528,154 @@ def _cleanup_post_update() -> None:
                 time.sleep(0.3)
 
     threading.Thread(target=_reap, daemon=True).start()
+
+
+def _scrub_pyinstaller_env() -> dict[str, str]:
+    """Copy the environment minus PyInstaller's onefile bootloader markers.
+
+    A onefile child that inherits `_MEIPASS2` (and the 6.x `_PYI_*` set) skips
+    its own extraction and reuses the *parent's* `_MEIxxxx` temp dir — which the
+    parent deletes on exit, crashing the child with TemplateNotFound. Stripping
+    these forces the successor to unpack cleanly. This is the exact bug that got
+    auto-restart reverted in 2.8.4 (see the note in apply_update)."""
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith(("_MEI", "_PYI"))}
+
+
+def _spawn_successor() -> bool:
+    """Launch a fresh copy of the just-installed exe to take over once this
+    process exits. Returns True if spawned. Packaged builds only — from source
+    `sys.executable` is the interpreter, not our app, so we never relaunch it.
+
+    The successor is told our PID via `--await-pid` so it waits for us to exit
+    (releasing the single-instance lock) before claiming it for itself."""
+    if not _is_packaged():
+        return False
+    exe = Path(sys.executable)
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(
+            [str(exe), "--await-pid", str(os.getpid())],
+            env=_scrub_pyinstaller_env(),
+            cwd=str(exe.parent),
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+        return True
+    except OSError:
+        return False
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if `pid` is still running. Best-effort and cross-platform."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not h:
+                return False  # not found / already reaped → gone
+            try:
+                code = wintypes.DWORD()
+                if k.GetExitCodeProcess(h, ctypes.byref(code)):
+                    return code.value == STILL_ACTIVE
+                return False
+            finally:
+                k.CloseHandle(h)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _await_process_exit(pid: int, timeout: float = 10.0) -> None:
+    """Block until `pid` is gone (or `timeout` elapses). Used by an
+    update-restarted successor so it doesn't race the predecessor for the
+    single-instance lock."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _pid_alive(pid):
+            return
+        time.sleep(0.1)
+
+
+def _run_update_selftest(role: str, sentinel: str) -> int:
+    """Regression harness for the in-app update self-restart (hidden flags).
+
+    Reproduces the 2.8.2/2.8.3 failure mode on a *real packaged build* and
+    proves the fix. The crash only ever happened when a packaged parent spawned
+    a child that inherited the parent's `_MEIPASS2` onefile bootloader marker —
+    so the child reused the parent's `_MEIxxxx` extraction dir and lost its
+    bundled files the moment the parent exited and deleted that dir.
+
+      role 'spawn'  (parent) — print our extraction dir, spawn a 'verify' child
+        with the scrubbed env exactly as _spawn_successor does, then exit so the
+        parent's _MEIxxxx dir is torn down.
+      role 'verify' (child)  — record our own extraction dir, wait past the
+        parent's exit, then confirm our bundled template is STILL readable. If
+        we'd reused the parent's dir it would now be gone.
+
+    The driver (tests/update_hop_test.py) asserts CHILD_MEI != PARENT_MEI and
+    STAGE2=OK. No-op from source, where there is no extraction dir to clobber.
+    """
+    if role == "spawn":
+        # Builds are --windowed (no console), so signal via the sentinel file,
+        # not stdout. Parent line first; the verify child appends to it.
+        Path(sentinel).write_text(f"PARENT_MEI={RESOURCE_DIR}\n", encoding="utf-8")
+        exe = Path(sys.executable)
+        flags = 0
+        if os.name == "nt":
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(
+            [str(exe), "--selftest-verify", sentinel],
+            env=_scrub_pyinstaller_env(),
+            cwd=str(exe.parent),
+            close_fds=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, creationflags=flags,
+        )
+        return 0
+
+    if role == "restart":
+        # Exercise the REAL _spawn_successor() end-to-end (minus the GitHub
+        # download): the successor must wait for us to exit, take the lock, load
+        # its resources, and reach the UI stage — where the MRAT_RESTART_SENTINEL
+        # hook in main() records it. Propagated to the child via the env copy.
+        Path(sentinel).write_text(f"PARENT_MEI={RESOURCE_DIR}\n", encoding="utf-8")
+        os.environ["MRAT_RESTART_SENTINEL"] = sentinel
+        _spawn_successor()
+        return 0
+
+    # role == "verify"
+    mei = str(RESOURCE_DIR)
+    tpl = Path(app.template_folder) / "index.html"
+    with open(sentinel, "a", encoding="utf-8") as f:
+        f.write(f"CHILD_MEI={mei}\nSTAGE1=alive\n")
+    time.sleep(3.0)  # let the parent exit and delete its _MEIxxxx dir
+    ok = tpl.is_file()
+    if ok:
+        try:
+            tpl.read_bytes()  # prove it's actually readable, not just listed
+        except OSError:
+            ok = False
+    with open(sentinel, "a", encoding="utf-8") as f:
+        f.write(f"STAGE2={'OK' if ok else 'TEMPLATE_GONE'}\n")
+    return 0 if ok else 3
 
 
 app = Flask(
@@ -2693,20 +2842,29 @@ def apply_update():
         return jsonify({"error": "install_failed",
                         "message": f"Could not install the update: {e}"}), 500
 
-    # NOTE: auto-restart was tried in 2.8.2/2.8.3 and REVERTED here. Spawning
-    # this same PyInstaller-onefile exe as a child made the child inherit the
-    # parent's _MEIPASS2 env var, so it reused the parent's extraction dir
-    # instead of unpacking its own — the child crashed with TemplateNotFound
-    # and the parent couldn't remove its _MEIxxxx temp dir on exit. Back to the
-    # proven behavior: install, then ask the user to reopen. The startup
-    # _cleanup_post_update reaper still deletes the leftover .old.exe on the
-    # next launch, so the "old exe on the Desktop" complaint stays fixed.
+    # Auto-restart. This was tried in 2.8.2/2.8.3 and REVERTED in 2.8.4 because
+    # the spawned onefile child inherited the parent's `_MEIPASS2`, reused the
+    # parent's extraction dir, and crashed with TemplateNotFound. The fix is in
+    # _spawn_successor: it strips the `_MEI*`/`_PYI*` bootloader env so the
+    # child unpacks its own dir, and passes our PID so the child waits for us to
+    # release the single-instance lock before taking over. If the spawn fails
+    # for any reason we fall back to the proven "reopen it yourself" behavior.
+    ver = latest_tag.lstrip("vV")
+    relaunching = _spawn_successor()
+    if relaunching:
+        # End this process once the HTTP response has flushed, so the successor
+        # (already waiting on our PID) can grab the lock and open its window.
+        threading.Timer(0.8, lambda: os._exit(0)).start()
+        msg = f"v{ver} installed — restarting…"
+    else:
+        msg = (f"v{ver} installed. Close the app and reopen it to run the new "
+               f"version.")
     return jsonify({
         "ok": True,
-        "installed": latest_tag.lstrip("vV"),
+        "installed": ver,
         "verified": verified,
-        "message": f"v{latest_tag.lstrip('vV')} installed. Close the app and reopen "
-                   f"it to run the new version.",
+        "restarting": relaunching,
+        "message": msg,
     })
 
 
@@ -3012,7 +3170,28 @@ def main() -> None:
                         help="serve on a fixed port instead of a random one")
     parser.add_argument("--keep-alive", action="store_true",
                         help="open the browser but don't quit when it closes")
+    parser.add_argument("--await-pid", type=int, default=0, metavar="PID",
+                        help=argparse.SUPPRESS)  # internal: set on self-restart
+    parser.add_argument("--selftest-spawn", metavar="FILE", default=None,
+                        help=argparse.SUPPRESS)  # internal: update-hop test
+    parser.add_argument("--selftest-verify", metavar="FILE", default=None,
+                        help=argparse.SUPPRESS)  # internal: update-hop test
+    parser.add_argument("--selftest-restart", metavar="FILE", default=None,
+                        help=argparse.SUPPRESS)  # internal: update-hop test
     args = parser.parse_args()
+
+    # Hidden update-restart regression harness (see _run_update_selftest).
+    if args.selftest_spawn:
+        sys.exit(_run_update_selftest("spawn", args.selftest_spawn))
+    if args.selftest_verify:
+        sys.exit(_run_update_selftest("verify", args.selftest_verify))
+    if args.selftest_restart:
+        sys.exit(_run_update_selftest("restart", args.selftest_restart))
+
+    # Self-restart after an in-app update: wait for the predecessor to exit so
+    # we don't fight it for the single-instance lock, then proceed normally.
+    if args.await_pid:
+        _await_process_exit(args.await_pid)
 
     # Single-instance guard (packaged builds only — running from source stays
     # unrestricted for dev/tests). The lock is scoped to the data dir, so a
@@ -3020,6 +3199,14 @@ def main() -> None:
     global _INSTANCE_LOCK
     if _is_packaged():
         _INSTANCE_LOCK = _acquire_single_instance(INSTANCE_LOCK_PATH)
+        if _INSTANCE_LOCK is None and args.await_pid:
+            # Successor of an update restart: the predecessor may still be
+            # releasing the lock even though its PID is gone. Retry briefly.
+            for _ in range(40):  # ~6s
+                time.sleep(0.15)
+                _INSTANCE_LOCK = _acquire_single_instance(INSTANCE_LOCK_PATH)
+                if _INSTANCE_LOCK is not None:
+                    break
         if _INSTANCE_LOCK is None:
             # Already running — surface the existing window instead of starting
             # a second copy (which previously fell through to the browser path).
@@ -3053,6 +3240,17 @@ def main() -> None:
     else:
         print("  Your browser will open; this window stays up (Ctrl+C quits).")
     print(line)
+
+    # Test hook: a packaged successor launched by the update-restart self-test
+    # signals it fully initialized (lock held, resources resolved) by touching
+    # this file. Inert unless the env var is set. See tests/update_hop_test.py.
+    _restart_sentinel = os.environ.get("MRAT_RESTART_SENTINEL")
+    if _restart_sentinel:
+        try:
+            with open(_restart_sentinel, "a", encoding="utf-8") as f:
+                f.write(f"UP={os.getpid()} MEI={RESOURCE_DIR}\n")
+        except OSError:
+            pass
 
     # Default mode: try a native OS window first. It owns the process
     # lifecycle (close the window = quit) and, if it runs, never returns here.

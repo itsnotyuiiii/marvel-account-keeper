@@ -273,13 +273,15 @@ function ThemeToggle({ theme, onToggle }) {
 // Banner shown between header and toolbar when a newer release is available.
 // Dormant when running from source (the server suppresses has_update there)
 // or when there's no update — keeps the chrome clean for the common case.
-function UpdateBanner({ info, applying, applied, error, onApply }) {
+function UpdateBanner({ info, applying, applied, restarting, error, onApply }) {
   if (applied) {
     return (
       <div className="update-banner update-banner-done">
         <span className="update-dot" />
         <span className="update-msg">
-          <b>v{applied}</b> downloaded — close and reopen the app to use it.
+          {restarting
+            ? <><b>v{applied}</b> installed — restarting the app…</>
+            : <><b>v{applied}</b> downloaded — close and reopen the app to use it.</>}
         </span>
       </div>
     );
@@ -1483,6 +1485,7 @@ function App() {
   const [updateInfo, setUpdateInfo] = React.useState(null);
   const [applyingUpdate, setApplyingUpdate] = React.useState(false);
   const [updateApplied, setUpdateApplied] = React.useState(null); // null | "1.6.0"
+  const [updateRestarting, setUpdateRestarting] = React.useState(false);
   const [updateError, setUpdateError] = React.useState(null);
   // { version, commit, built_at, repo } captured from /api/status on boot.
   // Surfaced in the footer so the user can confirm which build is running.
@@ -1701,6 +1704,7 @@ function App() {
       const r = await fetch("/api/apply-update", { method: "POST" });
       const data = await r.json();
       if (r.ok && data.ok) {
+        setUpdateRestarting(!!data.restarting);
         setUpdateApplied(data.installed || "newer");
       } else {
         setUpdateError(data.message || "Update failed.");
@@ -2114,6 +2118,7 @@ function App() {
           info={updateInfo}
           applying={applyingUpdate}
           applied={updateApplied}
+          restarting={updateRestarting}
           error={updateError}
           onApply={onApplyUpdate} />
 
