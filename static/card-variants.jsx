@@ -677,6 +677,40 @@ const TIER_ORDER = [
   "Celestial", "Grandmaster", "Diamond", "Platinum", "Gold", "Silver", "Bronze",
 ];
 
+// Static SR checkpoints. tracker.gg / in-game "SR" is the official RP scale
+// (Bronze III = 0 … Celestial I = 2000, +100 per division) shifted by +3000,
+// so Grandmaster I lands at 4700. Derived from RANK_TIERS by index — the floor
+// to ENTER each division. Eternity/One Above All are point-based (no division
+// floor), so they're shown as open-ended.
+const SR_BASE = 3000;
+const RANK_CHECKPOINTS = RANK_TIERS.map((rank, i) => {
+  let sr;
+  if (rank === "One Above All") sr = "Top 500";
+  else if (rank === "Eternity") sr = (SR_BASE + i * 100) + "+";
+  else sr = String(SR_BASE + i * 100);
+  return { rank, sr, fg: (themeFor(rank) || {}).fg || "var(--muted)" };
+});
+
+function RankCheckpoints() {
+  return (
+    <details className="lad-ref">
+      <summary className="lad-ref-sum">
+        <span className="lad-ref-title">Rank checkpoints</span>
+        <span className="lad-ref-hint">SR to enter each tier</span>
+      </summary>
+      <div className="lad-ref-grid">
+        {RANK_CHECKPOINTS.map(({ rank, sr, fg }) => (
+          <div className="lad-ref-row" key={rank} style={{ "--tier-fg": fg }}>
+            <span className="lad-ref-dot" aria-hidden="true" />
+            <span className="lad-ref-rank">{rank}</span>
+            <span className="lad-ref-sr">{sr}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids, rankField }) {
   // Group by tier of the chosen rank field (current_rank or peak_rank).
   const field = rankField === "peak_rank" ? "peak_rank" : "current_rank";
@@ -694,6 +728,7 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
 
   return (
     <div className="ladder">
+      <RankCheckpoints />
       {groups.map(([tier, list]) => (
         <LadderGroup key={tier} tier={tier} list={list} rankField={field}
                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
