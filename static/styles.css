@@ -906,6 +906,7 @@ html[data-theme="light"] .rcard-rval {
 
 .tbl-ign-cell {
   display: flex; align-items: baseline; gap: 8px;
+  flex-wrap: wrap;
   min-width: 0;
 }
 .tbl-ign {

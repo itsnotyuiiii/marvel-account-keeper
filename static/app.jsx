@@ -969,12 +969,12 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
             {form.tag.trim() && (
               <div className="drawer-tag-preview">
                 <span className="dr-field-lbl">Preview</span>
-                {form.tag.split(",").map((s) => s.trim()).filter(Boolean).map((label, i) => (
+                {window.splitTags(form.tag).map((label, i) => (
                   <span
-                    key={i}
+                    key={label + "·" + i}
                     className="tag-pill tag-pill-sm"
                     style={{
-                      color: ({red:"#ff5560",orange:"#ff9d2f",yellow:"#ffe14d",green:"#4ee07e",cyan:"#5be0ff",magenta:"#ff6ed4"})[form.border_color] || "#9aa3b2",
+                      color: window.tagColorFor({ border_color: form.border_color }),
                       borderColor: "currentColor",
                       background: "transparent",
                     }}>

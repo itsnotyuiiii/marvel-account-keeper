@@ -142,7 +142,7 @@ function TagPill({ acct, size = "sm" }) {
   const c = tagColorFor(acct);
   return tags.map((tag, i) => (
     <span
-      key={i}
+      key={tag + "·" + i}
       className={"tag-pill tag-pill-" + size}
       style={{
         "--tag-fg": c,
@@ -862,4 +862,5 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
 
 Object.assign(window, {
   CardRefined, TableView, LadderView, labelFor, PresenceBadge,
+  splitTags, tagColorFor,
 });
