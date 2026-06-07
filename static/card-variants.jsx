@@ -129,11 +129,20 @@ const TAG_COLORS = {
 function tagColorFor(acct) {
   return TAG_COLORS[acct.border_color] || "#9aa3b2";
 }
+// A single account's `tag` field holds a comma-separated list — split it into
+// individual labels so each renders as its own pill ("boost, items" -> 2 pills).
+// Trim blanks and drop empties so trailing/double commas don't make ghost pills.
+function splitTags(raw) {
+  if (!raw) return [];
+  return String(raw).split(",").map((s) => s.trim()).filter(Boolean);
+}
 function TagPill({ acct, size = "sm" }) {
-  if (!acct.tag) return null;
+  const tags = splitTags(acct.tag);
+  if (!tags.length) return null;
   const c = tagColorFor(acct);
-  return (
+  return tags.map((tag, i) => (
     <span
+      key={i}
       className={"tag-pill tag-pill-" + size}
       style={{
         "--tag-fg": c,
@@ -144,9 +153,9 @@ function TagPill({ acct, size = "sm" }) {
       onClick={(e) => e.stopPropagation()}
     >
       <i className="tag-pill-dot" style={{ background: c }} />
-      {acct.tag}
+      {tag}
     </span>
-  );
+  ));
 }
 
 function Icon({ kind }) {
@@ -256,6 +265,18 @@ function syncState(acct) {
   return age <= SYNC_CURRENT_MS ? "current" : "fresh";
 }
 
+// DISPLAY-ONLY caveat. tracker.gg reported the profile private on the last
+// refresh, yet we're still showing a (cached) marvelrivalsapi rank — flag it so
+// live-looking data isn't mistaken for current. Mirrors app.py's `tracker_private`;
+// only applies while the sync state is an ok variant (it never overrides a real
+// private/error status, which already speaks for itself).
+function trackerPrivateCaveat(acct) {
+  if (!acct.tracker_private) return false;
+  const s = syncState(acct);
+  return s === "current" || s === "fresh" || s === "dormant";
+}
+const TRACKER_PRIVATE_NOTE = "tracker.gg shows this profile private — rank may be cached";
+
 // Icon + copy for each non-clean sync state. 'current' / 'fresh' / 'dormant' /
 // 'none' render no badge on the refresh button — a clean (or simply old but
 // uncontested) account needs no marker. tracker.gg is the primary data source;
@@ -301,7 +322,13 @@ function refreshCooldownLeft(acct) {
 function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
                      size = "sm", showLabel = false }) {
   const state = syncState(acct);
-  const meta = SYNC_META[state] || null;  // null for none / fresh
+  let meta = SYNC_META[state] || null;  // null for none / fresh
+  // ok-state account that tracker.gg now flags private: badge it amber 🔒 so
+  // the cached rank reads as suspect at a glance. Display-only — `state` (and
+  // the underlying last_refresh_status) are unchanged.
+  if (!meta && trackerPrivateCaveat(acct)) {
+    meta = { sym: "🔒", cls: "warn", text: TRACKER_PRIVATE_NOTE };
+  }
   const cooldownLeft = refreshCooldownLeft(acct);
   // 1s tick while the per-account cooldown is counting down so the tooltip
   // updates live and the button re-enables the moment it expires.
@@ -401,6 +428,18 @@ function SyncChip({ acct, hasApiKey }) {
     icon = m.sym;
     text = m.text;
     longText = m.long || m.text;
+  }
+
+  // Display-only caveat (see trackerPrivateCaveat): we're on an ok state but
+  // tracker.gg says private. Recolor amber + 🔒 and append the note, without
+  // touching syncState / last_refresh_status.
+  if (trackerPrivateCaveat(acct)) {
+    cls = "warn";
+    icon = "🔒";
+    text = `${text} · ${TRACKER_PRIVATE_NOTE}`;
+    longText = synced
+      ? `${TRACKER_PRIVATE_NOTE}. Showing the last marvelrivalsapi crawl from ${fmtRelative(synced)}.`
+      : `${TRACKER_PRIVATE_NOTE}.`;
   }
 
   const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;

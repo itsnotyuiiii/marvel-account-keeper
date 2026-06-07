@@ -951,7 +951,8 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
               label="Tag label (optional)"
               value={form.tag}
               onChange={(v) => set("tag", v)}
-              placeholder="e.g. main steam, smurf, stream account" />
+              hint="Separate multiple tags with commas — e.g. boost, items, monkeys"
+              placeholder="e.g. boost, items, monkeys" />
             <div className="drawer-sw-row">
               <span className="dr-field-lbl">Tag color</span>
               <div className="drawer-swatches">
@@ -965,19 +966,22 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
                 )}
               </div>
             </div>
-            {form.tag && (
+            {form.tag.trim() && (
               <div className="drawer-tag-preview">
                 <span className="dr-field-lbl">Preview</span>
-                <span
-                  className="tag-pill tag-pill-sm"
-                  style={{
-                    color: ({red:"#ff5560",orange:"#ff9d2f",yellow:"#ffe14d",green:"#4ee07e",cyan:"#5be0ff",magenta:"#ff6ed4"})[form.border_color] || "#9aa3b2",
-                    borderColor: "currentColor",
-                    background: "transparent",
-                  }}>
-                  <i className="tag-pill-dot" style={{ background: "currentColor" }} />
-                  {form.tag}
-                </span>
+                {form.tag.split(",").map((s) => s.trim()).filter(Boolean).map((label, i) => (
+                  <span
+                    key={i}
+                    className="tag-pill tag-pill-sm"
+                    style={{
+                      color: ({red:"#ff5560",orange:"#ff9d2f",yellow:"#ffe14d",green:"#4ee07e",cyan:"#5be0ff",magenta:"#ff6ed4"})[form.border_color] || "#9aa3b2",
+                      borderColor: "currentColor",
+                      background: "transparent",
+                    }}>
+                    <i className="tag-pill-dot" style={{ background: "currentColor" }} />
+                    {label}
+                  </span>
+                ))}
               </div>
             )}
             <label className="drawer-pin-row">
@@ -1038,7 +1042,7 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
 
 }
 
-function Field({ label, value, onChange, type = "text", placeholder = "", multiline = false }) {
+function Field({ label, value, onChange, type = "text", placeholder = "", multiline = false, hint = "" }) {
   const id = React.useId();
   return (
     <label className="dr-field" htmlFor={id}>
@@ -1050,6 +1054,7 @@ function Field({ label, value, onChange, type = "text", placeholder = "", multil
       <input id={id} type={type} value={value}
       placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
       }
+      {hint && <span className="dr-field-hint">{hint}</span>}
     </label>);
 
 }
@@ -1389,6 +1394,7 @@ const SYNC_LEGEND = [
   { icon: "●", tone: "ok",    name: "Synced",    desc: "Rank synced and under a day old." },
   { icon: "▲", tone: "warn",  name: "Stale",     desc: "API data is over a day old — refresh to queue a recrawl." },
   { icon: "🔒", tone: "warn",  name: "Private",   desc: "Profile is private in-game — set the rank manually." },
+  { icon: "🔒", tone: "warn",  name: "Private (cached)", desc: "tracker.gg now shows this profile private, but a marvelrivalsapi rank from an earlier crawl is still displayed — treat it as possibly stale." },
   { icon: "?", tone: "muted", name: "Not found", desc: "No data for this player on marvelrivalsapi.com." },
   { icon: "?", tone: "muted", name: "No handle", desc: "Account has no in-game name or UID to look up." },
   { icon: "!", tone: "err",   name: "Key error", desc: "API key was rejected — check the key above." },

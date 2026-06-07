@@ -1246,6 +1246,12 @@ html[data-theme="light"] .lad-peak-val {
   color: var(--muted);
   font-family: var(--font-mono);
 }
+.dr-field-hint {
+  font-size: 10px;
+  letter-spacing: .02em;
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+}
 .dr-field input, .dr-field textarea {
   width: 100%;
   background: var(--panel-2);
@@ -1336,7 +1342,7 @@ html[data-theme="light"] .lad-peak-val {
 .drawer-sw[data-color="magenta"] { background: #ff6ed4; }
 
 .drawer-tag-preview {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 10px 12px;
   background: var(--panel-2);
   border: 1px solid var(--border);

@@ -51,7 +51,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.11.0"
+APP_VERSION = "2.11.1"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -85,6 +85,9 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "last_refresh_status": None,   # "ok" | "private" | "not_found" | "bad_key" | "error" | "missing_handle"
     "last_refresh_error": None,
     "last_refresh_source": None,   # "tracker" | "marvelrivalsapi" — which provider gave us the rank
+    "tracker_private": False,      # DISPLAY-ONLY: tracker.gg reported this profile private on the
+                                   # last refresh while we still showed a (cached) marvelrivalsapi
+                                   # rank. Never feeds last_refresh_status — purely a UI hint.
     "rivals_synced_at": None,      # epoch — when marvelrivalsapi last crawled this player
     "rivals_update_requested_at": None,  # epoch — when we last asked the API to recrawl
     # Match history (lazy — populated only when the drawer is opened for an account)
@@ -1903,11 +1906,16 @@ def _tracker_says_private(payload: Any) -> bool:
     return False
 
 
-def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
+def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Hit tracker.gg for one account. Returns a partial update dict on
     a clean rank parse OR an explicit private/not_found from tracker.
     Returns None for ambiguous failures (network, Cloudflare 5xx, etc.)
     so the caller still tries marvelrivalsapi.
+
+    If `signals` is passed, records side-channel observations the caller may
+    want even when we fall through — currently `tracker_private` (tracker's
+    400 CollectorResultStatus::Private). This is DISPLAY-ONLY context, never a
+    status: it stays out of the return dict so it can't become authoritative.
 
     Tracker.gg only supports IGN lookups (UID/platform-id slugs return 403).
     A UID alone is not enough — we need a name first."""
@@ -1929,6 +1937,8 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any] | None:
     # through to marvelrivalsapi, which is the authority on genuine privacy:
     # it returns the rank for a public profile and "private" for a real one.
     if status == 400 and _tracker_says_private(payload):
+        if signals is not None:
+            signals["tracker_private"] = True
         return None
     # 404 by IGN — only short-circuit when there's no UID for marvelrivalsapi
     # to try a different lookup with. Otherwise let the fallback run.
@@ -2000,10 +2010,16 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         "last_refresh_status": None,
         "last_refresh_error": None,
         "last_refresh_source": None,
+        # Reset every refresh so the hint self-heals when a profile goes public
+        # again. Only re-raised below if tracker says private AND we still end
+        # up serving a marvelrivalsapi rank.
+        "tracker_private": False,
     }
 
-    # 1. PRIMARY: tracker.gg by IGN.
-    tracker_result = _try_tracker(acct)
+    # 1. PRIMARY: tracker.gg by IGN. `signals` captures tracker's private
+    # verdict without letting it short-circuit the fallback or set a status.
+    signals: dict[str, Any] = {}
+    tracker_result = _try_tracker(acct, signals)
     if tracker_result is not None:
         return {**base, **tracker_result}
 
@@ -2093,6 +2109,10 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
 
     return {**base, "last_refresh_status": "ok",
             "last_refresh_source": "marvelrivalsapi",
+            # Showing a marvelrivalsapi rank while tracker.gg reported private:
+            # surface that as a display-only caveat (the rank is likely cached
+            # from before the profile went private). Status stays "ok".
+            "tracker_private": bool(signals.get("tracker_private")),
             **extra, **parsed}
 
 
