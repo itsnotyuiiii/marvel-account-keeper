@@ -1950,6 +1950,7 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
         return None
 
     saw_private = False
+    saw_not_found = False
     for lookup in candidates:
         try:
             status, payload, _retry = _fetch_tracker_player(lookup)
@@ -1966,6 +1967,9 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
         # through to marvelrivalsapi, the authority on genuine privacy.
         if status == 400 and _tracker_says_private(payload):
             saw_private = True
+            continue
+        if status == 404:
+            saw_not_found = True
             continue
         if status != 200 or not isinstance(payload, dict):
             continue
@@ -2015,15 +2019,21 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
     # fall through to marvelrivalsapi.
     if saw_private and signals is not None:
         signals["tracker_private"] = True
+    # tracker positively reported "no such player" and there's no UID for
+    # marvelrivalsapi to try a different lookup with — short-circuit with the
+    # clearer name-specific message rather than the vaguer marvelrivalsapi one.
+    if saw_not_found and not saw_private and not uid:
+        return {"last_refresh_status": "not_found",
+                "last_refresh_source": "tracker",
+                "last_refresh_error": "tracker.gg couldn't find a player with that name."}
     return None
 
 
 def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]:
     """Refresh one account's rank. Tries tracker.gg first (richer data, no
-    key, bypasses the in-game private flag), then falls back to marvelrivalsapi
-    when tracker can't service the request — Cloudflare 403, no IGN, or no
-    rank parse. The marvelrivalsapi path also handles UID-only accounts which
-    tracker can't look up.
+    key, bypasses the in-game private flag) by UID then IGN, then falls back to
+    marvelrivalsapi when tracker can't service the request — Cloudflare 403, no
+    identifier at all, or no rank parse.
 
     Always sets last_refresh_ts / last_refresh_status / last_refresh_error.
     Sets last_refresh_source to whichever provider produced the rank.
@@ -2043,8 +2053,9 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         "tracker_history_private": False,
     }
 
-    # 1. PRIMARY: tracker.gg by IGN. `signals` captures tracker's private
-    # verdict without letting it short-circuit the fallback or set a status.
+    # 1. PRIMARY: tracker.gg, looked up by UID first then IGN (see _try_tracker).
+    # `signals` captures tracker's private verdict without letting it
+    # short-circuit the fallback or set a status.
     signals: dict[str, Any] = {}
     tracker_result = _try_tracker(acct, signals)
     if tracker_result is not None:
