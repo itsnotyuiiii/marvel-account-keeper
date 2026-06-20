@@ -163,7 +163,7 @@ const DRAFT_PREFIX = "marvel-tracker-draft:";
 // Password is intentionally excluded — never store decrypted secrets in localStorage.
 const DRAFT_FIELDS = [
   "in_game_name", "rivals_uid", "username", "email", "current_rank", "peak_rank",
-  "current_points", "peak_points", "notes", "tag", "border_color",
+  "current_points", "peak_points", "notes", "tag", "border_color", "tag_color",
   "pinned", "neon",
 ];
 function draftKey(acct) {
@@ -506,6 +506,7 @@ function baseFormFor(acct) {
     notes: acct?.notes || "",
     tag: acct?.tag || "",
     border_color: acct?.border_color || "",
+    tag_color: acct?.tag_color || "",
     pinned: !!acct?.pinned,
     neon: !!acct?.neon,
   };
@@ -954,15 +955,29 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
               hint="Separate multiple tags with commas — e.g. boost, items, monkeys"
               placeholder="e.g. boost, items, monkeys" />
             <div className="drawer-sw-row">
-              <span className="dr-field-lbl">Tag color</span>
+              <span className="dr-field-lbl">Border color</span>
               <div className="drawer-swatches">
                 {["", "red", "orange", "yellow", "green", "cyan", "magenta"].map((c) =>
                 <button key={c || "none"} type="button"
                 className={"drawer-sw" + (form.border_color === c ? " on" : "") + (c ? "" : " none")}
                 data-color={c}
-                aria-label={"Tag color: " + (c || "none")}
+                aria-label={"Border color: " + (c || "none")}
                 aria-pressed={form.border_color === c}
                 onClick={() => set("border_color", c)} />
+                )}
+              </div>
+            </div>
+            <div className="drawer-sw-row">
+              <span className="dr-field-lbl">Tag color</span>
+              <div className="drawer-swatches">
+                {["", "red", "orange", "yellow", "green", "cyan", "magenta"].map((c) =>
+                <button key={c || "none"} type="button"
+                className={"drawer-sw" + (form.tag_color === c ? " on" : "") + (c ? "" : " none")}
+                data-color={c}
+                aria-label={c ? ("Tag color: " + c) : "Tag color: match border"}
+                title={c ? "" : "Match border color"}
+                aria-pressed={form.tag_color === c}
+                onClick={() => set("tag_color", c)} />
                 )}
               </div>
             </div>
@@ -974,7 +989,7 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
                     key={label + "·" + i}
                     className="tag-pill tag-pill-sm"
                     style={{
-                      color: window.tagColorFor({ border_color: form.border_color }),
+                      color: window.tagColorFor({ tag_color: form.tag_color, border_color: form.border_color }),
                       borderColor: "currentColor",
                       background: "transparent",
                     }}>
@@ -1395,6 +1410,7 @@ const SYNC_LEGEND = [
   { icon: "▲", tone: "warn",  name: "Stale",     desc: "API data is over a day old — refresh to queue a recrawl." },
   { icon: "🔒", tone: "warn",  name: "Private",   desc: "Profile is private in-game — set the rank manually." },
   { icon: "🔒", tone: "warn",  name: "Private (cached)", desc: "tracker.gg now shows this profile private, but a marvelrivalsapi rank from an earlier crawl is still displayed — treat it as possibly stale." },
+  { icon: "🛡", tone: "ok",    name: "History private", desc: "Profile is public so the ranks shown are current, but match history is private — the account's last-played time can't be determined (so it's not flagged dormant)." },
   { icon: "?", tone: "muted", name: "Not found", desc: "No data for this player on marvelrivalsapi.com." },
   { icon: "?", tone: "muted", name: "No handle", desc: "Account has no in-game name or UID to look up." },
   { icon: "!", tone: "err",   name: "Key error", desc: "API key was rejected — check the key above." },
@@ -1894,6 +1910,7 @@ function App() {
       notes: next.notes || "",
       tag: next.tag || "",
       border_color: next.border_color || "",
+      tag_color: next.tag_color || "",
       pinned: !!next.pinned,
       neon: !!next.neon,
       current_points: next.current_points,

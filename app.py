@@ -51,7 +51,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.11.1"
+APP_VERSION = "2.12.0"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -76,6 +76,8 @@ EXTRA_BACKUP_KEEP = 100
 ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "pinned": False,
     "tag": "",
+    "tag_color": "",               # optional tag-pill color, independent of the neon border.
+                                   # Blank → falls back to border_color (back-compat).
     "neon": False,
     "current_points": None,
     "peak_points": None,
@@ -88,6 +90,10 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "tracker_private": False,      # DISPLAY-ONLY: tracker.gg reported this profile private on the
                                    # last refresh while we still showed a (cached) marvelrivalsapi
                                    # rank. Never feeds last_refresh_status — purely a UI hint.
+    "tracker_history_private": False,  # DISPLAY-ONLY: tracker served public ranks but the profile's
+                                   # match history is private, so the "last crawled" age is NOT a
+                                   # last-played/last-login signal. Suppresses the misleading
+                                   # "dormant — Xd ago" framing. Never feeds last_refresh_status.
     "rivals_synced_at": None,      # epoch — when marvelrivalsapi last crawled this player
     "rivals_update_requested_at": None,  # epoch — when we last asked the API to recrawl
     # Match history (lazy — populated only when the drawer is opened for an account)
@@ -1407,13 +1413,23 @@ def _parse_tracker_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if 6 <= len(uid_digits) <= 11:
         out["rivals_uid"] = uid_digits
 
-    # Synced timestamp — tracker exposes a `lastUpdated` ISO field.
+    # Synced timestamp — tracker exposes a `lastUpdated` ISO field. tracker
+    # zeroes this to the 0001-01-01 / 2000-01-01 sentinels when it has no real
+    # crawl time (notably when match history is private), so reject both.
     meta = data.get("metadata") or {}
     last_updated = (meta.get("lastUpdated") or {}).get("value")
-    if isinstance(last_updated, str) and last_updated and not last_updated.startswith("2000-"):
+    if (isinstance(last_updated, str) and last_updated
+            and not last_updated.startswith(("2000-", "0001-"))):
         parsed_ts = _parse_api_timestamp(last_updated)
         if parsed_ts:
             out["rivals_synced_at"] = parsed_ts
+
+    # Match-history privacy. When the profile's battle history is private,
+    # tracker still serves ranks (overview public) but the "last updated" age
+    # reflects last *public* activity, not last login — so it must NOT be
+    # presented as a dormant/last-played signal. DISPLAY-ONLY hint; the rank
+    # itself is the latest tracker has and stays authoritative.
+    out["tracker_history_private"] = bool(meta.get("isPrivateBattleHistory"))
 
     # Current rank + SR from overview segment, season-scoped to current season.
     cur_tier = None
@@ -1917,81 +1933,89 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
     400 CollectorResultStatus::Private). This is DISPLAY-ONLY context, never a
     status: it stays out of the return dict so it can't become authoritative.
 
-    Tracker.gg only supports IGN lookups (UID/platform-id slugs return 403).
-    A UID alone is not enough — we need a name first."""
+    tracker.gg's /profile/ign/<slug> endpoint resolves a numeric NetEase UID
+    just as well as a name (verified live). LOOKUP ORDER IS UID-FIRST: the UID
+    is stable across renames and immune to the special-character / casing
+    problems that make a stored IGN unreliable, so we query by UID first and
+    only fall back to the IGN when there's no UID (or the UID lookup yields no
+    rank). A UID lookup also backfills the canonical IGN from tracker's handle.
+    tracker is always preferred over the inconsistent marvelrivalsapi, which the
+    caller only reaches if every tracker attempt here comes up empty."""
     ign = (acct.get("in_game_name") or "").strip()
-    if not ign:
+    uid = (acct.get("rivals_uid") or "").strip()
+    # UID first, IGN fallback. dict.fromkeys dedupes while preserving order in
+    # the (unlikely) event the two are equal.
+    candidates = list(dict.fromkeys(c for c in (uid, ign) if c))
+    if not candidates:
         return None
-    try:
-        status, payload, _retry = _fetch_tracker_player(ign)
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return None
-    # tracker.gg's collector returns 400 CollectorResultStatus::Private for
-    # ANY profile it hasn't successfully crawled — new accounts, transient
-    # collector misses, and genuinely-private ones alike. It is NOT a reliable
-    # privacy signal: tracker is the PRIMARY source precisely because it
-    # bypasses the in-game private flag, so if it had crawled a private profile
-    # it would return the data, not "Private". Treating this as authoritative
-    # permanently strands public-but-uncrawled profiles as "private" (the only
-    # escape being to recreate the card UID-only, which skips tracker). Fall
-    # through to marvelrivalsapi, which is the authority on genuine privacy:
-    # it returns the rank for a public profile and "private" for a real one.
-    if status == 400 and _tracker_says_private(payload):
-        if signals is not None:
-            signals["tracker_private"] = True
-        return None
-    # 404 by IGN — only short-circuit when there's no UID for marvelrivalsapi
-    # to try a different lookup with. Otherwise let the fallback run.
-    if status == 404 and isinstance(payload, dict):
-        if not (acct.get("rivals_uid") or "").strip():
-            return {"last_refresh_status": "not_found",
-                    "last_refresh_source": "tracker",
-                    "last_refresh_error": "tracker.gg couldn't find a player with that name."}
-        return None
-    if status != 200 or not isinstance(payload, dict):
-        return None
-    parsed = _parse_tracker_payload(payload)
-    # Accept the parse if EITHER current OR peak rank came back. Players who
-    # didn't play ranked this season have no current rank but a real peak
-    # from prior seasons — that's still useful data and beats silently
-    # falling through to marvelrivalsapi for nothing.
-    if "current_rank" not in parsed and "peak_rank" not in parsed:
-        return None
-    out: dict[str, Any] = {"last_refresh_status": "ok",
-                          "last_refresh_source": "tracker"}
-    # Adopt tracker's canonical IGN spelling (handles renames / casing).
-    tracker_ign = parsed.pop("tracker_handle", None)
-    if tracker_ign and tracker_ign != ign:
-        out["in_game_name"] = tracker_ign
-    # Guard the auto-backfilled UID two ways before adopting it:
-    #   1. Never clobber an already-verified UID — a stored UID was claimed
-    #      deliberately; only fill when the account has none.
-    #   2. Only accept it when tracker's returned handle matches the name we
-    #      queried (case-insensitively). tracker.gg does an exact ign lookup,
-    #      so a mismatch means a rename or a fuzzy/ambiguous match — binding the
-    #      wrong NetEase UID there would silently poison every later UID-keyed
-    #      call. On a mismatch we still adopt the rank + corrected name above;
-    #      the next refresh (name now matching) will bind the UID safely.
-    if parsed.get("rivals_uid"):
-        existing_uid = (acct.get("rivals_uid") or "").strip()
-        handle_matches = bool(tracker_ign) and tracker_ign.strip().lower() == ign.lower()
-        if existing_uid or not handle_matches:
-            parsed.pop("rivals_uid", None)
-    # Peak monotonicity: never overwrite a higher existing peak with a lower
-    # one. tracker.gg sometimes has incomplete season history for an account
-    # while marvelrivalsapi (or a prior refresh) captured a true higher peak.
-    new_peak = parsed.get("peak_rank")
-    if new_peak:
-        old_peak = acct.get("peak_rank")
-        old_score = acct.get("peak_points") or 0
-        new_score = parsed.get("peak_points") or 0
-        if old_peak and _RANK_INDEX.get(old_peak, -1) > _RANK_INDEX.get(new_peak, -1):
-            parsed.pop("peak_rank", None)
-            parsed.pop("peak_points", None)
-        elif old_peak == new_peak and old_score > new_score:
-            parsed.pop("peak_points", None)
-    out.update(parsed)
-    return out
+
+    saw_private = False
+    for lookup in candidates:
+        try:
+            status, payload, _retry = _fetch_tracker_player(lookup)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            continue
+        # tracker.gg's collector returns 400 CollectorResultStatus::Private for
+        # ANY profile it hasn't successfully crawled — new accounts, transient
+        # collector misses, and genuinely-private ones alike. It is NOT a
+        # reliable privacy signal: tracker is the PRIMARY source precisely
+        # because it bypasses the in-game private flag, so if it had crawled a
+        # private profile it would return the data, not "Private". Treating it
+        # as authoritative permanently strands public-but-uncrawled profiles as
+        # "private". Record it as a display-only hint and keep trying / fall
+        # through to marvelrivalsapi, the authority on genuine privacy.
+        if status == 400 and _tracker_says_private(payload):
+            saw_private = True
+            continue
+        if status != 200 or not isinstance(payload, dict):
+            continue
+        parsed = _parse_tracker_payload(payload)
+        # Accept the parse if EITHER current OR peak rank came back. Players who
+        # didn't play ranked this season have no current rank but a real peak
+        # from prior seasons — still useful. No rank at all → try the next
+        # candidate (e.g. UID lookup empty → retry by IGN).
+        if "current_rank" not in parsed and "peak_rank" not in parsed:
+            continue
+        out: dict[str, Any] = {"last_refresh_status": "ok",
+                              "last_refresh_source": "tracker"}
+        # Adopt tracker's canonical IGN spelling (handles renames / casing) —
+        # this is what backfills the IGN on a UID-only account.
+        tracker_ign = parsed.pop("tracker_handle", None)
+        if tracker_ign and tracker_ign != ign:
+            out["in_game_name"] = tracker_ign
+        # Guard the auto-backfilled UID before adopting it:
+        #   1. Never clobber an already-verified UID — only fill when none.
+        #   2. Only accept it when tracker's handle matches the IGN we hold
+        #      (case-insensitively). A mismatch means a rename or fuzzy match;
+        #      binding the wrong NetEase UID would poison later UID-keyed calls.
+        #      (Moot on a UID lookup — tracker returns no platformUserId there —
+        #      but kept for the IGN-lookup path.)
+        if parsed.get("rivals_uid"):
+            handle_matches = bool(tracker_ign) and bool(ign) and \
+                tracker_ign.strip().lower() == ign.lower()
+            if uid or not handle_matches:
+                parsed.pop("rivals_uid", None)
+        # Peak monotonicity: never overwrite a higher existing peak with a
+        # lower one. tracker sometimes has incomplete season history while a
+        # prior refresh captured a true higher peak.
+        new_peak = parsed.get("peak_rank")
+        if new_peak:
+            old_peak = acct.get("peak_rank")
+            old_score = acct.get("peak_points") or 0
+            new_score = parsed.get("peak_points") or 0
+            if old_peak and _RANK_INDEX.get(old_peak, -1) > _RANK_INDEX.get(new_peak, -1):
+                parsed.pop("peak_rank", None)
+                parsed.pop("peak_points", None)
+            elif old_peak == new_peak and old_score > new_score:
+                parsed.pop("peak_points", None)
+        out.update(parsed)
+        return out
+
+    # No candidate produced a rank. Surface the private hint (display-only) and
+    # fall through to marvelrivalsapi.
+    if saw_private and signals is not None:
+        signals["tracker_private"] = True
+    return None
 
 
 def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]:
@@ -2014,6 +2038,9 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         # again. Only re-raised below if tracker says private AND we still end
         # up serving a marvelrivalsapi rank.
         "tracker_private": False,
+        # Reset every refresh; set True only when tracker serves ranks but flags
+        # the profile's match history private (see _parse_tracker_payload).
+        "tracker_history_private": False,
     }
 
     # 1. PRIMARY: tracker.gg by IGN. `signals` captures tracker's private
@@ -2053,9 +2080,9 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
 
     if status in (401, 403):
         if _is_private_payload(status, payload):
-            tried_tracker = bool((acct.get("in_game_name") or "").strip())
+            tried_tracker = bool((acct.get("in_game_name") or acct.get("rivals_uid") or "").strip())
             tail = (" (tracker.gg also couldn't fetch it)." if tried_tracker
-                    else " (no in-game name set, so tracker.gg wasn't tried — add one to bypass.)")
+                    else " (no in-game name or UID set, so tracker.gg wasn't tried — add one to bypass.)")
             return {**base, "last_refresh_status": "private",
                     "last_refresh_source": "marvelrivalsapi",
                     "last_refresh_error": "Profile is set to private in-game" + tail}
@@ -2073,9 +2100,9 @@ def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]
         return {**base, "last_refresh_status": "error",
                 "last_refresh_error": f"Rate limited by marvelrivalsapi — wait ~{wait}s, then retry."}
     if _is_private_payload(status, payload):
-        tried_tracker = bool((acct.get("in_game_name") or "").strip())
+        tried_tracker = bool((acct.get("in_game_name") or acct.get("rivals_uid") or "").strip())
         tail = (" (tracker.gg also couldn't fetch it)." if tried_tracker
-                else " (no in-game name set, so tracker.gg wasn't tried — add one to bypass.)")
+                else " (no in-game name or UID set, so tracker.gg wasn't tried — add one to bypass.)")
         return {**base, "last_refresh_status": "private",
                 "last_refresh_source": "marvelrivalsapi",
                 "last_refresh_error": "Profile is set to private in-game" + tail}
@@ -2240,7 +2267,7 @@ def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | 
     else:
         acct = {"id": uuid.uuid4().hex, "created_at": now}
     for field in ("username", "email", "in_game_name", "peak_rank",
-                  "current_rank", "notes", "border_color", "tag"):
+                  "current_rank", "notes", "border_color", "tag", "tag_color"):
         if field in payload:
             acct[field] = (payload.get(field) or "").strip()
     for field in ("pinned", "neon"):

@@ -120,14 +120,17 @@ function rankInk(t) {
   return { "--rk-fg": t && t.fg, "--rk-glow": t && t.glow };
 }
 
-// Map a stored border_color name -> hex for the tag-pill accent.
+// Map a stored color name -> hex for the tag-pill accent.
 // Falls back to a neutral hue if the account has a tag but no color picked.
 const TAG_COLORS = {
   red: "#ff5560", orange: "#ff9d2f", yellow: "#ffe14d",
   green: "#4ee07e", cyan: "#5be0ff", magenta: "#ff6ed4",
 };
+// Tag pills can carry their own color (acct.tag_color), independent of the neon
+// border (acct.border_color). When no dedicated tag color is set we fall back to
+// the border color so existing accounts look unchanged.
 function tagColorFor(acct) {
-  return TAG_COLORS[acct.border_color] || "#9aa3b2";
+  return TAG_COLORS[acct.tag_color] || TAG_COLORS[acct.border_color] || "#9aa3b2";
 }
 // A single account's `tag` field holds a comma-separated list — split it into
 // individual labels so each renders as its own pill ("boost, items" -> 2 pills).
@@ -276,6 +279,20 @@ function trackerPrivateCaveat(acct) {
   return s === "current" || s === "fresh" || s === "dormant";
 }
 const TRACKER_PRIVATE_NOTE = "tracker.gg shows this profile private — rank may be cached";
+
+// DISPLAY-ONLY caveat. tracker served public ranks but the profile's match
+// history is private, so the crawl age is NOT a last-played signal — we can't
+// know when the account last logged in. Suppresses the misleading "dormant —
+// Xd ago" framing in favor of a neutral "ranks current, history private" note.
+// Mirrors app.py's `tracker_history_private`. Only applies on an ok state.
+function historyPrivateCaveat(acct) {
+  if (!acct.tracker_history_private) return false;
+  const s = syncState(acct);
+  return s === "current" || s === "fresh" || s === "dormant";
+}
+const HISTORY_PRIVATE_NOTE =
+  "Match history is private — ranks shown are the latest tracker.gg has, "
+  + "but the account's last-played time can't be determined.";
 
 // Icon + copy for each non-clean sync state. 'current' / 'fresh' / 'dormant' /
 // 'none' render no badge on the refresh button — a clean (or simply old but
@@ -440,6 +457,16 @@ function SyncChip({ acct, hasApiKey }) {
     longText = synced
       ? `${TRACKER_PRIVATE_NOTE}. Showing the last marvelrivalsapi crawl from ${fmtRelative(synced)}.`
       : `${TRACKER_PRIVATE_NOTE}.`;
+  }
+
+  // History-private (see historyPrivateCaveat): ranks are valid/current but the
+  // crawl age is NOT a last-played signal. Stay green, drop the "dormant — Xd
+  // ago" framing, and say plainly that activity is hidden, not stale.
+  if (historyPrivateCaveat(acct)) {
+    cls = "ok";
+    icon = "🛡";
+    text = `Latest ranks · match history private${srcSuffix}`;
+    longText = HISTORY_PRIVATE_NOTE;
   }
 
   const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;
