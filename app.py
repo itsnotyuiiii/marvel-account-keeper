@@ -51,7 +51,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.13.0"
+APP_VERSION = "2.13.1"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -792,6 +792,18 @@ _rivals_rate_limited_until = 0.0  # epoch; > now means we're in a 429 cooldown
 _rivals_quota: dict[str, Any] = {"limit": None, "remaining": None,
                                  "reset": None, "at": None}
 
+# Serializes vault read-modify-write across endpoints. The server runs with
+# threaded=True, so a refresh-all (which mutates account-by-account over many
+# seconds) and a concurrent single-account refresh would otherwise race on the
+# whole-file write and clobber each other's updates. Writers re-read fresh under
+# this lock and persist only their own account; reads (GET /api/accounts) don't
+# need it because _write_vault swaps the file atomically (os.replace).
+_vault_write_lock = threading.RLock()
+# Single-flight guard for refresh-all (shared by the JSON + streaming endpoints)
+# so two tabs / a double-submit can't run concurrent sweeps and double-hammer
+# tracker.gg. Acquired non-blocking; a second caller gets 409 busy.
+_refresh_all_lock = threading.Lock()
+
 
 # ---------- vault file helpers ----------
 
@@ -1130,6 +1142,16 @@ def _require_key():
     if key is None:
         return None, (jsonify({"error": "locked"}), 401)
     return key, None
+
+
+def _touch_activity() -> None:
+    """Bump the idle-timeout clock without re-validating the key. A long
+    refresh-all is a single HTTP request, so _require_key only runs once at the
+    start — without this the session could idle-expire mid/post-stream. Called
+    as each account commits so an active sweep keeps the session alive."""
+    with _state_lock:
+        if _state["key"] is not None:
+            _state["last_activity"] = time.time()
 
 
 # ---------- account (de)serialization ----------
@@ -2568,6 +2590,22 @@ def _apply_refresh_updates(vault: dict[str, Any], acct_id: str, updates: dict[st
     return None
 
 
+def _commit_updates(acct_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    """Atomically merge `updates` onto one account: under the vault-write lock,
+    re-read the vault fresh, apply only this account's updates, persist API usage,
+    and write. Returns the merged record (or None if the account is gone).
+
+    Re-reading fresh (rather than writing a snapshot captured seconds earlier) is
+    what makes a long refresh-all safe against a concurrent single-account
+    refresh — each writer only ever overwrites its own account's fields."""
+    with _vault_write_lock:
+        vault = _read_vault()
+        merged = _apply_refresh_updates(vault, acct_id, updates)
+        _persist_api_usage(vault)
+        _write_vault(vault, backup=False)  # metadata-only; no credential change
+        return merged
+
+
 def _public_account(acct: dict[str, Any], key: bytes) -> dict[str, Any]:
     """Strip password_enc and inject decrypted password (matches /api/accounts shape)."""
     item = {k: v for k, v in acct.items() if k != "password_enc"}
@@ -2602,9 +2640,9 @@ def refresh_account_stats(acct_id: str):
     updates = _refresh_account_stats(target, api_key)
     # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
     _maybe_request_recrawl(target, updates, api_key)
-    merged = _apply_refresh_updates(vault, acct_id, updates)
-    _persist_api_usage(vault)
-    _write_vault(vault, backup=False)  # metadata-only (rank/match/api-usage); no credential change
+    merged = _commit_updates(acct_id, updates)  # atomic RMW under the vault lock
+    if merged is None:
+        return jsonify({"error": "not_found"}), 404
     return jsonify({"ok": True, "account": _public_account(merged, key),
                     "sync": _sync_status()})
 
@@ -2617,89 +2655,90 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes, api_key: str):
     Progress events: {"type":"progress","done":k,"total":n,"status":st,"account":pub|None}
     Terminal event:  {"type":"summary","summary":{...},"accounts":[...],"sync":{...}}
 
-    The vault write is done in a finally so a client disconnect mid-stream still
-    persists whatever was refreshed (metadata-only write — no credential change).
+    `vault` is only a read snapshot of which accounts to refresh; each result is
+    persisted via _commit_updates (fresh read-modify-write under the vault lock),
+    so a concurrent single-account refresh can't be clobbered and an already-
+    committed account survives a client disconnect mid-stream.
     """
     ids = [a["id"] for a in vault.get("accounts", [])]
+    targets = {a["id"]: a for a in vault.get("accounts", [])}
     total = len(ids)
     summary = {"ok": 0, "private": 0, "not_found": 0, "bad_key": 0,
-               "error": 0, "missing_handle": 0}
+               "error": 0, "missing_handle": 0, "skipped": 0}
     updated_accounts: list[dict[str, Any]] = []
     now_ts = int(time.time())
     done = 0
-    persisted = False
 
-    def _persist():
-        nonlocal persisted
-        if persisted:
-            return
-        persisted = True
-        _persist_api_usage(vault)
-        _write_vault(vault, backup=False)  # metadata-only; no credential change
-
-    try:
-        for i, acct_id in enumerate(ids):
-            target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
-            if target is None:
-                done += 1
-                yield {"type": "progress", "done": done, "total": total,
-                       "status": "skipped", "account": None}
-                continue
-            # Skip accounts that were refreshed within the per-account cooldown.
-            # Avoids hammering tracker.gg when the user just did refresh-all.
-            last_ts = int(target.get("last_refresh_ts") or 0)
-            if last_ts and now_ts - last_ts < PER_ACCOUNT_REFRESH_COOLDOWN_S:
-                # Existing rank stays as-is; just advance the progress counter.
-                done += 1
-                yield {"type": "progress", "done": done, "total": total,
-                       "status": "cooldown", "account": None}
-                continue
-            updates = _refresh_account_stats(target, api_key)
-            # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
-            _maybe_request_recrawl(target, updates, api_key)
-            merged = _apply_refresh_updates(vault, acct_id, updates)
-            st = updates.get("last_refresh_status") or "error"
-            summary[st] = summary.get(st, 0) + 1
-            pub = _public_account(merged, key) if merged is not None else None
-            if pub is not None:
-                updated_accounts.append(pub)
+    for i, acct_id in enumerate(ids):
+        target = targets.get(acct_id)
+        if target is None:
             done += 1
+            summary["skipped"] += 1
             yield {"type": "progress", "done": done, "total": total,
-                   "status": st, "account": pub}
-            # Bail early on bad_key — every subsequent call would also fail.
-            if st == "bad_key":
-                break
-            # Same for a 429: the cooldown applies globally, so plowing through
-            # the remaining accounts just stacks up more rate-limited failures.
-            if st == "error" and _rivals_rate_limited_until > time.time():
-                # Mark the rest as skipped so the UI surfaces *why* they didn't run.
-                for skipped_id in ids[i + 1:]:
-                    skipped = next((a for a in vault.get("accounts", []) if a["id"] == skipped_id), None)
-                    if skipped is None:
-                        done += 1
-                        yield {"type": "progress", "done": done, "total": total,
-                               "status": "skipped", "account": None}
-                        continue
-                    cooldown_s = max(1, int(_rivals_rate_limited_until - time.time()))
-                    merged_skip = _apply_refresh_updates(vault, skipped_id, {
-                        "last_refresh_ts": int(time.time()),
-                        "last_refresh_status": "error",
-                        "last_refresh_error": f"Skipped — rate limit cooldown ~{cooldown_s}s. Retry later.",
-                    })
-                    summary["error"] = summary.get("error", 0) + 1
-                    pub_skip = _public_account(merged_skip, key) if merged_skip is not None else None
-                    if pub_skip is not None:
-                        updated_accounts.append(pub_skip)
+                   "status": "skipped", "account": None}
+            continue
+        # Skip accounts that were refreshed within the per-account cooldown.
+        # Avoids hammering tracker.gg when the user just did refresh-all.
+        last_ts = int(target.get("last_refresh_ts") or 0)
+        if last_ts and now_ts - last_ts < PER_ACCOUNT_REFRESH_COOLDOWN_S:
+            # Existing rank stays as-is; just advance the progress counter.
+            done += 1
+            summary["skipped"] += 1
+            yield {"type": "progress", "done": done, "total": total,
+                   "status": "cooldown", "account": None}
+            continue
+        updates = _refresh_account_stats(target, api_key)
+        # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
+        _maybe_request_recrawl(target, updates, api_key)
+        merged = _commit_updates(acct_id, updates)  # atomic RMW under the vault lock
+        _touch_activity()  # keep the session alive across a long sweep
+        st = updates.get("last_refresh_status") or "error"
+        summary[st] = summary.get(st, 0) + 1
+        pub = _public_account(merged, key) if merged is not None else None
+        if pub is not None:
+            updated_accounts.append(pub)
+        done += 1
+        yield {"type": "progress", "done": done, "total": total,
+               "status": st, "account": pub}
+        # Bail early on bad_key — every subsequent call would also fail.
+        if st == "bad_key":
+            break
+        # Same for a 429: the cooldown applies globally, so plowing through
+        # the remaining accounts just stacks up more rate-limited failures.
+        if st == "error" and _rivals_rate_limited_until > time.time():
+            # Mark the rest as skipped so the UI surfaces *why* they didn't run.
+            for skipped_id in ids[i + 1:]:
+                if skipped_id not in targets:
                     done += 1
+                    summary["skipped"] += 1
                     yield {"type": "progress", "done": done, "total": total,
-                           "status": "error", "account": pub_skip}
-                break
-            if i < len(ids) - 1:
-                time.sleep(REFRESH_ALL_DELAY_S)
-    finally:
-        _persist()
+                           "status": "skipped", "account": None}
+                    continue
+                cooldown_s = max(1, int(_rivals_rate_limited_until - time.time()))
+                merged_skip = _commit_updates(skipped_id, {
+                    "last_refresh_ts": int(time.time()),
+                    "last_refresh_status": "error",
+                    "last_refresh_error": f"Skipped — rate limit cooldown ~{cooldown_s}s. Retry later.",
+                })
+                summary["error"] = summary.get("error", 0) + 1
+                pub_skip = _public_account(merged_skip, key) if merged_skip is not None else None
+                if pub_skip is not None:
+                    updated_accounts.append(pub_skip)
+                done += 1
+                yield {"type": "progress", "done": done, "total": total,
+                       "status": "error", "account": pub_skip}
+            break
+        if i < len(ids) - 1:
+            time.sleep(REFRESH_ALL_DELAY_S)
+    _touch_activity()
     yield {"type": "summary", "summary": summary,
            "accounts": updated_accounts, "sync": _sync_status()}
+
+
+def _refresh_all_busy():
+    # Built per-call: jsonify needs an app context, so it can't be a module const.
+    return jsonify({"error": "busy",
+                    "message": "A refresh-all is already running."}), 409
 
 
 @app.route("/api/accounts/refresh-all", methods=["POST"])
@@ -2711,16 +2750,21 @@ def refresh_all_accounts():
     # tracker.gg is unauthenticated, so refresh-all works even without a
     # marvelrivalsapi key — the key is only needed for fallback / UID-only
     # accounts. No hard gate.
-    vault = _read_vault()
-    summary: dict[str, Any] = {}
-    accounts: list[dict[str, Any]] = []
-    sync = None
-    for ev in _refresh_all_steps(vault, key, api_key):
-        if ev.get("type") == "summary":
-            summary = ev["summary"]
-            accounts = ev["accounts"]
-            sync = ev["sync"]
-    return jsonify({"ok": True, "summary": summary, "accounts": accounts, "sync": sync})
+    if not _refresh_all_lock.acquire(blocking=False):
+        return _refresh_all_busy()
+    try:
+        vault = _read_vault()
+        summary: dict[str, Any] = {}
+        accounts: list[dict[str, Any]] = []
+        sync = None
+        for ev in _refresh_all_steps(vault, key, api_key):
+            if ev.get("type") == "summary":
+                summary = ev["summary"]
+                accounts = ev["accounts"]
+                sync = ev["sync"]
+        return jsonify({"ok": True, "summary": summary, "accounts": accounts, "sync": sync})
+    finally:
+        _refresh_all_lock.release()
 
 
 @app.route("/api/accounts/refresh-all/stream", methods=["POST"])
@@ -2731,11 +2775,19 @@ def refresh_all_accounts_stream():
     if err:
         return err
     api_key = _marvel_rivals_api_key()
+    # Single-flight: a second concurrent sweep would double-hammer tracker.gg.
+    # Hold the lock for the life of the stream and release when the generator
+    # is exhausted (or the client disconnects and Flask closes it).
+    if not _refresh_all_lock.acquire(blocking=False):
+        return _refresh_all_busy()
     vault = _read_vault()
 
     def gen():
-        for ev in _refresh_all_steps(vault, key, api_key):
-            yield json.dumps(ev) + "\n"
+        try:
+            for ev in _refresh_all_steps(vault, key, api_key):
+                yield json.dumps(ev) + "\n"
+        finally:
+            _refresh_all_lock.release()
 
     return Response(
         stream_with_context(gen()),

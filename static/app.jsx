@@ -2065,12 +2065,21 @@ function App() {
         method: "POST", headers: { "Content-Type": "application/json" },
       });
       if (res.status === 401) { onLocked(); return; }
+      if (res.status === 409) { showToast("A refresh-all is already running"); return; }
       if (!res.ok || !res.body) throw new Error("stream_failed");
       noteActivity();
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
       let summaryEv = null;
+      const handleEv = (ev) => {
+        if (ev.type === "progress") {
+          setRefreshProgress({ done: ev.done, total: ev.total });
+          if (ev.account) mergeRefreshed(ev.account);
+        } else if (ev.type === "summary") {
+          summaryEv = ev;
+        }
+      };
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -2082,14 +2091,14 @@ function App() {
           if (!line) continue;
           let ev;
           try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.type === "progress") {
-            setRefreshProgress({ done: ev.done, total: ev.total });
-            if (ev.account) mergeRefreshed(ev.account);
-          } else if (ev.type === "summary") {
-            summaryEv = ev;
-          }
+          handleEv(ev);
         }
       }
+      // Flush any bytes the streaming decoder was holding (a multibyte char
+      // split across the final chunk) and parse a trailing newline-less line.
+      buf += dec.decode();
+      const tail = buf.trim();
+      if (tail) { try { handleEv(JSON.parse(tail)); } catch { /* partial */ } }
       if (summaryEv) {
         // Defensive: merge any account the stream's terminal event carries that
         // a dropped progress line might have missed.
@@ -2098,18 +2107,15 @@ function App() {
         const sum = summaryEv.summary || {};
         const ok = sum.ok || 0;
         const priv = sum.private || 0;
-        const issues = priv + (sum.not_found || 0) + (sum.error || 0)
+        const skipped = sum.skipped || 0;
+        const failed = (sum.not_found || 0) + (sum.error || 0)
                      + (sum.bad_key || 0) + (sum.missing_handle || 0);
-        let msg;
-        if (issues === 0) {
-          msg = `Refreshed ${ok} ${ok === 1 ? "account" : "accounts"}`;
-        } else if (ok === 0) {
-          msg = priv > 0 ? `${priv} private · ${issues - priv} other failures`
-                         : `${issues} accounts couldn't refresh`;
-        } else {
-          msg = `${ok} refreshed · ${issues} skipped`;
-        }
-        showToast(msg);
+        const parts = [];
+        if (ok) parts.push(`${ok} refreshed`);
+        if (priv) parts.push(`${priv} private`);
+        if (failed) parts.push(`${failed} failed`);
+        if (skipped) parts.push(`${skipped} skipped`);
+        showToast(parts.length ? parts.join(" · ") : "Nothing to refresh");
       }
     } catch (e) {
       showToast("Refresh-all failed — try again");
