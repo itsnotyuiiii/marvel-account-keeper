@@ -37,7 +37,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 # Packaged as a windowed PyInstaller exe (no console), sys.stdout / sys.stderr
 # come up as None on Windows and every print() in this file would raise
@@ -51,7 +51,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.12.0"
+APP_VERSION = "2.13.0"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -2609,6 +2609,99 @@ def refresh_account_stats(acct_id: str):
                     "sync": _sync_status()})
 
 
+def _refresh_all_steps(vault: dict[str, Any], key: bytes, api_key: str):
+    """Refresh every account in series, yielding a progress dict per account and
+    a terminal summary dict. Shared by the plain-JSON and NDJSON-streaming
+    refresh-all endpoints so the loop logic lives in one place.
+
+    Progress events: {"type":"progress","done":k,"total":n,"status":st,"account":pub|None}
+    Terminal event:  {"type":"summary","summary":{...},"accounts":[...],"sync":{...}}
+
+    The vault write is done in a finally so a client disconnect mid-stream still
+    persists whatever was refreshed (metadata-only write — no credential change).
+    """
+    ids = [a["id"] for a in vault.get("accounts", [])]
+    total = len(ids)
+    summary = {"ok": 0, "private": 0, "not_found": 0, "bad_key": 0,
+               "error": 0, "missing_handle": 0}
+    updated_accounts: list[dict[str, Any]] = []
+    now_ts = int(time.time())
+    done = 0
+    persisted = False
+
+    def _persist():
+        nonlocal persisted
+        if persisted:
+            return
+        persisted = True
+        _persist_api_usage(vault)
+        _write_vault(vault, backup=False)  # metadata-only; no credential change
+
+    try:
+        for i, acct_id in enumerate(ids):
+            target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
+            if target is None:
+                done += 1
+                yield {"type": "progress", "done": done, "total": total,
+                       "status": "skipped", "account": None}
+                continue
+            # Skip accounts that were refreshed within the per-account cooldown.
+            # Avoids hammering tracker.gg when the user just did refresh-all.
+            last_ts = int(target.get("last_refresh_ts") or 0)
+            if last_ts and now_ts - last_ts < PER_ACCOUNT_REFRESH_COOLDOWN_S:
+                # Existing rank stays as-is; just advance the progress counter.
+                done += 1
+                yield {"type": "progress", "done": done, "total": total,
+                       "status": "cooldown", "account": None}
+                continue
+            updates = _refresh_account_stats(target, api_key)
+            # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
+            _maybe_request_recrawl(target, updates, api_key)
+            merged = _apply_refresh_updates(vault, acct_id, updates)
+            st = updates.get("last_refresh_status") or "error"
+            summary[st] = summary.get(st, 0) + 1
+            pub = _public_account(merged, key) if merged is not None else None
+            if pub is not None:
+                updated_accounts.append(pub)
+            done += 1
+            yield {"type": "progress", "done": done, "total": total,
+                   "status": st, "account": pub}
+            # Bail early on bad_key — every subsequent call would also fail.
+            if st == "bad_key":
+                break
+            # Same for a 429: the cooldown applies globally, so plowing through
+            # the remaining accounts just stacks up more rate-limited failures.
+            if st == "error" and _rivals_rate_limited_until > time.time():
+                # Mark the rest as skipped so the UI surfaces *why* they didn't run.
+                for skipped_id in ids[i + 1:]:
+                    skipped = next((a for a in vault.get("accounts", []) if a["id"] == skipped_id), None)
+                    if skipped is None:
+                        done += 1
+                        yield {"type": "progress", "done": done, "total": total,
+                               "status": "skipped", "account": None}
+                        continue
+                    cooldown_s = max(1, int(_rivals_rate_limited_until - time.time()))
+                    merged_skip = _apply_refresh_updates(vault, skipped_id, {
+                        "last_refresh_ts": int(time.time()),
+                        "last_refresh_status": "error",
+                        "last_refresh_error": f"Skipped — rate limit cooldown ~{cooldown_s}s. Retry later.",
+                    })
+                    summary["error"] = summary.get("error", 0) + 1
+                    pub_skip = _public_account(merged_skip, key) if merged_skip is not None else None
+                    if pub_skip is not None:
+                        updated_accounts.append(pub_skip)
+                    done += 1
+                    yield {"type": "progress", "done": done, "total": total,
+                           "status": "error", "account": pub_skip}
+                break
+            if i < len(ids) - 1:
+                time.sleep(REFRESH_ALL_DELAY_S)
+    finally:
+        _persist()
+    yield {"type": "summary", "summary": summary,
+           "accounts": updated_accounts, "sync": _sync_status()}
+
+
 @app.route("/api/accounts/refresh-all", methods=["POST"])
 def refresh_all_accounts():
     key, err = _require_key()
@@ -2619,58 +2712,36 @@ def refresh_all_accounts():
     # marvelrivalsapi key — the key is only needed for fallback / UID-only
     # accounts. No hard gate.
     vault = _read_vault()
-    ids = [a["id"] for a in vault.get("accounts", [])]
-    summary = {"ok": 0, "private": 0, "not_found": 0, "bad_key": 0,
-               "error": 0, "missing_handle": 0}
-    updated_accounts: list[dict[str, Any]] = []
-    now_ts = int(time.time())
-    for i, acct_id in enumerate(ids):
-        target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
-        if target is None:
-            continue
-        # Skip accounts that were refreshed within the per-account cooldown.
-        # Avoids hammering tracker.gg when the user just did refresh-all.
-        last_ts = int(target.get("last_refresh_ts") or 0)
-        if last_ts and now_ts - last_ts < PER_ACCOUNT_REFRESH_COOLDOWN_S:
-            # Record nothing — the existing rank stays as-is, this acct is
-            # just skipped. Count toward summary so UI shows the skip.
-            summary["ok"] = summary.get("ok", 0)  # no-op for accounting
-            continue
-        updates = _refresh_account_stats(target, api_key)
-        # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
-        _maybe_request_recrawl(target, updates, api_key)
-        merged = _apply_refresh_updates(vault, acct_id, updates)
-        st = updates.get("last_refresh_status") or "error"
-        summary[st] = summary.get(st, 0) + 1
-        if merged is not None:
-            updated_accounts.append(_public_account(merged, key))
-        # Bail early on bad_key — every subsequent call would also fail.
-        # Same for a 429: the cooldown applies globally, so plowing through
-        # the remaining accounts just stacks up more rate-limited failures.
-        if st == "bad_key":
-            break
-        if st == "error" and _rivals_rate_limited_until > time.time():
-            # Mark the rest as skipped so the UI surfaces *why* they didn't run.
-            for skipped_id in ids[i + 1:]:
-                skipped = next((a for a in vault.get("accounts", []) if a["id"] == skipped_id), None)
-                if skipped is None:
-                    continue
-                cooldown_s = max(1, int(_rivals_rate_limited_until - time.time()))
-                merged_skip = _apply_refresh_updates(vault, skipped_id, {
-                    "last_refresh_ts": int(time.time()),
-                    "last_refresh_status": "error",
-                    "last_refresh_error": f"Skipped — rate limit cooldown ~{cooldown_s}s. Retry later.",
-                })
-                summary["error"] = summary.get("error", 0) + 1
-                if merged_skip is not None:
-                    updated_accounts.append(_public_account(merged_skip, key))
-            break
-        if i < len(ids) - 1:
-            time.sleep(REFRESH_ALL_DELAY_S)
-    _persist_api_usage(vault)
-    _write_vault(vault, backup=False)  # metadata-only (rank/match/api-usage); no credential change
-    return jsonify({"ok": True, "summary": summary, "accounts": updated_accounts,
-                    "sync": _sync_status()})
+    summary: dict[str, Any] = {}
+    accounts: list[dict[str, Any]] = []
+    sync = None
+    for ev in _refresh_all_steps(vault, key, api_key):
+        if ev.get("type") == "summary":
+            summary = ev["summary"]
+            accounts = ev["accounts"]
+            sync = ev["sync"]
+    return jsonify({"ok": True, "summary": summary, "accounts": accounts, "sync": sync})
+
+
+@app.route("/api/accounts/refresh-all/stream", methods=["POST"])
+def refresh_all_accounts_stream():
+    """Streaming refresh-all: emits one NDJSON line per account so the client
+    can show a real progress percentage and update cards live as each lands."""
+    key, err = _require_key()
+    if err:
+        return err
+    api_key = _marvel_rivals_api_key()
+    vault = _read_vault()
+
+    def gen():
+        for ev in _refresh_all_steps(vault, key, api_key):
+            yield json.dumps(ev) + "\n"
+
+    return Response(
+        stream_with_context(gen()),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.route("/api/accounts/<acct_id>", methods=["DELETE"])

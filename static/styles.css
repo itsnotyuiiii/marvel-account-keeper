@@ -2298,11 +2298,38 @@ html[data-theme="light"] .uid-pill{
   0%{ transform:translateX(-110%); }
   100%{ transform:translateX(338%); }
 }
+/* Determinate mode: once the stream reports counts, drop the indeterminate
+   slide and grow the segment to the real percentage (smoothly). */
+.app-progress.is-determinate{ height:5px; }
+.app-progress.is-determinate::before{
+  animation:none;
+  transform:none;
+  width:var(--app-progress-pct,0%);
+  border-radius:0 3px 3px 0;
+  transition:width .35s ease;
+}
+/* Centered percentage pill so progress is unmissable, not just a thin bar. */
+.app-progress-label{
+  position:fixed;
+  top:9px; left:50%;
+  transform:translateX(-50%);
+  z-index:81;
+  font-size:11px; font-weight:700; letter-spacing:.03em;
+  padding:3px 11px;
+  border-radius:999px;
+  color:#fff;
+  background:rgba(15,17,28,.9);
+  border:1px solid rgba(109,91,240,.55);
+  box-shadow:0 2px 12px rgba(0,0,0,.45), 0 0 10px rgba(109,91,240,.35);
+  pointer-events:none;
+  white-space:nowrap;
+}
 /* Reduced motion: the global rule below freezes the slide, so pin the segment
    to full width — a static vivid bar still clearly signals "working" rather
    than a segment stuck mid-track. */
 @media (prefers-reduced-motion: reduce){
-  .app-progress::before{ width:100%; }
+  .app-progress:not(.is-determinate)::before{ width:100%; }
+  .app-progress.is-determinate::before{ transition:none; }
 }
 
 /* The toast lives inside an always-present aria-live region so screen readers

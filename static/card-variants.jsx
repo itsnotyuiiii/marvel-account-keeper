@@ -195,10 +195,11 @@ function chip({ label, value, field, onCopy, cls = "tk-chip" }) {
 
 // ── Per-account sync state ───────────────────────────────────────────────────
 // Rank doesn't decay on its own — it only changes when the account plays
-// ranked games. Lots of alts sit dormant for weeks, so old crawls aren't
-// "stale" in any meaningful sense; the rank we have is still the rank they
-// hold. We surface the crawl age but stay green.
-const SYNC_DORMANT_AFTER_MS = 24 * 3600 * 1000;
+// ranked games. The crawl age (rivals_synced_at) is when tracker.gg / the API
+// last fetched the profile — NOT when the player last logged in, which neither
+// API exposes. So an old crawl is not "dormant" or "stale": the rank we hold is
+// still the rank they hold. We surface the crawl age as provenance but stay
+// green regardless of how old it is.
 const RECRAWL_PENDING_MS = 30 * 60 * 1000;
 // A crawl this recent means the data is as live as the 30-min recrawl gate
 // allows — shown as "current" (green ✓) rather than just "synced".
@@ -252,11 +253,11 @@ function useSecondTick(active) {
 
 // Collapse an account's refresh fields into one state token. Drives both the
 // SyncChip and the refresh-button badge so they always agree.
-//   none → never refreshed       current → ok & crawled within the last 30 min
-//   fresh → ok & under a day old dormant → ok, crawl is older than a day
+//   none → never refreshed   current → ok & crawled within the last 30 min
+//   fresh → ok, any older crawl (no "dormant"/"stale" — see note above)
 //   private / not_found / bad_key / error / missing_handle → see SYNC_META
-// "dormant" is still a clean green state — rank only changes when the account
-// plays, so an old crawl on an inactive alt isn't actually outdated.
+// There is intentionally no age-based "dormant" state: crawl age is not a
+// last-played signal, so an old crawl stays a clean green "synced".
 function syncState(acct) {
   const st = acct.last_refresh_status;
   if (!st) return "none";
@@ -264,7 +265,6 @@ function syncState(acct) {
   const synced = toMs(acct.rivals_synced_at);
   if (synced == null) return "fresh";
   const age = Date.now() - synced;
-  if (age > SYNC_DORMANT_AFTER_MS) return "dormant";
   return age <= SYNC_CURRENT_MS ? "current" : "fresh";
 }
 
@@ -276,26 +276,25 @@ function syncState(acct) {
 function trackerPrivateCaveat(acct) {
   if (!acct.tracker_private) return false;
   const s = syncState(acct);
-  return s === "current" || s === "fresh" || s === "dormant";
+  return s === "current" || s === "fresh";
 }
 const TRACKER_PRIVATE_NOTE = "tracker.gg shows this profile private — rank may be cached";
 
 // DISPLAY-ONLY caveat. tracker served public ranks but the profile's match
-// history is private, so the crawl age is NOT a last-played signal — we can't
-// know when the account last logged in. Suppresses the misleading "dormant —
-// Xd ago" framing in favor of a neutral "ranks current, history private" note.
+// history is private, so even an explicit "X ago" crawl label could be mistaken
+// for activity — make it explicit that last-played is unknowable here.
 // Mirrors app.py's `tracker_history_private`. Only applies on an ok state.
 function historyPrivateCaveat(acct) {
   if (!acct.tracker_history_private) return false;
   const s = syncState(acct);
-  return s === "current" || s === "fresh" || s === "dormant";
+  return s === "current" || s === "fresh";
 }
 const HISTORY_PRIVATE_NOTE =
   "Match history is private — ranks shown are the latest tracker.gg has, "
   + "but the account's last-played time can't be determined.";
 
-// Icon + copy for each non-clean sync state. 'current' / 'fresh' / 'dormant' /
-// 'none' render no badge on the refresh button — a clean (or simply old but
+// Icon + copy for each non-clean sync state. 'current' / 'fresh' / 'none'
+// render no badge on the refresh button — a clean (or simply old but
 // uncontested) account needs no marker. tracker.gg is the primary data source;
 // marvelrivalsapi is the fallback. Copy reflects that.
 // Short labels for chip body — the chip is clamped to a single line so it
@@ -389,7 +388,7 @@ function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
   );
 }
 
-// Inline sync notifier: current / fresh / stale / private / not-found / failed.
+// Inline sync notifier: current / fresh / private / not-found / failed.
 // This is the per-account counterpart to the API-wide status in the Options
 // panel. When a recrawl is in flight it also shows a live countdown to when
 // fresh data should land (and when the next recrawl can be requested).
@@ -432,13 +431,6 @@ function SyncChip({ acct, hasApiKey }) {
     icon = "●";
     text = synced ? `Rank synced ${fmtRelative(synced)}${srcSuffix}`
                   : `Rank synced${srcSuffix}`;
-  } else if (state === "dormant") {
-    // Rank only moves when the account plays — an old crawl on a dormant
-    // account isn't outdated, it's just unchanged. Stay green, note the age.
-    cls = "ok";
-    icon = "●";
-    text = synced ? `Rank from ${fmtRelative(synced)} · dormant${srcSuffix}`
-                  : `Rank from earlier · dormant${srcSuffix}`;
   } else {
     const m = SYNC_META[state] || SYNC_META.error;
     cls = m.cls;
@@ -460,8 +452,8 @@ function SyncChip({ acct, hasApiKey }) {
   }
 
   // History-private (see historyPrivateCaveat): ranks are valid/current but the
-  // crawl age is NOT a last-played signal. Stay green, drop the "dormant — Xd
-  // ago" framing, and say plainly that activity is hidden, not stale.
+  // crawl age is NOT a last-played signal. Stay green and say plainly that
+  // activity is hidden, not stale — never imply last-played from the crawl age.
   if (historyPrivateCaveat(acct)) {
     cls = "ok";
     icon = "🛡";
@@ -472,13 +464,12 @@ function SyncChip({ acct, hasApiKey }) {
   const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;
   // Recrawl is a marvelrivalsapi-only mechanic. Suppress the verbose
   // "recrawl queued / done" suffixes when:
-  //   1. the account has any ok-status sync (current/fresh/dormant) — the
-  //      data is good, the recrawl is moot, and the chip is just noise.
+  //   1. the account has any ok-status sync (current/fresh) — the data is
+  //      good, the recrawl is moot, and the chip is just noise.
   //   2. tracker.gg sourced the latest refresh — recrawl wouldn't help
   //      (tracker pulls live every call, no caching layer to thaw).
   const showRecrawl = state !== "current"
                    && state !== "fresh"
-                   && state !== "dormant"
                    && acct.last_refresh_source !== "tracker";
   return (
     <div className={"sync-chip sync-chip-" + cls} data-state={state}

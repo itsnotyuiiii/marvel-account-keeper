@@ -1406,11 +1406,10 @@ function SyncStatus({ sync, hasKey }) {
 // ─────────────────────────────────────────────────────────────────────────────
 const SYNC_LEGEND = [
   { icon: "✓", tone: "ok",    name: "Current",   desc: "Rank crawled by the API within the last 30 min — as live as it gets." },
-  { icon: "●", tone: "ok",    name: "Synced",    desc: "Rank synced and under a day old." },
-  { icon: "▲", tone: "warn",  name: "Stale",     desc: "API data is over a day old — refresh to queue a recrawl." },
+  { icon: "●", tone: "ok",    name: "Synced",    desc: "Rank synced from a tracker.gg / API crawl. The crawl age is shown as provenance — rank only changes when the account plays, so an old crawl isn't stale." },
   { icon: "🔒", tone: "warn",  name: "Private",   desc: "Profile is private in-game — set the rank manually." },
   { icon: "🔒", tone: "warn",  name: "Private (cached)", desc: "tracker.gg now shows this profile private, but a marvelrivalsapi rank from an earlier crawl is still displayed — treat it as possibly stale." },
-  { icon: "🛡", tone: "ok",    name: "History private", desc: "Profile is public so the ranks shown are current, but match history is private — the account's last-played time can't be determined (so it's not flagged dormant)." },
+  { icon: "🛡", tone: "ok",    name: "History private", desc: "Profile is public so the ranks shown are current, but match history is private — the account's last-played time can't be determined." },
   { icon: "?", tone: "muted", name: "Not found", desc: "No data for this player on marvelrivalsapi.com." },
   { icon: "?", tone: "muted", name: "No handle", desc: "Account has no in-game name or UID to look up." },
   { icon: "!", tone: "err",   name: "Key error", desc: "API key was rejected — check the key above." },
@@ -1492,6 +1491,9 @@ function App() {
   // flag for the "Refresh all" action.
   const [refreshing, setRefreshing] = React.useState(() => new Set());
   const [refreshingAll, setRefreshingAll] = React.useState(false);
+  // Live refresh-all progress fed by the NDJSON stream: { done, total } while a
+  // refresh-all runs, else null. Drives the determinate top progress bar + %.
+  const [refreshProgress, setRefreshProgress] = React.useState(null);
   // Currently signed-in Steam user on this PC (from loginusers.vdf). Drives
   // the "ACTIVE NOW" badge that surfaces which vault entry matches the live
   // Steam session. Null when Steam isn't installed or hasn't been used.
@@ -2052,33 +2054,68 @@ function App() {
     }
   };
 
-  // Refresh every account in series (server adds a polite delay between calls).
+  // Refresh every account in series. Consumes the NDJSON stream so the top
+  // progress bar shows a real percentage and cards update live as each lands.
   const onRefreshAll = async () => {
     if (refreshingAll) return;
     setRefreshingAll(true);
+    setRefreshProgress({ done: 0, total: 0 });
     try {
-      const res = await api("/api/accounts/refresh-all", { method: "POST" });
-      for (const a of (res?.accounts || [])) mergeRefreshed(a);
-      if (res?.sync) setSyncStatus(res.sync);
-      const sum = res?.summary || {};
-      const ok = sum.ok || 0;
-      const priv = sum.private || 0;
-      const issues = priv + (sum.not_found || 0) + (sum.error || 0)
-                   + (sum.bad_key || 0) + (sum.missing_handle || 0);
-      let msg;
-      if (issues === 0) {
-        msg = `Refreshed ${ok} ${ok === 1 ? "account" : "accounts"}`;
-      } else if (ok === 0) {
-        msg = priv > 0 ? `${priv} private · ${issues - priv} other failures`
-                       : `${issues} accounts couldn't refresh`;
-      } else {
-        msg = `${ok} refreshed · ${issues} skipped`;
+      const res = await fetch("/api/accounts/refresh-all/stream", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+      });
+      if (res.status === 401) { onLocked(); return; }
+      if (!res.ok || !res.body) throw new Error("stream_failed");
+      noteActivity();
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let summaryEv = null;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev;
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === "progress") {
+            setRefreshProgress({ done: ev.done, total: ev.total });
+            if (ev.account) mergeRefreshed(ev.account);
+          } else if (ev.type === "summary") {
+            summaryEv = ev;
+          }
+        }
       }
-      showToast(msg);
+      if (summaryEv) {
+        // Defensive: merge any account the stream's terminal event carries that
+        // a dropped progress line might have missed.
+        for (const a of (summaryEv.accounts || [])) mergeRefreshed(a);
+        if (summaryEv.sync) setSyncStatus(summaryEv.sync);
+        const sum = summaryEv.summary || {};
+        const ok = sum.ok || 0;
+        const priv = sum.private || 0;
+        const issues = priv + (sum.not_found || 0) + (sum.error || 0)
+                     + (sum.bad_key || 0) + (sum.missing_handle || 0);
+        let msg;
+        if (issues === 0) {
+          msg = `Refreshed ${ok} ${ok === 1 ? "account" : "accounts"}`;
+        } else if (ok === 0) {
+          msg = priv > 0 ? `${priv} private · ${issues - priv} other failures`
+                         : `${issues} accounts couldn't refresh`;
+        } else {
+          msg = `${ok} refreshed · ${issues} skipped`;
+        }
+        showToast(msg);
+      }
     } catch (e) {
-      if (!e.locked) showToast("Refresh-all failed — try again");
+      showToast("Refresh-all failed — try again");
     } finally {
       setRefreshingAll(false);
+      setRefreshProgress(null);
     }
   };
 
@@ -2124,10 +2161,28 @@ function App() {
   return (
     <>
       <div className="app-shell">
-        {refreshingAll && (
-          <div className="app-progress" role="progressbar"
-               aria-label="Refreshing all accounts" />
-        )}
+        {refreshingAll && (() => {
+          const det = refreshProgress && refreshProgress.total > 0;
+          const pct = det
+            ? Math.min(100, Math.round((refreshProgress.done / refreshProgress.total) * 100))
+            : 0;
+          return (
+            <>
+              <div className={"app-progress" + (det ? " is-determinate" : "")}
+                   role="progressbar"
+                   aria-label="Refreshing all accounts"
+                   aria-valuenow={det ? pct : undefined}
+                   aria-valuemin={det ? 0 : undefined}
+                   aria-valuemax={det ? 100 : undefined}
+                   style={det ? { "--app-progress-pct": pct + "%" } : undefined} />
+              <div className="app-progress-label" role="status" aria-live="polite">
+                {det
+                  ? `Refreshing ${refreshProgress.done}/${refreshProgress.total} · ${pct}%`
+                  : "Refreshing…"}
+              </div>
+            </>
+          );
+        })()}
         <Header
           count={accounts.length}
           lockIn={lockInLabel}
