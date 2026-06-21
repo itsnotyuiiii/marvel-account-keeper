@@ -51,7 +51,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.13.1"
+APP_VERSION = "2.13.2"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -793,11 +793,15 @@ _rivals_quota: dict[str, Any] = {"limit": None, "remaining": None,
                                  "reset": None, "at": None}
 
 # Serializes vault read-modify-write across endpoints. The server runs with
-# threaded=True, so a refresh-all (which mutates account-by-account over many
-# seconds) and a concurrent single-account refresh would otherwise race on the
-# whole-file write and clobber each other's updates. Writers re-read fresh under
-# this lock and persist only their own account; reads (GET /api/accounts) don't
-# need it because _write_vault swaps the file atomically (os.replace).
+# threaded=True, so without this a refresh-all (which mutates account-by-account
+# over many seconds) and a concurrent mutation (single-account refresh, create /
+# update / delete / reorder / import, options) would race on the whole-file
+# write and clobber each other. Every mutating endpoint now does its read +
+# modify + write inside this lock (re-reading fresh so it only overwrites with
+# its own change); refresh-all takes it per account via _commit_updates. Reads
+# (GET /api/accounts) don't need it — _write_vault swaps the file atomically
+# (os.replace), so a reader always sees a complete old or new file. Reentrant so
+# nested helpers under an already-held lock don't deadlock.
 _vault_write_lock = threading.RLock()
 # Single-flight guard for refresh-all (shared by the JSON + streaming endpoints)
 # so two tabs / a double-submit can't run concurrent sweeps and double-hammer
@@ -2387,24 +2391,26 @@ def set_options():
     if err:
         return err
     payload = request.json or {}
-    vault = _read_vault()
-    cfg = vault.setdefault("config", {})
     if "lockout_minutes" in payload:
         try:
             m = int(payload["lockout_minutes"])
         except (TypeError, ValueError):
             return jsonify({"error": "bad_value", "message": "lockout_minutes must be a number."}), 400
-        cfg["lockout_minutes"] = max(0, m)
-    if "marvel_rivals_api_key" in payload:
-        raw = payload.get("marvel_rivals_api_key")
-        # Empty / None clears the key; anything else is stored as-is.
-        cfg["marvel_rivals_api_key"] = (str(raw).strip() if raw else "")
-    _write_vault(vault)
-    return jsonify({
-        "ok": True,
-        "lockout_minutes": cfg.get("lockout_minutes", DEFAULT_LOCKOUT_MINUTES),
-        "has_marvel_rivals_api_key": bool(cfg.get("marvel_rivals_api_key")),
-    })
+    with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
+        vault = _read_vault()
+        cfg = vault.setdefault("config", {})
+        if "lockout_minutes" in payload:
+            cfg["lockout_minutes"] = max(0, m)
+        if "marvel_rivals_api_key" in payload:
+            raw = payload.get("marvel_rivals_api_key")
+            # Empty / None clears the key; anything else is stored as-is.
+            cfg["marvel_rivals_api_key"] = (str(raw).strip() if raw else "")
+        _write_vault(vault)
+        return jsonify({
+            "ok": True,
+            "lockout_minutes": cfg.get("lockout_minutes", DEFAULT_LOCKOUT_MINUTES),
+            "has_marvel_rivals_api_key": bool(cfg.get("marvel_rivals_api_key")),
+        })
 
 
 @app.route("/api/init", methods=["POST"])
@@ -2501,10 +2507,11 @@ def create_account():
     if err:
         return err
     payload = request.json or {}
-    vault = _read_vault()
     acct = _account_from_payload(payload, key)
-    vault.setdefault("accounts", []).append(acct)
-    _write_vault(vault)
+    with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
+        vault = _read_vault()
+        vault.setdefault("accounts", []).append(acct)
+        _write_vault(vault)
     return jsonify({"ok": True, "id": acct["id"]})
 
 
@@ -2514,13 +2521,14 @@ def update_account(acct_id: str):
     if err:
         return err
     payload = request.json or {}
-    vault = _read_vault()
-    accounts = vault.get("accounts", [])
-    for i, acct in enumerate(accounts):
-        if acct["id"] == acct_id:
-            accounts[i] = _account_from_payload(payload, key, existing=acct)
-            _write_vault(vault)
-            return jsonify({"ok": True})
+    with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
+        vault = _read_vault()
+        accounts = vault.get("accounts", [])
+        for i, acct in enumerate(accounts):
+            if acct["id"] == acct_id:
+                accounts[i] = _account_from_payload(payload, key, existing=acct)
+                _write_vault(vault)
+                return jsonify({"ok": True})
     return jsonify({"error": "not_found"}), 404
 
 
@@ -2533,27 +2541,28 @@ def import_detected_accounts():
     key, err = _require_key()
     if err:
         return err
-    vault = _read_vault()
-    accounts = vault.setdefault("accounts", [])
-    claimed = {(a.get("rivals_uid") or "").strip() for a in accounts}
     detected = _detected_rivals_uids()
-    created = 0
-    for uid in detected:
-        if uid in claimed:
-            continue
-        new = _account_from_payload({
-            "rivals_uid": uid,
-            "in_game_name": "",
-            "username": "",
-            "email": "",
-            "password": "",
-            "current_rank": "",
-            "peak_rank": "",
-        }, key)
-        accounts.append(new)
-        created += 1
-    if created:
-        _write_vault(vault)
+    with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
+        vault = _read_vault()
+        accounts = vault.setdefault("accounts", [])
+        claimed = {(a.get("rivals_uid") or "").strip() for a in accounts}
+        created = 0
+        for uid in detected:
+            if uid in claimed:
+                continue
+            new = _account_from_payload({
+                "rivals_uid": uid,
+                "in_game_name": "",
+                "username": "",
+                "email": "",
+                "password": "",
+                "current_rank": "",
+                "peak_rank": "",
+            }, key)
+            accounts.append(new)
+            created += 1
+        if created:
+            _write_vault(vault)
     return jsonify({"ok": True, "created": created})
 
 
@@ -2564,12 +2573,13 @@ def reorder_accounts():
         return err
     payload = request.json or {}
     new_order = payload.get("order") or []
-    vault = _read_vault()
-    by_id = {a["id"]: a for a in vault.get("accounts", [])}
-    if set(new_order) != set(by_id.keys()):
-        return jsonify({"error": "order_mismatch"}), 400
-    vault["accounts"] = [by_id[i] for i in new_order]
-    _write_vault(vault)
+    with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
+        vault = _read_vault()
+        by_id = {a["id"]: a for a in vault.get("accounts", [])}
+        if set(new_order) != set(by_id.keys()):
+            return jsonify({"error": "order_mismatch"}), 400
+        vault["accounts"] = [by_id[i] for i in new_order]
+        _write_vault(vault)
     return jsonify({"ok": True})
 
 
@@ -2701,7 +2711,13 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes, api_key: str):
         yield {"type": "progress", "done": done, "total": total,
                "status": st, "account": pub}
         # Bail early on bad_key — every subsequent call would also fail.
+        # Mark the rest skipped so the progress bar still reaches 100%.
         if st == "bad_key":
+            for _ in ids[i + 1:]:
+                done += 1
+                summary["skipped"] += 1
+                yield {"type": "progress", "done": done, "total": total,
+                       "status": "skipped", "account": None}
             break
         # Same for a 429: the cooldown applies globally, so plowing through
         # the remaining accounts just stacks up more rate-limited failures.
@@ -2780,10 +2796,13 @@ def refresh_all_accounts_stream():
     # is exhausted (or the client disconnects and Flask closes it).
     if not _refresh_all_lock.acquire(blocking=False):
         return _refresh_all_busy()
-    vault = _read_vault()
 
     def gen():
+        # Read inside the generator (not before building the Response) so a
+        # corrupt-vault OSError can't escape between acquire() and the
+        # try/finally and strand the lock held → permanent 409 until restart.
         try:
+            vault = _read_vault()
             for ev in _refresh_all_steps(vault, key, api_key):
                 yield json.dumps(ev) + "\n"
         finally:
@@ -2801,12 +2820,13 @@ def delete_account(acct_id: str):
     _key, err = _require_key()
     if err:
         return err
-    vault = _read_vault()
-    before = len(vault.get("accounts", []))
-    vault["accounts"] = [a for a in vault.get("accounts", []) if a["id"] != acct_id]
-    if len(vault["accounts"]) == before:
-        return jsonify({"error": "not_found"}), 404
-    _write_vault(vault)
+    with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
+        vault = _read_vault()
+        before = len(vault.get("accounts", []))
+        vault["accounts"] = [a for a in vault.get("accounts", []) if a["id"] != acct_id]
+        if len(vault["accounts"]) == before:
+            return jsonify({"error": "not_found"}), 404
+        _write_vault(vault)
     return jsonify({"ok": True})
 
 
