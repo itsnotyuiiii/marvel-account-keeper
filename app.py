@@ -51,7 +51,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.13.2"
+APP_VERSION = "2.13.3"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -2415,9 +2415,6 @@ def set_options():
 
 @app.route("/api/init", methods=["POST"])
 def init_vault():
-    vault = _read_vault()
-    if vault.get("initialized"):
-        return jsonify({"error": "already_initialized"}), 400
     body = request.json or {}
     password = body.get("password", "")
     remember = bool(body.get("remember"))
@@ -2426,14 +2423,17 @@ def init_vault():
     salt = secrets.token_bytes(16)
     key = _derive_key(password, salt)
     verifier = _encrypt(key, VERIFIER_PLAINTEXT.decode("utf-8"))
-    new_vault = {
-        "initialized": True,
-        "kdf": {"name": "scrypt", "n": SCRYPT_N, "r": SCRYPT_R, "p": SCRYPT_P, "salt": salt.hex()},
-        "verifier": verifier,
-        "config": {"lockout_minutes": DEFAULT_LOCKOUT_MINUTES},
-        "accounts": [],
-    }
-    _write_vault(new_vault)
+    with _vault_write_lock:  # atomic check-then-create so two inits can't race
+        if _read_vault().get("initialized"):
+            return jsonify({"error": "already_initialized"}), 400
+        new_vault = {
+            "initialized": True,
+            "kdf": {"name": "scrypt", "n": SCRYPT_N, "r": SCRYPT_R, "p": SCRYPT_P, "salt": salt.hex()},
+            "verifier": verifier,
+            "config": {"lockout_minutes": DEFAULT_LOCKOUT_MINUTES},
+            "accounts": [],
+        }
+        _write_vault(new_vault)
     with _state_lock:
         _state["key"] = key
         _state["last_activity"] = time.time()
@@ -3142,13 +3142,10 @@ def fetch_match_history(acct_id: str):
 
     api_key = _marvel_rivals_api_key()
     updates = _fetch_match_history(target, api_key)
-    merged = _apply_refresh_updates(vault, acct_id, updates)
+    merged = _commit_updates(acct_id, updates)  # atomic RMW under the vault lock
     if merged is None:
-        # Defensive: the account was found above, so this can't normally happen
-        # on the same in-memory vault — but never pass None into _public_account.
+        # The account was deleted between the lookup above and the commit.
         return jsonify({"error": "not_found"}), 404
-    _persist_api_usage(vault)
-    _write_vault(vault, backup=False)  # metadata-only (rank/match/api-usage); no credential change
     return jsonify({"ok": True, "account": _public_account(merged, key),
                     "sync": _sync_status()})
 
