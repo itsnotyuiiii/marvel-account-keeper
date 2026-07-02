@@ -1577,12 +1577,15 @@ function App() {
   // whenever the app comes up on a different port (origin change).
   const lastUiPush = React.useRef(null);
   const syncUiOptions = React.useCallback((ui) => {
-    const merged = { ...uiOptionSubset(tRef.current) };
+    const server = {};
     if (ui && typeof ui === "object") {
-      for (const k of UI_SYNC_KEYS) if (ui[k] !== undefined) merged[k] = ui[k];
-      setTweak(merged);
+      for (const k of UI_SYNC_KEYS) if (ui[k] !== undefined) server[k] = ui[k];
     }
-    lastUiPush.current = JSON.stringify(merged);
+    if (Object.keys(server).length) setTweak(server);
+    // Seed change-detection from what the SERVER holds — not the local merge —
+    // so prefs that only exist locally read as unpushed and the effect below
+    // mirrors them into the vault instead of silently stranding them.
+    lastUiPush.current = JSON.stringify(server);
   }, [setTweak]);
 
   // Pull the API usage / rate-limit snapshot. Unauthenticated, fire-and-forget.
@@ -1634,9 +1637,11 @@ function App() {
     const json = JSON.stringify(uiOptionSubset(t));
     if (json === lastUiPush.current) return undefined;
     const id = setTimeout(() => {
-      lastUiPush.current = json;
+      // Mark pushed only on success — a failed POST leaves lastUiPush stale
+      // so the next change (or unlock resync) retries the full subset.
       api("/api/options", { method: "POST", body: `{"ui_options":${json}}` })
-        .catch(() => { /* transient — re-pushed on the next change */ });
+        .then(() => { lastUiPush.current = json; })
+        .catch(() => { /* transient — retried per the comment above */ });
     }, 800);
     return () => clearTimeout(id);
   }, [t, ready, api]);

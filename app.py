@@ -52,7 +52,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.14.0"
+APP_VERSION = "2.14.1"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -725,7 +725,22 @@ def _block_cross_origin():
     page can't *read* responses, but without this guard it could still fire
     blind cross-site POST/PUT/DELETE side effects (delete accounts, force an
     exe self-update, shut the app down). We trust the browser-set Origin /
-    Referer headers, which cannot be forged by cross-site JavaScript."""
+    Referer headers, which cannot be forged by cross-site JavaScript.
+
+    The Host check below runs on ALL methods, GET/HEAD included. With the
+    port now fixed (DEFAULT_PORT) a DNS-rebinding page — an attacker domain
+    re-resolving to 127.0.0.1 — would be same-origin for its own hostname
+    and could otherwise *read* responses (GET /api/accounts serves decrypted
+    passwords while the vault is unlocked). The browser preserves the
+    attacker hostname in Host, so rejecting non-loopback Hosts kills
+    rebinding outright."""
+    try:
+        host = urllib.parse.urlsplit("//" + (request.host or "")).hostname or ""
+    except ValueError:
+        host = ""
+    if host.lower() not in _LOOPBACK_HOSTS:
+        return jsonify({"error": "forbidden",
+                        "message": "Bad Host header."}), 403
     if request.method in _SAFE_METHODS:
         return None
     origin = request.headers.get("Origin")
