@@ -5,7 +5,8 @@ password field encrypted under a key derived from a master password (scrypt
 + AES-256-GCM). The derived key lives only in process memory after unlock.
 
 Run directly (`python app.py`) or as the packaged executable — no arguments
-needed. It picks a free loopback port, opens the default browser, and quits
+needed. It binds a fixed loopback port (falling back to a free one if it's
+taken), opens the default browser, and quits
 itself ~2 min after the browser is closed, so a double-clicked build leaves
 nothing running. Optional flags: `--no-browser` (headless, stays up),
 `--port N` (fixed port), `--keep-alive` (open the browser but don't auto-quit).
@@ -51,7 +52,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.13.3"
+APP_VERSION = "2.14.0"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -893,6 +894,18 @@ def _lockout_minutes() -> int:
     except (TypeError, ValueError):
         m = DEFAULT_LOCKOUT_MINUTES
     return max(0, m)
+
+
+def _ui_options() -> dict[str, Any]:
+    """Client UI preferences (view, density, hide toggles, …) persisted in the
+    vault so they survive restarts. localStorage alone can't do that: the app's
+    port — and with it the browser origin that scopes localStorage — used to
+    change every launch."""
+    try:
+        ui = (_read_vault().get("config", {}) or {}).get("ui_options")
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return ui if isinstance(ui, dict) else {}
 
 
 def _idle_timeout_s() -> int | None:
@@ -2051,7 +2064,9 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
     if saw_not_found and not saw_private and not uid:
         return {"last_refresh_status": "not_found",
                 "last_refresh_source": "tracker",
-                "last_refresh_error": "tracker.gg couldn't find a player with that name."}
+                "last_refresh_error": "tracker.gg couldn't find a player with that name. "
+                                      "If the account was renamed in-game, update the IGN — "
+                                      "the UID links on the next successful refresh."}
     return None
 
 
@@ -2368,6 +2383,7 @@ def status():
         "repo": GITHUB_REPO_SLUG,
         "remember_supported": remember_supported(),
         "has_remembered_session": _remember_path().exists() if remember_supported() else False,
+        "ui_options": (vault.get("config", {}) or {}).get("ui_options") or {},
     })
 
 
@@ -2376,6 +2392,7 @@ def get_options():
     return jsonify({
         "lockout_minutes": _lockout_minutes(),
         "has_marvel_rivals_api_key": bool(_marvel_rivals_api_key()),
+        "ui_options": _ui_options(),
     })
 
 
@@ -2396,16 +2413,33 @@ def set_options():
             m = int(payload["lockout_minutes"])
         except (TypeError, ValueError):
             return jsonify({"error": "bad_value", "message": "lockout_minutes must be a number."}), 400
+    if "ui_options" in payload:
+        ui = payload.get("ui_options")
+        # Small flat blob of scalar prefs — reject anything that could bloat
+        # the vault or smuggle structure the frontend never sends.
+        valid = isinstance(ui, dict) and len(ui) <= 32 and all(
+            isinstance(k, str) and len(k) <= 64
+            and (v is None or isinstance(v, (str, int, float, bool)))
+            and not (isinstance(v, str) and len(v) > 256)
+            for k, v in ui.items()
+        )
+        if not valid:
+            return jsonify({"error": "bad_value",
+                            "message": "ui_options must be a small object of scalar values."}), 400
     with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
         vault = _read_vault()
         cfg = vault.setdefault("config", {})
         if "lockout_minutes" in payload:
             cfg["lockout_minutes"] = max(0, m)
+        if "ui_options" in payload:
+            cfg["ui_options"] = ui
         if "marvel_rivals_api_key" in payload:
             raw = payload.get("marvel_rivals_api_key")
             # Empty / None clears the key; anything else is stored as-is.
             cfg["marvel_rivals_api_key"] = (str(raw).strip() if raw else "")
-        _write_vault(vault)
+        # UI-preference-only writes happen on every toggle — skip the backup
+        # snapshot for those (see _write_vault); key/lockout changes keep it.
+        _write_vault(vault, backup=any(k != "ui_options" for k in payload))
         return jsonify({
             "ok": True,
             "lockout_minutes": cfg.get("lockout_minutes", DEFAULT_LOCKOUT_MINUTES),
@@ -3177,6 +3211,23 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+# Fixed preferred port so the browser origin — which scopes localStorage
+# (UI options cache, drawer drafts) — stays stable across launches. Arbitrary
+# high number to dodge common services; anything squatting on it just pushes
+# us back to an OS-assigned port for that run.
+DEFAULT_PORT = 27455
+
+
+def _default_port() -> int:
+    """DEFAULT_PORT when it's free, else an OS-assigned fallback."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", DEFAULT_PORT))
+            return DEFAULT_PORT
+        except OSError:
+            return _free_port()
+
+
 def _shutdown(reason: str) -> None:
     """Print a parting line and end the process."""
     print(f"\n  {reason} — Marvel Rivals Account Tracker stopped. Your vault is saved.")
@@ -3414,7 +3465,7 @@ def main() -> None:
 
     # Quiet the per-request Werkzeug log lines — the banner is what matters.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    port = args.port or _free_port()
+    port = args.port or _default_port()
     url = f"http://127.0.0.1:{port}"
     open_browser = not args.no_browser
     # Default: behave like an app — quit shortly after the browser closes so

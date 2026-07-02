@@ -195,14 +195,15 @@ function chip({ label, value, field, onCopy, cls = "tk-chip" }) {
 
 // ── Per-account sync state ───────────────────────────────────────────────────
 // Rank doesn't decay on its own — it only changes when the account plays
-// ranked games. The crawl age (rivals_synced_at) is when tracker.gg / the API
-// last fetched the profile — NOT when the player last logged in, which neither
-// API exposes. So an old crawl is not "dormant" or "stale": the rank we hold is
-// still the rank they hold. We surface the crawl age as provenance but stay
-// green regardless of how old it is.
+// ranked games. Freshness is keyed off last_refresh_ts (when WE last pulled),
+// not the provider's internal crawl stamp (rivals_synced_at): tracker.gg's
+// `lastUpdated` can lag hours behind the live data it serves, so keying off it
+// made a just-refreshed account that changed rank still read "synced 13h ago".
+// last_refresh_ts is unambiguous — it's when you hit refresh. An old value is
+// not "dormant"/"stale" either: the rank we hold is still the rank they hold.
 const RECRAWL_PENDING_MS = 30 * 60 * 1000;
-// A crawl this recent means the data is as live as the 30-min recrawl gate
-// allows — shown as "current" (green ✓) rather than just "synced".
+// A pull this recent is as live as the 30-min recrawl gate allows — shown as
+// "current" (green ✓) rather than just "synced".
 const SYNC_CURRENT_MS = 30 * 60 * 1000;
 
 // Account timestamps are epoch seconds; normalize anything seconds-scale to ms.
@@ -253,16 +254,16 @@ function useSecondTick(active) {
 
 // Collapse an account's refresh fields into one state token. Drives both the
 // SyncChip and the refresh-button badge so they always agree.
-//   none → never refreshed   current → ok & crawled within the last 30 min
-//   fresh → ok, any older crawl (no "dormant"/"stale" — see note above)
+//   none → never refreshed   current → ok & pulled within the last 30 min
+//   fresh → ok, any older pull (no "dormant"/"stale" — see note above)
 //   private / not_found / bad_key / error / missing_handle → see SYNC_META
-// There is intentionally no age-based "dormant" state: crawl age is not a
-// last-played signal, so an old crawl stays a clean green "synced".
+// There is intentionally no age-based "dormant" state: refresh age is not a
+// last-played signal, so an old pull stays a clean green "synced".
 function syncState(acct) {
   const st = acct.last_refresh_status;
   if (!st) return "none";
   if (st !== "ok") return st;
-  const synced = toMs(acct.rivals_synced_at);
+  const synced = toMs(acct.last_refresh_ts);
   if (synced == null) return "fresh";
   const age = Date.now() - synced;
   return age <= SYNC_CURRENT_MS ? "current" : "fresh";
@@ -395,7 +396,13 @@ function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
 function SyncChip({ acct, hasApiKey }) {
   const state = syncState(acct);
 
-  const synced = toMs(acct.rivals_synced_at);
+  // "Synced Xago" = when WE last pulled (last_refresh_ts), not the provider's
+  // internal crawl stamp. tracker.gg's `lastUpdated` (rivals_synced_at) can lag
+  // hours behind the live data it serves, so a fresh pull that changed the rank
+  // would otherwise still read "synced 13h ago". providerCrawl is kept only for
+  // the marvelrivalsapi cached-data note below.
+  const synced = toMs(acct.last_refresh_ts);
+  const providerCrawl = toMs(acct.rivals_synced_at);
   const reqAt = toMs(acct.rivals_update_requested_at);
   const lastRefreshTs = toMs(acct.last_refresh_ts);
   // marvelrivalsapi locks a player for 30 min after an /update — that same
@@ -424,7 +431,7 @@ function SyncChip({ acct, hasApiKey }) {
   if (state === "current") {
     cls = "ok";
     icon = "✓";
-    text = synced ? `Rank current — crawled ${fmtRelative(synced)}${srcSuffix}`
+    text = synced ? `Rank current — synced ${fmtRelative(synced)}${srcSuffix}`
                   : `Rank current${srcSuffix}`;
   } else if (state === "fresh") {
     cls = "ok";
@@ -446,8 +453,8 @@ function SyncChip({ acct, hasApiKey }) {
     cls = "warn";
     icon = "🔒";
     text = `${text} · ${TRACKER_PRIVATE_NOTE}`;
-    longText = synced
-      ? `${TRACKER_PRIVATE_NOTE}. Showing the last marvelrivalsapi crawl from ${fmtRelative(synced)}.`
+    longText = providerCrawl
+      ? `${TRACKER_PRIVATE_NOTE}. Showing the last marvelrivalsapi crawl from ${fmtRelative(providerCrawl)}.`
       : `${TRACKER_PRIVATE_NOTE}.`;
   }
 

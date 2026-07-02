@@ -42,6 +42,16 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 const OPTIONS_KEY = "marvel-tracker-options";
 const OPTION_KEYS = ["view", "theme", "densityCards", "densityTable", "densityLadder",
   "ladderSort", "hideDetails", "hideCopy", "infoRailOpen", "lockoutMinutes", "srTierRelative"];
+// Keys mirrored into the vault (config.ui_options) so prefs survive app
+// restarts: localStorage alone can't — it's scoped to the origin, and the
+// origin includes the port, which changes whenever the fixed port is taken.
+// lockoutMinutes is excluded: the server already owns it as lockout_minutes.
+const UI_SYNC_KEYS = OPTION_KEYS.filter((k) => k !== "lockoutMinutes");
+function uiOptionSubset(values) {
+  const subset = {};
+  for (const k of UI_SYNC_KEYS) if (values[k] !== undefined) subset[k] = values[k];
+  return subset;
+}
 // Density is stored per view, so each layout keeps its own compact/comfy choice.
 const DENSITY_KEY = { cards: "densityCards", table: "densityTable", ladder: "densityLadder" };
 const DENSITY_VIEW_LABEL = { cards: "Cards", table: "Table", ladder: "Ladder" };
@@ -1405,8 +1415,8 @@ function SyncStatus({ sync, hasKey }) {
 // Lives in the Options panel so the icons on the cards are self-documenting.
 // ─────────────────────────────────────────────────────────────────────────────
 const SYNC_LEGEND = [
-  { icon: "✓", tone: "ok",    name: "Current",   desc: "Rank crawled by the API within the last 30 min — as live as it gets." },
-  { icon: "●", tone: "ok",    name: "Synced",    desc: "Rank synced from a tracker.gg / API crawl. The crawl age is shown as provenance — rank only changes when the account plays, so an old crawl isn't stale." },
+  { icon: "✓", tone: "ok",    name: "Current",   desc: "You refreshed this within the last 30 min — as live as it gets." },
+  { icon: "●", tone: "ok",    name: "Synced",    desc: "Synced — the time shown is when you last refreshed it, not the provider's crawl stamp. Rank only changes when the account plays, so an older sync isn't stale." },
   { icon: "🔒", tone: "warn",  name: "Private",   desc: "Profile is private in-game — set the rank manually." },
   { icon: "🔒", tone: "warn",  name: "Private (cached)", desc: "tracker.gg now shows this profile private, but a marvelrivalsapi rank from an earlier crawl is still displayed — treat it as possibly stale." },
   { icon: "🛡", tone: "ok",    name: "History private", desc: "Profile is public so the ranks shown are current, but match history is private — the account's last-played time can't be determined." },
@@ -1561,6 +1571,20 @@ function App() {
     setLockIn(mins > 0 ? mins * 60 : 0);
   }, [setTweak]);
 
+  // Pull vault-persisted UI prefs (config.ui_options) into the client store,
+  // and remember what the server holds so the push effect below only POSTs
+  // actual changes. Server wins over localStorage: localStorage is wiped
+  // whenever the app comes up on a different port (origin change).
+  const lastUiPush = React.useRef(null);
+  const syncUiOptions = React.useCallback((ui) => {
+    const merged = { ...uiOptionSubset(tRef.current) };
+    if (ui && typeof ui === "object") {
+      for (const k of UI_SYNC_KEYS) if (ui[k] !== undefined) merged[k] = ui[k];
+      setTweak(merged);
+    }
+    lastUiPush.current = JSON.stringify(merged);
+  }, [setTweak]);
+
   // Pull the API usage / rate-limit snapshot. Unauthenticated, fire-and-forget.
   const refreshSyncStatus = React.useCallback(() => {
     fetch("/api/rivals/sync-status")
@@ -1578,6 +1602,7 @@ function App() {
         if (cancelled) return;
         setAccountCount(s.account_count || 0);
         syncLockout(s.lockout_minutes);
+        syncUiOptions(s.ui_options);
         setHasApiKey(!!s.has_marvel_rivals_api_key);
         setBuildInfo({
           version: s.version || null,
@@ -1600,18 +1625,35 @@ function App() {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Mirror UI-pref changes into the vault (debounced) once unlocked, so they
+  // come back on the next launch via /api/status → syncUiOptions. Skipped
+  // while locked — POST /api/options needs the key; localStorage still holds
+  // the change for this origin in the meantime.
+  React.useEffect(() => {
+    if (!ready) return undefined;
+    const json = JSON.stringify(uiOptionSubset(t));
+    if (json === lastUiPush.current) return undefined;
+    const id = setTimeout(() => {
+      lastUiPush.current = json;
+      api("/api/options", { method: "POST", body: `{"ui_options":${json}}` })
+        .catch(() => { /* transient — re-pushed on the next change */ });
+    }, 800);
+    return () => clearTimeout(id);
+  }, [t, ready, api]);
+
   // After a successful init/unlock, resync state and enter the app.
   const enterReady = React.useCallback(async () => {
     try {
       const s = await fetch("/api/status").then((r) => r.json());
       syncLockout(s.lockout_minutes);
+      syncUiOptions(s.ui_options);
       setLockIn(s.lockout_minutes > 0 ? s.lock_in_s : 0);
       setHasApiKey(!!s.has_marvel_rivals_api_key);
     } catch { /* fall through with whatever we have */ }
     refreshSyncStatus();
     await loadAccounts();
     setPhase("ready");
-  }, [loadAccounts, syncLockout, refreshSyncStatus]);
+  }, [loadAccounts, syncLockout, syncUiOptions, refreshSyncStatus]);
 
   const handleUnlock = async (password, remember) => {
     const res = await fetch("/api/unlock", {

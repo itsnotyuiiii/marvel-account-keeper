@@ -99,7 +99,8 @@ pip install -r requirements.txt
 python app.py
 ```
 
-It picks a free port and opens the app window, same as the packaged build
+It binds a fixed local port (falling back to a free one if it's taken) and
+opens the app window, same as the packaged build
 (falling back to your browser if no native window component is available).
 On Windows you can also just double-click `run.bat`. Pass `--no-browser` to
 run headless (serve only, no window) — handy for development.
