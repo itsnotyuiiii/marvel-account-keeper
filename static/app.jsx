@@ -391,7 +391,7 @@ function Header({ count, lockIn, lockoutMinutes, onLock, onSettings, theme, onTo
 const Toolbar = React.forwardRef(function Toolbar(
 { query, onQuery, sort, onSort, view, onView, onNew,
   ladderSort, onLadderSort,
-  onRefreshAll, refreshingAll, hasApiKey, accountsCount }, searchRef)
+  onRefreshAll, refreshingAll, accountsCount }, searchRef)
 {
   return (
     <div className="app-toolbar">
@@ -441,7 +441,7 @@ const Toolbar = React.forwardRef(function Toolbar(
           className={"app-btn-ghost app-btn-refresh-all" + (refreshingAll ? " is-busy" : "")}
           onClick={onRefreshAll}
           disabled={refreshingAll}
-          title="Pull current ranks (tracker.gg primary, marvelrivalsapi fallback)">
+          title="Pull current ranks from Tracker.gg">
           <RefreshIcon spinning={refreshingAll} />
           <span>{refreshingAll ? "Refreshing…" : "Refresh stats"}</span>
         </button>
@@ -522,191 +522,26 @@ function baseFormFor(acct) {
   };
 }
 
-// Render one match-history row. Win/loss is encoded as a left color stripe;
-// SR delta is green/red; MVP/SVP get a small badge. Hero/map artwork is loaded
-// from marvelrivalsapi.com which hosts the assets (URLs come back relative).
-// Clicking the row expands a detail panel with the full, untruncated fields —
-// add more entries to `details` below as the backend exposes more per-match data.
-function MatchRow({ m }) {
-  const [open, setOpen] = React.useState(false);
-  const sr = typeof m.sr_delta === "number" ? m.sr_delta : 0;
-  const ago = (() => {
-    if (!m.ts) return "";
-    const dt = Date.now() / 1000 - m.ts;
-    if (dt < 3600) return `${Math.max(1, Math.round(dt / 60))}m ago`;
-    if (dt < 86400) return `${Math.round(dt / 3600)}h ago`;
-    if (dt < 7 * 86400) return `${Math.round(dt / 86400)}d ago`;
-    const d = new Date(m.ts * 1000);
-    return `${d.getMonth() + 1}/${d.getDate()}`;
-  })();
-  const duration = m.duration_s
-    ? `${Math.floor(m.duration_s / 60)}:${String(m.duration_s % 60).padStart(2, "0")}`
-    : "";
-  const heroSrc = m.hero_image
-    ? `https://marvelrivalsapi.com${m.hero_image}`
-    : "";
-  const mapSrc = m.map_thumbnail
-    ? `https://marvelrivalsapi.com${m.map_thumbnail}`
-    : "";
-  const srStr = sr > 0 ? `+${sr.toFixed(1)}` : sr.toFixed(1);
-
-  // Full-field list for the expanded panel. Falsy values are dropped, so new
-  // fields can be appended freely without rendering blanks for older matches.
-  const details = [
-    ["Result", m.is_win ? "Victory" : "Defeat"],
-    ["Hero", m.hero_name || "Unknown"],
-    ["K / D / A", `${m.kda[0]} / ${m.kda[1]} / ${m.kda[2]}`],
-    ["Mode", m.mode_label],
-    ["Duration", duration],
-    ["SR change", srStr],
-    ["SR after", typeof m.sr_after === "number" && m.sr_after ? m.sr_after.toFixed(1) : ""],
-    ["Season", m.season ? `Season ${m.season}` : ""],
-    ["Played", m.ts ? new Date(m.ts * 1000).toLocaleString() : ""],
-  ].filter(([, v]) => v !== "" && v != null);
-
-  const toggle = () => setOpen((o) => !o);
-
+// RivalsData does not publish a developer API. Integrate it as an explicit,
+// user-opened profile link so the app never scrapes private website endpoints.
+function RivalsDataProfileLink({ uid }) {
+  const digits = String(uid || "").replace(/\D/g, "");
+  if (!digits) return null;
   return (
-    <div className={"match-row " + (m.is_win ? "match-win" : "match-loss")
-                    + (open ? " is-open" : "")}
-         role="button" tabIndex={0} aria-expanded={open}
-         onClick={toggle}
-         onKeyDown={(e) => {
-           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
-         }}>
-      <span className="match-stripe" />
-      {heroSrc
-        ? <img className="match-hero-img" src={heroSrc} alt=""
-               onError={(e) => { e.currentTarget.classList.add("is-broken"); }} />
-        : <span className="match-hero-img match-hero-ph" aria-hidden="true" />}
-      <div className="match-info">
-        <div className="match-line1">
-          <span className="match-hero-name">{m.hero_name || "Unknown"}</span>
-          {m.is_mvp && <span className="match-badge match-mvp">MVP</span>}
-          {m.is_svp && !m.is_mvp && <span className="match-badge match-svp">SVP</span>}
-          {m.disconnected && <span className="match-badge match-dc">DC</span>}
-        </div>
-        <div className="match-line2">
-          <span className="match-kda">
-            <b>{m.kda[0]}</b>/<b>{m.kda[1]}</b>/<b>{m.kda[2]}</b>
-          </span>
-          <span className="match-sep">·</span>
-          <span className="match-mode">{m.mode_label}</span>
-          {duration && <><span className="match-sep">·</span>
-                        <span className="match-dur">{duration}</span></>}
-        </div>
-      </div>
-      <div className="match-right">
-        <div className="match-right-stack">
-          <span className={"match-sr " + (sr > 0 ? "match-sr-up" : sr < 0 ? "match-sr-down" : "")}>
-            {srStr}
-          </span>
-          <span className="match-ago">{ago}</span>
-        </div>
-        <span className="match-chev" aria-hidden="true">▸</span>
-      </div>
-      {open && (
-        <div className="match-details" onClick={(e) => e.stopPropagation()}>
-          {mapSrc && (
-            <img className="match-map-img" src={mapSrc} alt=""
-                 onError={(e) => { e.currentTarget.style.display = "none"; }} />
-          )}
-          <dl className="match-detail-grid">
-            {details.map(([k, v]) => (
-              <div className="md-item" key={k}>
-                <dt className="md-k">{k}</dt>
-                <dd className="md-v">{v}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MatchHistory({ acct, syncing, onSync }) {
-  const matches = acct?.recent_matches || [];
-  const synced = acct?.matches_synced_at || 0;
-  const err = acct?.matches_error;
-  const hasUid = !!(acct?.rivals_uid || "").toString().trim();
-
-  // Auto-pull on first open for accounts with a resolved UID and no matches yet.
-  React.useEffect(() => {
-    if (!hasUid || syncing || matches.length > 0 || synced) return;
-    onSync(acct.id);
-    // Only chase one auto-pull per drawer mount per account.
-  }, [acct?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const syncLabel = (() => {
-    if (!synced) return "Never synced";
-    const dt = Date.now() / 1000 - synced;
-    if (dt < 90) return "Just synced";
-    if (dt < 3600) return `Synced ${Math.round(dt / 60)}m ago`;
-    if (dt < 86400) return `Synced ${Math.round(dt / 3600)}h ago`;
-    return `Synced ${Math.round(dt / 86400)}d ago`;
-  })();
-
-  return (
-    <section className="drawer-section">
-      <div className="drawer-section-lbl drawer-section-lbl-row">
-        <span>Recent matches</span>
-        <div className="drawer-section-r">
-          <span className="match-sync-lbl">{syncLabel}</span>
-          <button
-            type="button"
-            className="match-sync-btn"
-            disabled={syncing || !hasUid}
-            onClick={() => onSync(acct.id)}
-            title={hasUid ? "Pull the last 20 ranked matches" :
-                            "Refresh the account's rank first to resolve its UID"}>
-            {syncing ? "Syncing…" : "Sync ↻"}
-          </button>
-        </div>
-      </div>
-      {!hasUid && (
-        <div className="match-empty">
-          Refresh the account's rank first to resolve its Marvel Rivals UID,
-          then come back here to pull match history.
-        </div>
-      )}
-      {hasUid && err && (
-        <div className="match-empty match-error">{err}</div>
-      )}
-      {hasUid && !err && matches.length === 0 && !syncing && (
-        <div className="match-empty">No matches synced yet.</div>
-      )}
-      {hasUid && !err && matches.length === 0 && syncing && (
-        <div className="match-empty">Pulling recent matches…</div>
-      )}
-      {matches.length > 0 && (
-        <div className="match-list">
-          {matches.map((m) => <MatchRow key={m.uid || m.ts} m={m} />)}
-        </div>
-      )}
-    </section>
+    <a className="rivalsdata-link"
+       href={`https://rivalsdata.com/player/${encodeURIComponent(digits)}`}
+       target="_blank" rel="noopener noreferrer">
+      Open stats &amp; match history on RivalsData <span aria-hidden="true">↗</span>
+    </a>
   );
 }
 
 // Lists Marvel Rivals UIDs detected on this PC that aren't already claimed
-// by any vault account. Clicking one assigns it to the open drawer's form
-// and (best-effort) resolves the IGN via marvelrivalsapi so the in-game
-// name field auto-fills. Source of truth: the UID. Typed IGNs that don't
-// match the API name will be corrected on the next refresh.
-function UidSuggester({ currentUid, unclaimedUids, onResolveUid, onPick }) {
-  const [resolved, setResolved] = React.useState(() => new Map()); // uid -> name | null
-  const [resolving, setResolving] = React.useState(() => new Set());
+// by any vault account. Clicking one assigns it locally; no network request is
+// made until the user explicitly refreshes that account's stats.
+function UidSuggester({ currentUid, unclaimedUids, onPick }) {
   const hasCurrent = !!(currentUid || "").toString().trim();
   if (hasCurrent || !unclaimedUids || unclaimedUids.length === 0) return null;
-
-  const resolve = async (uid) => {
-    if (resolved.has(uid) || resolving.has(uid)) return resolved.get(uid);
-    setResolving((p) => new Set(p).add(uid));
-    const name = await onResolveUid(uid);
-    setResolved((p) => new Map(p).set(uid, name || null));
-    setResolving((p) => { const n = new Set(p); n.delete(uid); return n; });
-    return name || null;
-  };
 
   return (
     <div className="uid-suggester">
@@ -715,20 +550,12 @@ function UidSuggester({ currentUid, unclaimedUids, onResolveUid, onPick }) {
       </div>
       <div className="uid-suggester-pills">
         {unclaimedUids.map((uid) => {
-          const name = resolved.get(uid);
-          const isResolving = resolving.has(uid);
           return (
             <button key={uid}
                     type="button"
                     className="uid-pill"
-                    onClick={async () => {
-                      const n = resolved.has(uid) ? resolved.get(uid) : await resolve(uid);
-                      onPick(uid, n);
-                    }}
-                    onMouseEnter={() => resolve(uid)}>
+                    onClick={() => onPick(uid)}>
               <span className="uid-pill-id">{uid}</span>
-              {isResolving && <span className="uid-pill-name">…</span>}
-              {!isResolving && name && <span className="uid-pill-name">{name}</span>}
             </button>
           );
         })}
@@ -737,8 +564,8 @@ function UidSuggester({ currentUid, unclaimedUids, onResolveUid, onPick }) {
   );
 }
 
-function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, syncingMatches,
-                  unclaimedUids, onResolveUid, activeSteam, localRivalsUids }) {
+function Drawer({ open, acct, view, onClose, onSave, onDelete,
+                  unclaimedUids, activeSteam, localRivalsUids }) {
   const isNew = !acct?.id;
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [form, setForm] = React.useState(() => baseFormFor(null));
@@ -893,21 +720,26 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
               <UidSuggester
                 currentUid={form.rivals_uid}
                 unclaimedUids={unclaimedUids}
-                onResolveUid={onResolveUid}
-                onPick={(uid, name) => {
+                onPick={(uid) => {
                   set("rivals_uid", uid);
-                  if (name) set("in_game_name", name);
                 }} />
             )}
             <p className="dr-field-note">
               <strong>A UID is the preferred way to link an account.</strong> It's
-              the most reliable lookup — it works for private or renamed accounts,
-              and it pulls the exact in-game name straight from the API, including
-              superscript / special characters that are awkward to type by hand.
-              Set a UID and the in-game name fills itself in and stays in sync on
-              every refresh; leave it blank and lookups fall back to the typed
-              in-game name.
+              stable across renames and enables a direct RivalsData profile link.
+              A successful public stats refresh can also fill the exact in-game
+              name, including special characters that are awkward to type. Leave
+              it blank and rank lookups fall back to the typed in-game name.
             </p>
+            {form.rivals_uid && (
+              <div className="rivalsdata-card">
+                <RivalsDataProfileLink uid={form.rivals_uid} />
+                <p>
+                  Opens RivalsData in your browser. Nothing is sent to RivalsData
+                  until you click the link.
+                </p>
+              </div>
+            )}
           </section>
 
           <section className="drawer-section">
@@ -1029,12 +861,6 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete, onSyncMatches, sy
             placeholder="e.g. 1Password entry, alt purpose, region…" />
           </section>
 
-          {!isNew && acct?.id && (
-            <MatchHistory
-              acct={acct}
-              syncing={!!syncingMatches?.has?.(acct.id)}
-              onSync={onSyncMatches} />
-          )}
         </div>
 
         <footer className="drawer-foot">
@@ -1253,178 +1079,17 @@ function LockScreen({ mode, accountCount, rememberSupported, buildInfo, onSubmit
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Marvel Rivals API key control (rendered inside the Options panel)
-// ─────────────────────────────────────────────────────────────────────────────
-function ApiKeyControl({ hasKey, onSave }) {
-  // The actual key is never returned by the server — only the "set / not set"
-  // boolean. Editing means typing a new key into the input. Empty save clears.
-  const [editing, setEditing] = React.useState(false);
-  const [value, setValue] = React.useState("");
-  const [show, setShow] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-
-  const handleSave = async () => {
-    if (busy) return;
-    setBusy(true);
-    const ok = await onSave(value);
-    setBusy(false);
-    if (ok) {
-      setEditing(false);
-      setValue("");
-      setShow(false);
-    }
-  };
-
-  const handleClear = async () => {
-    if (busy) return;
-    setBusy(true);
-    await onSave("");
-    setBusy(false);
-    setEditing(false);
-    setValue("");
-    setShow(false);
-  };
-
-  return (
-    <div className="api-key-ctrl">
-      <div className="api-key-status">
-        <span className={"api-key-dot" + (hasKey ? " on" : "")} aria-hidden="true" />
-        <span className="api-key-status-lbl">
-          {hasKey ? "API key set" : "No API key yet"}
-        </span>
-        {!editing && (
-          <button type="button" className="api-key-edit"
-                  onClick={() => setEditing(true)}>
-            {hasKey ? "Change" : "Add"}
-          </button>
-        )}
-      </div>
-
-      {editing && (
-        <>
-          <div className="api-key-input-row">
-            <input
-              className="twk-field api-key-input"
-              type={show ? "text" : "password"}
-              placeholder="paste x-api-key from marvelrivalsapi.com"
-              value={value}
-              autoFocus
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }} />
-            <button type="button" className="api-key-toggle"
-                    aria-label={show ? "Hide API key" : "Show API key"}
-                    aria-pressed={show}
-                    onClick={() => setShow((s) => !s)}>
-              {show ? "hide" : "show"}
-            </button>
-          </div>
-          <div className="api-key-actions">
-            <button type="button" className="api-key-btn ghost"
-                    onClick={() => { setEditing(false); setValue(""); setShow(false); }}>
-              Cancel
-            </button>
-            {hasKey && (
-              <button type="button" className="api-key-btn danger"
-                      onClick={handleClear} disabled={busy}>
-                Clear
-              </button>
-            )}
-            <button type="button" className="api-key-btn primary"
-                    onClick={handleSave} disabled={busy || !value.trim()}>
-              {busy ? "Saving…" : "Save"}
-            </button>
-          </div>
-        </>
-      )}
-
-      <p className="api-key-hint">
-        Get a free key at{" "}
-        <a href="https://marvelrivalsapi.com/dashboard/settings"
-           target="_blank" rel="noopener noreferrer">marvelrivalsapi.com</a>{" "}
-        — used to refresh current / peak rank automatically. Stays on this machine.
-      </p>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Marvel Rivals API sync status (rendered inside the Options panel)
-// ─────────────────────────────────────────────────────────────────────────────
-// marvelrivalsapi enforces a *dynamic* rate limit surfaced via X-RateLimit-*
-// headers — there is no fixed daily number. `calls_today` is our own local
-// count; `quota_*` are the live header values (null until an uncached call,
-// since cached hits report the literal string "cache").
-function SyncStatus({ sync, hasKey }) {
-  if (!hasKey) return null;
-  if (!sync) {
-    return <p className="sync-status-empty">API usage appears after your first refresh.</p>;
-  }
-  const {
-    calls_today, quota_limit, quota_remaining, quota_reset,
-    rate_limited, rate_limited_for_s,
-  } = sync;
-
-  const fmtSecs = (s) => (s >= 60 ? `${Math.round(s / 60)}m` : `${Math.max(1, s | 0)}s`);
-  const fmtUntil = (ts) => {
-    if (ts == null) return "—";
-    const ms = ts < 1e12 ? ts * 1000 : ts;
-    const s = Math.round((ms - Date.now()) / 1000);
-    return s <= 0 ? "now" : fmtSecs(s);
-  };
-
-  return (
-    <div className="sync-status">
-      {rate_limited && (
-        <div className="sync-status-alert">
-          <span aria-hidden="true">⚠</span>
-          Rate limited by marvelrivalsapi — retry in {fmtSecs(rate_limited_for_s)}
-        </div>
-      )}
-      <div className="sync-status-grid">
-        <div className="sync-status-cell">
-          <span className="sync-status-k">Calls today</span>
-          <span className="sync-status-v">{calls_today ?? 0}</span>
-        </div>
-        <div className="sync-status-cell">
-          <span className="sync-status-k">Window left</span>
-          <span className="sync-status-v">
-            {quota_limit != null ? `${quota_remaining ?? "—"} / ${quota_limit}` : "—"}
-          </span>
-        </div>
-        <div className="sync-status-cell">
-          <span className="sync-status-k">Window resets</span>
-          <span className="sync-status-v">
-            {quota_reset != null ? `in ${fmtUntil(quota_reset)}` : "—"}
-          </span>
-        </div>
-      </div>
-      <p className="sync-status-note">
-        Dynamic rate limit — it adapts to your usage. Cached lookups don't
-        report live numbers, so the window figures fill in after an uncached call.
-      </p>
-      <p className="sync-status-note">
-        Each player can only be recrawled once every 30 min. Refreshing more
-        often just re-reads the cached rank — it won't pull newer data.
-      </p>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Sync status legend — explains every per-account chip / refresh-badge state.
 // Lives in the Options panel so the icons on the cards are self-documenting.
 // ─────────────────────────────────────────────────────────────────────────────
 const SYNC_LEGEND = [
   { icon: "✓", tone: "ok",    name: "Current",   desc: "You refreshed this within the last 30 min — as live as it gets." },
   { icon: "●", tone: "ok",    name: "Synced",    desc: "Synced — the time shown is when you last refreshed it, not the provider's crawl stamp. Rank only changes when the account plays, so an older sync isn't stale." },
-  { icon: "🔒", tone: "warn",  name: "Private",   desc: "Profile is private in-game — set the rank manually." },
-  { icon: "🔒", tone: "warn",  name: "Private (cached)", desc: "tracker.gg now shows this profile private, but a marvelrivalsapi rank from an earlier crawl is still displayed — treat it as possibly stale." },
   { icon: "🛡", tone: "ok",    name: "History private", desc: "Profile is public so the ranks shown are current, but match history is private — the account's last-played time can't be determined." },
-  { icon: "?", tone: "muted", name: "Not found", desc: "No data for this player on marvelrivalsapi.com." },
+  { icon: "?", tone: "muted", name: "Not found", desc: "Tracker.gg did not return ranked data for this player." },
   { icon: "?", tone: "muted", name: "No handle", desc: "Account has no in-game name or UID to look up." },
-  { icon: "!", tone: "err",   name: "Key error", desc: "API key was rejected — check the key above." },
   { icon: "!", tone: "err",   name: "Failed",    desc: "Last refresh hit an error — retry in a bit." },
-  { icon: "○", tone: "muted", name: "Not synced", desc: "Never refreshed from the API yet." },
+  { icon: "○", tone: "muted", name: "Not synced", desc: "Never refreshed from Tracker.gg yet." },
 ];
 
 // Collapsible left-side rail carrying the status key. Sits beside the account
@@ -1452,13 +1117,8 @@ function InfoRail({ open, onToggle }) {
             ))}
           </ul>
           <p className="sync-legend-foot">
-            <strong>Recrawl queued</strong> — refreshing a stale account asks
-            marvelrivalsapi to re-fetch that player's stats from the game. While
-            it runs, the card shows a “recrawl queued” note with a live
-            countdown (“~12m” = roughly 12 minutes left). When that 30-min
-            window is up the note switches to “recrawl done — hit ↻”: nothing
-            auto-refreshes, so click ↻ then to pull the new rank in. That window
-            is also the soonest another recrawl can be queued for the player.
+            Rank refresh uses Tracker.gg. RivalsData profiles are opened only
+            when you click their link in an account drawer.
           </p>
         </div>
       )}
@@ -1490,13 +1150,6 @@ function App() {
   const [drawer, setDrawer] = React.useState({ open: false, acct: null });
   const [toast, setToast] = React.useState(null);
   const [lockIn, setLockIn] = React.useState(30 * 60);
-  // Whether a Marvel Rivals API key is configured server-side. The key itself
-  // is never returned by the API — only this boolean. The actual key lives in
-  // vault.json's config and is sent to the server (POST /api/options) when set.
-  const [hasApiKey, setHasApiKey] = React.useState(false);
-  // marvelrivalsapi usage / rate-limit snapshot. Seeded from
-  // GET /api/rivals/sync-status and refreshed from every refresh response.
-  const [syncStatus, setSyncStatus] = React.useState(null);
   // Set of account ids currently refreshing, for spinner state. Plus a single
   // flag for the "Refresh all" action.
   const [refreshing, setRefreshing] = React.useState(() => new Set());
@@ -1524,8 +1177,6 @@ function App() {
   // { version, commit, built_at, repo } captured from /api/status on boot.
   // Surfaced in the footer so the user can confirm which build is running.
   const [buildInfo, setBuildInfo] = React.useState(null);
-  // Account ids whose match-history sync is in flight, for inline spinners.
-  const [syncingMatches, setSyncingMatches] = React.useState(() => new Set());
   const searchRef = React.useRef(null);
   const ready = phase === "ready";
 
@@ -1588,14 +1239,6 @@ function App() {
     lastUiPush.current = JSON.stringify(server);
   }, [setTweak]);
 
-  // Pull the API usage / rate-limit snapshot. Unauthenticated, fire-and-forget.
-  const refreshSyncStatus = React.useCallback(() => {
-    fetch("/api/rivals/sync-status")
-      .then((r) => r.json())
-      .then(setSyncStatus)
-      .catch(() => { /* transient — the next refresh response carries it */ });
-  }, []);
-
   // ── boot ──────────────────────────────────────────────────────────────────
   React.useEffect(() => {
     let cancelled = false;
@@ -1606,7 +1249,6 @@ function App() {
         setAccountCount(s.account_count || 0);
         syncLockout(s.lockout_minutes);
         syncUiOptions(s.ui_options);
-        setHasApiKey(!!s.has_marvel_rivals_api_key);
         setBuildInfo({
           version: s.version || null,
           commit: s.commit || null,
@@ -1615,7 +1257,6 @@ function App() {
           remember_supported: !!s.remember_supported,
           has_remembered_session: !!s.has_remembered_session,
         });
-        refreshSyncStatus();
         if (!s.initialized) { setPhase("init"); return; }
         if (!s.unlocked) { setPhase("unlock"); return; }
         setLockIn(s.lockout_minutes > 0 ? s.lock_in_s : 0);
@@ -1653,12 +1294,10 @@ function App() {
       syncLockout(s.lockout_minutes);
       syncUiOptions(s.ui_options);
       setLockIn(s.lockout_minutes > 0 ? s.lock_in_s : 0);
-      setHasApiKey(!!s.has_marvel_rivals_api_key);
     } catch { /* fall through with whatever we have */ }
-    refreshSyncStatus();
     await loadAccounts();
     setPhase("ready");
-  }, [loadAccounts, syncLockout, syncUiOptions, refreshSyncStatus]);
+  }, [loadAccounts, syncLockout, syncUiOptions]);
 
   const handleUnlock = async (password, remember) => {
     const res = await fetch("/api/unlock", {
@@ -1787,27 +1426,6 @@ function App() {
     }
   }, [applyingUpdate]);
 
-  // ── match-history sync ────────────────────────────────────────────────────
-  // Fetches the last 20 ranked matches for an account and merges them onto the
-  // accounts state. Used both by the in-drawer button and the on-open auto-sync.
-  const onSyncMatches = React.useCallback(async (acctId) => {
-    if (!acctId) return false;
-    setSyncingMatches((s) => { const n = new Set(s); n.add(acctId); return n; });
-    try {
-      const data = await api(`/api/accounts/${acctId}/matches`, { method: "POST" });
-      if (data?.account) {
-        setAccounts((arr) => arr.map((a) =>
-          a.id === acctId ? { ...a, ...data.account } : a));
-      }
-      if (data?.sync) setSyncStatus(data.sync);
-      return true;
-    } catch {
-      return false;
-    } finally {
-      setSyncingMatches((s) => { const n = new Set(s); n.delete(acctId); return n; });
-    }
-  }, [api]);
-
   // Scaffold a vault entry for every locally-detected UID that isn't
   // already linked. Bulk version of the drawer's UidSuggester for users
   // bootstrapping their vault for the first time.
@@ -1824,25 +1442,13 @@ function App() {
 
   // UIDs detected locally but not claimed by any vault account. Shown as
   // suggestion pills in the drawer's Identity section — click to assign +
-  // auto-fill the IGN from the API.
+  // auto-fill the IGN from Tracker.gg's public player profile.
   const unclaimedUids = React.useMemo(() => {
     const claimed = new Set(
       accounts.map((a) => (a.rivals_uid || "").toString().trim()).filter(Boolean)
     );
     return [...localRivalsUids].filter((uid) => !claimed.has(uid));
   }, [accounts, localRivalsUids]);
-
-  // Resolve a UID to its current IGN via marvelrivalsapi. Returns the name
-  // string, or null on any failure (network, 404, rate-limited). Drawer
-  // uses this for hover-previews on the UID suggester pills.
-  const onResolveUid = React.useCallback(async (uid) => {
-    try {
-      const data = await api(`/api/rivals/lookup-uid/${encodeURIComponent(uid)}`);
-      return data?.name || null;
-    } catch {
-      return null;
-    }
-  }, [api]);
 
   // ── document data attributes ──────────────────────────────────────────────
   React.useEffect(() => {
@@ -2044,23 +1650,6 @@ function App() {
     }
   };
 
-  // Save the marvelrivalsapi.com key. Empty string clears it.
-  const changeApiKey = async (rawKey) => {
-    const key = (rawKey || "").trim();
-    try {
-      const res = await api("/api/options", {
-        method: "POST",
-        body: JSON.stringify({ marvel_rivals_api_key: key }),
-      });
-      setHasApiKey(!!res?.has_marvel_rivals_api_key);
-      showToast(key ? "API key saved" : "API key cleared");
-      return true;
-    } catch (e) {
-      if (!e.locked) showToast("Couldn't save API key");
-      return false;
-    }
-  };
-
   // Apply a refreshed account record (from the API) over its row in the
   // accounts state, so we don't have to refetch the whole list.
   const mergeRefreshed = React.useCallback((updated) => {
@@ -2070,29 +1659,26 @@ function App() {
 
   const REFRESH_LABEL = {
     ok: "Refreshed",
-    private: "Profile is private",
     not_found: "Player not found",
-    bad_key: "API key rejected — check Options",
     missing_handle: "No in-game name set on this account",
     error: "Refresh failed",
   };
 
-  // Refresh one account's rank. tracker.gg is primary, marvelrivalsapi is
-  // the fallback — no API key is required for the common path, so we don't
-  // gate on hasApiKey here.
+  // Refresh one account's rank from Tracker.gg.
   const onRefresh = async (acct) => {
     if (!acct?.id) return;
     setRefreshing((s) => { const n = new Set(s); n.add(acct.id); return n; });
     try {
       const res = await api(`/api/accounts/${acct.id}/refresh-stats`, { method: "POST" });
       mergeRefreshed(res?.account);
-      if (res?.sync) setSyncStatus(res.sync);
       const st = res?.account?.last_refresh_status || "error";
       showToast(REFRESH_LABEL[st] || "Done");
     } catch (e) {
       if (e.locked) return;
       if (e.status === 429 && e.data?.error === "cooldown") {
         showToast(`Just refreshed — wait ${e.data.retry_after_s}s`);
+      } else if (e.status === 429 && e.data?.error === "rate_limited") {
+        showToast(`Tracker.gg limited requests — retry in ${e.data.retry_after_s || 60}s`);
       } else {
         showToast("Refresh failed — try again");
       }
@@ -2150,16 +1736,15 @@ function App() {
         // Defensive: merge any account the stream's terminal event carries that
         // a dropped progress line might have missed.
         for (const a of (summaryEv.accounts || [])) mergeRefreshed(a);
-        if (summaryEv.sync) setSyncStatus(summaryEv.sync);
         const sum = summaryEv.summary || {};
         const ok = sum.ok || 0;
-        const priv = sum.private || 0;
+        const limited = sum.rate_limited || 0;
         const skipped = sum.skipped || 0;
         const failed = (sum.not_found || 0) + (sum.error || 0)
-                     + (sum.bad_key || 0) + (sum.missing_handle || 0);
+                     + (sum.missing_handle || 0);
         const parts = [];
         if (ok) parts.push(`${ok} refreshed`);
-        if (priv) parts.push(`${priv} private`);
+        if (limited) parts.push(`Tracker.gg limited requests — retry in ${sum.retry_after_s || 60}s`);
         if (failed) parts.push(`${failed} failed`);
         if (skipped) parts.push(`${skipped} skipped`);
         showToast(parts.length ? parts.join(" · ") : "Nothing to refresh");
@@ -2263,7 +1848,6 @@ function App() {
             onNew={onNew}
             onRefreshAll={onRefreshAll}
             refreshingAll={refreshingAll}
-            hasApiKey={hasApiKey}
             accountsCount={accounts.length} />
 
 
@@ -2295,21 +1879,21 @@ function App() {
               t.view === "table" ?
               <TableView accounts={visible} opts={opts}
               onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-              onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
+              onRefresh={onRefresh} refreshingIds={refreshing}
               activeSteam={activeSteam} localRivalsUids={localRivalsUids}
               sortLabel={sortLabel} /> :
               t.view === "ladder" ?
               <LadderView accounts={visible} opts={opts}
               rankField={t.ladderSort === "peak_desc" ? "peak_rank" : "current_rank"}
               onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-              onRefresh={onRefresh} refreshingIds={refreshing} hasApiKey={hasApiKey}
+              onRefresh={onRefresh} refreshingIds={refreshing}
               activeSteam={activeSteam} localRivalsUids={localRivalsUids} /> :
 
               <div className="app-grid">
                   {visible.map((a) =>
                 <CardRefined key={a.id} acct={a} opts={opts}
                 onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-                onRefresh={onRefresh} refreshing={refreshing.has(a.id)} hasApiKey={hasApiKey}
+                onRefresh={onRefresh} refreshing={refreshing.has(a.id)}
                 activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
                 )}
                 </div>
@@ -2344,10 +1928,7 @@ function App() {
           onClose={() => setDrawer({ open: false, acct: null })}
           onSave={onSave}
           onDelete={onDelete}
-          onSyncMatches={onSyncMatches}
-          syncingMatches={syncingMatches}
           unclaimedUids={unclaimedUids}
-          onResolveUid={onResolveUid}
           activeSteam={activeSteam}
           localRivalsUids={localRivalsUids} />
 
@@ -2391,14 +1972,10 @@ function App() {
         </TweakSection>
 
         <TweakSection label="Marvel Rivals stats">
-          <ApiKeyControl hasKey={hasApiKey} onSave={changeApiKey} />
-          <SyncStatus sync={syncStatus} hasKey={hasApiKey} />
-          <p className="sync-status-note">
-            Rank data: <b>tracker.gg</b> is the primary source (no key needed,
-            works on private profiles). <b>marvelrivalsapi.com</b> is the
-            fallback — the API key above is only used when tracker.gg can't
-            service a lookup.
-          </p>
+          <div className="stats-source-card">
+            <p><b>Rank refresh:</b> Tracker.gg.</p>
+            <p><b>Detailed profiles:</b> a RivalsData link appears when an account has a UID. RivalsData receives nothing until you open that link.</p>
+          </div>
         </TweakSection>
 
         <TweakSection label="Shortcuts">

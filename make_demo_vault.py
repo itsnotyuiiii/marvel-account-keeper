@@ -17,7 +17,6 @@ Nothing here is real — safe to screen-record for a demo video.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import time
 import uuid
@@ -43,28 +42,6 @@ def _encrypt(key: bytes, plaintext: str) -> dict[str, str]:
     return {"nonce": nonce.hex(), "ct": ct.hex()}
 
 
-def _real_api_key() -> str:
-    """Borrow the marvelrivalsapi key from the real vault so the demo can show
-    the refresh buttons / live sync. Read-only — the real vault is never
-    touched. No key found (e.g. fresh clone) just means no refresh buttons.
-    """
-    home = Path.home()
-    candidates = [
-        Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming"),
-        home / "Library" / "Application Support",
-        Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share"),
-    ]
-    for base in candidates:
-        real = base / "MarvelAccountKeeper" / "vault.json"
-        try:
-            cfg = json.loads(real.read_text("utf-8")).get("config", {})
-            if cfg.get("marvel_rivals_api_key"):
-                return cfg["marvel_rivals_api_key"]
-        except (OSError, ValueError):
-            continue
-    return ""
-
-
 # (ign, username, email, password, current, peak, cur_pts, peak_pts,
 #  pinned, neon, border_color, tag, synced_ago, status)
 #
@@ -81,7 +58,7 @@ ACCOUNTS = [
     ("StormbornQ",     "storm_q",        "stormborn@example.com",   "Thunder!9rain",
      "Celestial III",  "Celestial I",    4520, 5020, False, True,  "green",  "Smurf",    2 * DAY,  "ok"),
     ("IronCladVet",    "ironclad_v",     "ironclad@example.com",    "R3pulsor!beam",
-     "Grandmaster III","Grandmaster I",  3870, 4430, False, False, "",       "",         None,     "private"),
+     "Grandmaster III","Grandmaster I",  3870, 4430, False, False, "",       "",         3 * HOUR, "ok"),
     ("NovaByte",       "nova_byte",      "novabyte@example.com",    "Sup3rnova!x",
      "Diamond I",      "Diamond I",      3540, 3590, False, True,  "cyan",   "",         1 * HOUR, "ok"),
     ("ScarletHex",     "scarlet_hex",    "scarlethex@example.com",  "H3x!crimson7",
@@ -89,7 +66,7 @@ ACCOUNTS = [
     ("GrootlyBudz",    "groot_budz",     "grootly@example.com",     "I.am!Groot33",
      "Gold III",       "Platinum II",    1180, 2280, False, False, "",       "",         20 * MIN, "ok"),
     ("NightProwler",   "night_prowler",  "prowler@example.com",     "Sh4dow!step1",
-     "Silver II",      "Gold I",         620,  1720, False, False, "",       "",         None,     None),
+     "Silver II",      "Gold I",         620,  1720, False, False, "",       "",         1 * DAY,  "not_found"),
     ("BronzeBaron",    "bronze_baron",   "bronzebaron@example.com", "Pl4cement!run",
      "Bronze I",       "Silver II",      280,  640,  False, False, "",       "New",      12 * HOUR, "ok"),
     ("EternalFlux",    "eternal_flux",   "eternalflux@example.com", "Inf1nity!loop",
@@ -133,10 +110,10 @@ def build_vault() -> dict:
             "rivals_uid": REAL_UID.get(ign, str(100000000 + i * 7654321)),
             "last_refresh_ts": None if status is None else synced_at,
             "last_refresh_status": status,
-            "last_refresh_error": ("Profile is set to private in-game."
-                                   if status == "private" else None),
+            "last_refresh_error": ("Player not found on Tracker.gg."
+                                   if status == "not_found" else None),
+            "tracker_history_private": ign == "IronCladVet",
             "rivals_synced_at": synced_at,
-            "rivals_update_requested_at": None,
         })
 
     return {
@@ -144,8 +121,7 @@ def build_vault() -> dict:
         "kdf": {"name": "scrypt", "n": SCRYPT_N, "r": SCRYPT_R,
                 "p": SCRYPT_P, "salt": salt.hex()},
         "verifier": _encrypt(key, VERIFIER_PLAINTEXT),
-        "config": {"lockout_minutes": 30,
-                   "marvel_rivals_api_key": _real_api_key()},
+        "config": {"lockout_minutes": 30},
         "accounts": accounts,
     }
 

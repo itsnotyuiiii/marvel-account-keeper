@@ -135,7 +135,6 @@ html[data-theme="light"] .sync-chip {
   border-color: rgba(0,0,0,.09);
 }
 html[data-theme="light"] .sync-chip-ok,
-html[data-theme="light"] .sync-chip-ready,
 html[data-theme="light"] .sync-chip[data-state="current"] .sync-chip-i,
 html[data-theme="light"] .sync-legend-i-ok { color: #1f9d57; }
 html[data-theme="light"] .sync-chip[data-state="current"] .sync-chip-i { text-shadow: none; }
@@ -143,9 +142,6 @@ html[data-theme="light"] .sync-chip-warn,
 html[data-theme="light"] .sync-legend-i-warn { color: #b9871f; }
 html[data-theme="light"] .sync-chip-err,
 html[data-theme="light"] .sync-legend-i-err { color: #c0394a; }
-html[data-theme="light"] .refresh-btn.has-issue[data-status="stale"],
-html[data-theme="light"] .refresh-btn.has-issue[data-status="private"] { color: #b9871f; }
-html[data-theme="light"] .refresh-btn.has-issue[data-status="bad_key"],
 html[data-theme="light"] .refresh-btn.has-issue[data-status="error"] { color: #d4691f; }
 /* Neon border opt-in (per account). Uses --neon-fg from the React style.
    Scoped .rcard.rcard-neon (two classes) so it outranks the plain .rcard
@@ -1635,7 +1631,7 @@ html[data-theme="light"] .lad-peak-val {
 }
 .drawer-draft-banner button:hover{background:rgba(232,185,74,.16)}
 
-/* ── Stats refresh (marvelrivalsapi.com integration) ───────────────────── */
+/* ── Stats refresh ─────────────────────────────────────────────────────── */
 
 /* Spin animation reused by every refresh icon. */
 @keyframes mak-spin { to { transform: rotate(360deg); } }
@@ -1675,10 +1671,8 @@ html[data-theme="light"] .lad-peak-val {
 .refresh-btn-xs{width:18px;height:18px}
 .refresh-btn-xs .refresh-btn-svg{width:11px;height:11px}
 
-/* Show a status indicator (♨ / ! / ?) overlay when last refresh wasn't ok. */
+/* Show a status indicator (! / ?) overlay when last refresh wasn't ok. */
 .refresh-btn.has-issue{opacity:1}
-.refresh-btn.has-issue[data-status="private"]{color:#e8b94a}
-.refresh-btn.has-issue[data-status="bad_key"]{color:#ff8a4a}
 .refresh-btn.has-issue[data-status="error"]{color:#ff8a4a}
 .refresh-btn.has-issue[data-status="not_found"]{color:#9aa3b2}
 .refresh-btn.has-issue[data-status="missing_handle"]{color:#9aa3b2}
@@ -1697,54 +1691,6 @@ html[data-theme="light"] .lad-peak-val {
 /* Table actions column gets a small flex container so refresh + ··· line up. */
 .tbl-actions{display:flex;align-items:center;gap:4px;justify-self:end}
 
-/* ── Options panel: API key control ─────────────────────────────────────── */
-.api-key-ctrl{display:flex;flex-direction:column;gap:7px}
-.api-key-status{display:flex;align-items:center;gap:7px}
-.api-key-dot{
-  width:7px;height:7px;border-radius:50%;
-  background:rgba(154,163,178,.5);flex-shrink:0;
-}
-.api-key-dot.on{background:#4ee07e;box-shadow:0 0 6px rgba(78,224,126,.55)}
-.api-key-status-lbl{flex:1;color:rgba(41,38,27,.78);font-weight:500}
-.api-key-edit{
-  appearance:none;border:0;background:rgba(0,0,0,.06);color:inherit;
-  font:inherit;font-size:10.5px;font-weight:500;letter-spacing:.01em;
-  padding:3px 9px;border-radius:6px;cursor:pointer;
-}
-.api-key-edit:hover{background:rgba(0,0,0,.1)}
-
-.api-key-input-row{display:flex;align-items:center;gap:6px}
-.api-key-input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.api-key-toggle{
-  appearance:none;border:0;background:rgba(0,0,0,.06);color:rgba(41,38,27,.65);
-  font:inherit;font-size:10.5px;font-weight:500;
-  padding:0 8px;height:26px;border-radius:6px;cursor:pointer;flex-shrink:0;
-}
-.api-key-toggle:hover{background:rgba(0,0,0,.1);color:#29261b}
-
-.api-key-actions{display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap}
-.api-key-btn{
-  appearance:none;border:0;font:inherit;font-size:11px;font-weight:500;
-  padding:0 10px;height:26px;border-radius:7px;cursor:pointer;
-}
-.api-key-btn.primary{background:rgba(0,0,0,.78);color:#fff}
-.api-key-btn.primary:hover{background:rgba(0,0,0,.88)}
-.api-key-btn.primary:disabled{background:rgba(0,0,0,.35);cursor:default}
-.api-key-btn.ghost{background:rgba(0,0,0,.06);color:inherit}
-.api-key-btn.ghost:hover{background:rgba(0,0,0,.1)}
-.api-key-btn.danger{background:transparent;color:#c0394a;
-  box-shadow:inset 0 0 0 .5px rgba(192,57,74,.45)}
-.api-key-btn.danger:hover{background:rgba(192,57,74,.08)}
-
-.api-key-hint{
-  margin:2px 0 0;color:rgba(41,38,27,.55);font-size:10.5px;line-height:1.5;
-}
-.api-key-hint a{color:inherit;text-decoration:underline;text-underline-offset:2px}
-.api-key-hint a:hover{color:#29261b}
-
-/* Stale data gets the same amber treatment as a private profile. */
-.refresh-btn.has-issue[data-status="stale"]{color:#e8b94a}
-
 /* ── Per-account sync chip (cards + table detail) ───────────────────────── */
 .sync-chip{
   display:flex;align-items:center;gap:6px;
@@ -1762,8 +1708,6 @@ html[data-theme="light"] .lad-peak-val {
   flex:1;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.sync-chip-pending{flex-shrink:0;opacity:.7;font-style:italic}
-.sync-chip-ready{flex-shrink:0;font-weight:600;color:#79e6a4}
 .sync-chip-ok{
   color:#79e6a4;
   background:rgba(78,224,126,.07);border-color:rgba(78,224,126,.16);
@@ -1778,35 +1722,26 @@ html[data-theme="light"] .lad-peak-val {
 }
 .sync-chip-muted{color:var(--muted-2,#9aa3b2)}
 
-/* ── Options panel: API sync status ─────────────────────────────────────── */
-.sync-status{
-  display:flex;flex-direction:column;gap:8px;
-  margin-top:10px;padding-top:10px;border-top:.5px solid rgba(0,0,0,.08);
+/* RivalsData is a user-opened profile link, never a background request. */
+.rivalsdata-card,
+.stats-source-card{
+  display:flex;flex-direction:column;align-items:flex-start;gap:7px;
+  padding:11px 12px;border-radius:9px;
+  background:rgba(91,224,255,.06);
+  border:.5px solid rgba(91,224,255,.22);
 }
-.sync-status-empty{
-  margin:8px 0 0;padding-top:10px;border-top:.5px solid rgba(0,0,0,.08);
-  color:rgba(41,38,27,.5);font-size:10.5px;line-height:1.5;
+.rivalsdata-card p,
+.stats-source-card p{margin:0;color:var(--muted-2,#9aa3b2);font-size:11px;line-height:1.5}
+.rivalsdata-link{
+  display:inline-flex;align-items:center;gap:5px;
+  color:#5be0ff;font-size:12px;font-weight:600;text-decoration:none;
 }
-.sync-status-alert{
-  display:flex;align-items:center;gap:6px;
-  padding:6px 9px;border-radius:7px;
-  background:rgba(192,57,74,.1);color:#9a2230;
-  font-size:11px;font-weight:600;line-height:1.35;
-  box-shadow:inset 0 0 0 .5px rgba(192,57,74,.3);
+.rivalsdata-link:hover{text-decoration:underline;text-underline-offset:3px}
+html[data-theme="light"] .rivalsdata-card,
+html[data-theme="light"] .stats-source-card{
+  background:rgba(13,115,150,.06);border-color:rgba(13,115,150,.24);
 }
-.sync-status-grid{display:flex;gap:6px}
-.sync-status-cell{
-  flex:1;display:flex;flex-direction:column;gap:2px;
-  padding:7px 9px;border-radius:7px;background:rgba(0,0,0,.05);
-}
-.sync-status-k{
-  font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
-  color:rgba(41,38,27,.5);
-}
-.sync-status-v{
-  font-size:13px;font-weight:700;color:#29261b;font-variant-numeric:tabular-nums;
-}
-.sync-status-note{margin:0;color:rgba(41,38,27,.5);font-size:10px;line-height:1.5}
+html[data-theme="light"] .rivalsdata-link{color:#0d7396}
 
 /* "Current" — freshest possible crawl; brighten the tick so it reads as
    genuinely live, a notch above the plain "synced" dot. */
@@ -2006,188 +1941,6 @@ html[data-theme="light"] .update-err{ color:#c0394a; }
 html[data-theme="light"] .local-rivals-icon{
   color:#0d7396;
   filter:none;
-}
-
-/* ── Match history (in drawer) ─────────────────────────────────────────────
-   Renders the last 20 ranked matches for an account. Win/loss is a colored
-   left stripe; SR delta is green/red; MVP/SVP get a tiny pill. */
-.drawer-section-lbl-row{
-  display:flex; align-items:center; justify-content:space-between;
-  gap:10px;
-}
-.drawer-section-r{
-  display:flex; align-items:center; gap:10px;
-}
-.match-sync-lbl{
-  font-family:var(--font-mono);
-  font-size:10px;
-  color:var(--muted);
-  letter-spacing:.04em;
-  text-transform:none;
-}
-.match-sync-btn{
-  padding:3px 10px;
-  font-family:var(--font-mono);
-  font-size:10px;
-  letter-spacing:.06em;
-  background:transparent;
-  color:var(--fg-2);
-  border:1px solid var(--border);
-  border-radius:6px;
-  cursor:pointer;
-  text-transform:uppercase;
-}
-.match-sync-btn:hover:not(:disabled){
-  border-color:var(--accent);
-  color:var(--accent);
-}
-.match-sync-btn:disabled{ opacity:.4; cursor:not-allowed; }
-
-.match-empty{
-  padding:14px 12px;
-  border:1px dashed var(--border);
-  border-radius:8px;
-  color:var(--muted);
-  font-size:12px;
-  text-align:center;
-}
-.match-error{ color:#ff5560; border-color:rgba(255,85,96,.35); }
-
-.match-list{ display:flex; flex-direction:column; gap:6px; margin-top:8px; }
-.match-row{
-  position:relative;
-  display:grid;
-  grid-template-columns: 4px 28px 1fr auto;
-  gap:10px;
-  align-items:center;
-  padding:8px 10px 8px 0;
-  background:var(--panel-2);
-  border:1px solid var(--border);
-  border-radius:8px;
-  font-size:12px;
-  overflow:hidden;
-  cursor:pointer;
-  transition:border-color .12s ease, background .12s ease;
-}
-.match-row:hover{ border-color:var(--border-strong, rgba(255,255,255,.18)); }
-.match-row:focus-visible{
-  outline:2px solid var(--accent, #5be0ff);
-  outline-offset:1px;
-}
-.match-row.is-open{ background:var(--panel-3, rgba(255,255,255,.04)); }
-.match-row .match-stripe{
-  width:4px; height:100%;
-  align-self:stretch;
-}
-.match-win .match-stripe{ background:linear-gradient(180deg,#4ee07e,#21a85a); }
-.match-loss .match-stripe{ background:linear-gradient(180deg,#ff5560,#9b1e26); }
-
-.match-hero-img{
-  width:28px; height:28px; border-radius:6px;
-  object-fit:cover;
-  background:var(--bg-2);
-  border:1px solid var(--border);
-}
-/* Keep the avatar cell occupied even with no art / a broken image, so the
-   grid columns never shift (info must not fall into the avatar column). */
-.match-hero-ph{ background:transparent; border:none; }
-.match-hero-img.is-broken{ visibility:hidden; }
-.match-info{ min-width:0; display:flex; flex-direction:column; gap:2px; }
-.match-line1{ display:flex; align-items:center; gap:6px; min-width:0; }
-.match-hero-name{
-  font-weight:600;
-  color:var(--fg);
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  min-width:0;
-}
-.match-badge{
-  display:inline-block;
-  flex-shrink:0;
-  padding:1px 5px;
-  border-radius:4px;
-  font-family:var(--font-mono);
-  font-size:9px;
-  font-weight:700;
-  letter-spacing:.1em;
-  line-height:1.4;
-}
-.match-mvp{ background:#ffe14d; color:#3a2d00; }
-.match-svp{ background:#5be0ff; color:#003040; }
-.match-dc { background:#9aa3b2; color:#1a1d24; }
-.match-line2{
-  display:flex; gap:6px; align-items:center;
-  color:var(--muted);
-  font-family:var(--font-mono);
-  font-size:11px;
-  min-width:0;
-  overflow:hidden;
-  white-space:nowrap;
-}
-/* KDA + duration stay fixed; the mode label gives up space (ellipsis) first
-   so the line never spills under the SR/date column at narrow widths. */
-.match-kda, .match-dur, .match-sep{ flex-shrink:0; }
-.match-mode{ min-width:0; overflow:hidden; text-overflow:ellipsis; }
-.match-kda b{ color:var(--fg-2); font-weight:600; }
-.match-sep{ opacity:.45; }
-.match-right{ display:flex; flex-direction:row; align-items:center; gap:8px; padding-right:10px; flex-shrink:0; }
-.match-right-stack{ display:flex; flex-direction:column; align-items:flex-end; gap:2px; text-align:right; }
-.match-sr{
-  font-family:var(--font-mono);
-  font-size:12px;
-  font-weight:700;
-  color:var(--muted);
-}
-.match-sr-up{   color:#4ee07e; }
-.match-sr-down{ color:#ff5560; }
-.match-ago{
-  font-family:var(--font-mono);
-  font-size:10px;
-  color:var(--muted);
-}
-.match-chev{
-  color:var(--muted);
-  font-size:11px;
-  line-height:1;
-  transition:transform .15s ease;
-}
-.match-row.is-open .match-chev{ transform:rotate(90deg); }
-
-/* Expanded detail panel — spans the full row width below the summary. */
-.match-details{
-  grid-column:1 / -1;
-  display:flex;
-  gap:12px;
-  align-items:flex-start;
-  margin:6px 10px 2px 14px;
-  padding-top:8px;
-  border-top:1px solid var(--border);
-  cursor:default;
-}
-.match-map-img{
-  width:96px; height:54px; border-radius:6px;
-  object-fit:cover; flex-shrink:0;
-  background:var(--bg-2);
-  border:1px solid var(--border);
-}
-.match-detail-grid{
-  flex:1; min-width:0; margin:0;
-  display:grid;
-  grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));
-  gap:6px 16px;
-}
-.md-item{ display:flex; flex-direction:column; gap:1px; min-width:0; }
-.md-k{
-  font-size:9px; letter-spacing:.08em; text-transform:uppercase;
-  color:var(--muted);
-}
-.md-v{
-  margin:0;
-  font-family:var(--font-mono);
-  font-size:12px;
-  color:var(--fg);
-  overflow-wrap:anywhere;
 }
 
 /* ── Incomplete account fade ───────────────────────────────────────────────

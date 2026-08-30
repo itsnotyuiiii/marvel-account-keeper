@@ -26,11 +26,11 @@
     { tag: "Table & Ladder",
       text: "Switch to a dense sortable table, or a ladder grouped by rank tier." },
     { tag: "Live Rivals stats",
-      text: "Pull current & peak ranks straight from marvelrivalsapi.com." },
+      text: "Refresh ranks from Tracker.gg, then open full profiles on RivalsData." },
     { tag: "Make it yours",
       text: "Flip between a light and dark theme — your layout, remembered." },
     { tag: "Private & offline",
-      text: "Passwords encrypted with AES-256 — nothing ever leaves your PC." }
+      text: "Passwords stay local, protected with authenticated AES-256 encryption." }
   ];
   var TOTAL = 32000;
   var BEAT_MS = TOTAL / BEATS.length;

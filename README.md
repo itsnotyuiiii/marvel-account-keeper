@@ -2,8 +2,9 @@
 
 Keep track of your Marvel Rivals / Steam accounts in one place: in-game name,
 rank, and — if you want — username, email, and password. It runs on your own
-PC. Your data stays there. The only time it goes online is when you refresh a
-rank or it checks GitHub for an update.
+PC. Your vault stays there. The app goes online when you refresh a rank, open a
+RivalsData profile link, load the optional interface fonts, or it checks GitHub
+for an update.
 
 Don't want to store logins? You don't have to. Username, email, and password
 are all optional — you can use it purely to track ranks if that's all you want.
@@ -78,10 +79,14 @@ automatically the first time the new app starts.
 - The decryption key is held in memory only. The vault auto-locks after a
   configurable idle period (default 30 min — change it under **Options**), on
   quit, or when you click **Lock**.
-- The only outbound network calls are: rank refreshes (sends a player's
-  in-game name / UID to public Marvel Rivals stat sites — `tracker.gg` and
-  `marvelrivalsapi.com`) and a version check against `api.github.com`. Your
-  vault contents — emails, usernames, passwords — are never sent anywhere.
+- Rank refreshes send the selected player's in-game name or UID to
+  `tracker.gg`. Detailed-stat links open `rivalsdata.com/player/<UID>` in your
+  browser only when you click them; the app does not scrape RivalsData or call
+  an undocumented RivalsData endpoint. Update checks call `api.github.com`.
+  Emails, usernames, passwords, and notes are never sent to any of these sites.
+- The interface loads optional typefaces from `fonts.googleapis.com` and
+  `fonts.gstatic.com`. If those hosts are unavailable, the app uses system fonts
+  and remains fully functional.
 
 ---
 

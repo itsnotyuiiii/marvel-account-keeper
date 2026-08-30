@@ -201,9 +201,8 @@ function chip({ label, value, field, onCopy, cls = "tk-chip" }) {
 // made a just-refreshed account that changed rank still read "synced 13h ago".
 // last_refresh_ts is unambiguous — it's when you hit refresh. An old value is
 // not "dormant"/"stale" either: the rank we hold is still the rank they hold.
-const RECRAWL_PENDING_MS = 30 * 60 * 1000;
-// A pull this recent is as live as the 30-min recrawl gate allows — shown as
-// "current" (green ✓) rather than just "synced".
+// A pull this recent is shown as "current" (green ✓) rather than just
+// "synced".
 const SYNC_CURRENT_MS = 30 * 60 * 1000;
 
 // Account timestamps are epoch seconds; normalize anything seconds-scale to ms.
@@ -229,17 +228,6 @@ function updatedTitle(acct) {
     : "Account not updated yet";
 }
 
-// Re-render on an interval so countdowns / relative times stay live. Pass
-// active=false to park the timer when there is nothing counting down.
-function useMinuteTick(active) {
-  const [, force] = React.useState(0);
-  React.useEffect(() => {
-    if (!active) return undefined;
-    const id = setInterval(() => force((n) => n + 1), 30000);
-    return () => clearInterval(id);
-  }, [active]);
-}
-
 // Faster tick (1s) for short countdowns — the per-account refresh cooldown
 // is 20s, so a 30s minute tick wouldn't update the tooltip until after it
 // already expired.
@@ -256,7 +244,7 @@ function useSecondTick(active) {
 // SyncChip and the refresh-button badge so they always agree.
 //   none → never refreshed   current → ok & pulled within the last 30 min
 //   fresh → ok, any older pull (no "dormant"/"stale" — see note above)
-//   private / not_found / bad_key / error / missing_handle → see SYNC_META
+//   not_found / error / missing_handle → see SYNC_META
 // There is intentionally no age-based "dormant" state: refresh age is not a
 // last-played signal, so an old pull stays a clean green "synced".
 function syncState(acct) {
@@ -268,18 +256,6 @@ function syncState(acct) {
   const age = Date.now() - synced;
   return age <= SYNC_CURRENT_MS ? "current" : "fresh";
 }
-
-// DISPLAY-ONLY caveat. tracker.gg reported the profile private on the last
-// refresh, yet we're still showing a (cached) marvelrivalsapi rank — flag it so
-// live-looking data isn't mistaken for current. Mirrors app.py's `tracker_private`;
-// only applies while the sync state is an ok variant (it never overrides a real
-// private/error status, which already speaks for itself).
-function trackerPrivateCaveat(acct) {
-  if (!acct.tracker_private) return false;
-  const s = syncState(acct);
-  return s === "current" || s === "fresh";
-}
-const TRACKER_PRIVATE_NOTE = "tracker.gg shows this profile private — rank may be cached";
 
 // DISPLAY-ONLY caveat. tracker served public ranks but the profile's match
 // history is private, so even an explicit "X ago" crawl label could be mistaken
@@ -296,18 +272,13 @@ const HISTORY_PRIVATE_NOTE =
 
 // Icon + copy for each non-clean sync state. 'current' / 'fresh' / 'none'
 // render no badge on the refresh button — a clean (or simply old but
-// uncontested) account needs no marker. tracker.gg is the primary data source;
-// marvelrivalsapi is the fallback. Copy reflects that.
+// uncontested) account needs no marker. Tracker.gg is the refresh source.
 // Short labels for chip body — the chip is clamped to a single line so it
 // can't push the rank rows around. The full long-form message is also passed
 // through to the chip's `title` attribute as a native hover tooltip.
 const SYNC_META = {
-  private:        { sym: "🔒", cls: "warn",  text: "Private profile — set rank manually",
-                    long: "Both tracker.gg and marvelrivalsapi reported this profile as private — set rank manually" },
   not_found:      { sym: "?",  cls: "muted", text: "Player not found — check IGN",
-                    long: "No data for this player on tracker.gg or marvelrivalsapi — IGN may be wrong" },
-  bad_key:        { sym: "!",  cls: "err",   text: "marvelrivalsapi key rejected",
-                    long: "marvelrivalsapi key rejected (fallback only) — tracker.gg should still work" },
+                    long: "No data for this player on Tracker.gg — IGN or UID may be wrong" },
   missing_handle: { sym: "?",  cls: "muted", text: "No IGN set — refresh skipped",
                     long: "No in-game name set — refresh skipped" },
   error:          { sym: "!",  cls: "err",   text: "Refresh failed — retry shortly",
@@ -316,8 +287,7 @@ const SYNC_META = {
 
 // Short human label for the data source field on each account.
 const SOURCE_LABEL = {
-  tracker:         "tracker.gg",
-  marvelrivalsapi: "marvelrivalsapi.com",
+  tracker: "Tracker.gg",
 };
 
 // How long (ms) the server enforces between refreshes of the same account.
@@ -334,18 +304,11 @@ function refreshCooldownLeft(acct) {
 }
 
 // Inline refresh button. Cells/cards/rows all share this so the spinner +
-// status-indicator placement stays consistent. tracker.gg is unauthenticated
-// so the button renders even without a marvelrivalsapi key in Options.
-function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
+// status-indicator placement stays consistent.
+function RefreshBtn({ acct, refreshing, onRefresh,
                      size = "sm", showLabel = false }) {
   const state = syncState(acct);
   let meta = SYNC_META[state] || null;  // null for none / fresh
-  // ok-state account that tracker.gg now flags private: badge it amber 🔒 so
-  // the cached rank reads as suspect at a glance. Display-only — `state` (and
-  // the underlying last_refresh_status) are unchanged.
-  if (!meta && trackerPrivateCaveat(acct)) {
-    meta = { sym: "🔒", cls: "warn", text: TRACKER_PRIVATE_NOTE };
-  }
   const cooldownLeft = refreshCooldownLeft(acct);
   // 1s tick while the per-account cooldown is counting down so the tooltip
   // updates live and the button re-enables the moment it expires.
@@ -357,7 +320,7 @@ function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
   } else if (meta) {
     title = acct.last_refresh_error || meta.text;
   } else {
-    title = "Refresh rank — tries tracker.gg first, marvelrivalsapi as fallback";
+    title = "Refresh rank from Tracker.gg";
   }
   const blocked = refreshing || cooldownLeft > 0;
   return (
@@ -389,40 +352,23 @@ function RefreshBtn({ acct, refreshing, onRefresh, hasApiKey,
   );
 }
 
-// Inline sync notifier: current / fresh / private / not-found / failed.
-// This is the per-account counterpart to the API-wide status in the Options
-// panel. When a recrawl is in flight it also shows a live countdown to when
-// fresh data should land (and when the next recrawl can be requested).
-function SyncChip({ acct, hasApiKey }) {
+// Inline sync notifier: current / fresh / not-found / failed.
+function SyncChip({ acct }) {
   const state = syncState(acct);
 
   // "Synced Xago" = when WE last pulled (last_refresh_ts), not the provider's
   // internal crawl stamp. tracker.gg's `lastUpdated` (rivals_synced_at) can lag
   // hours behind the live data it serves, so a fresh pull that changed the rank
-  // would otherwise still read "synced 13h ago". providerCrawl is kept only for
-  // the marvelrivalsapi cached-data note below.
+  // would otherwise still read "synced 13h ago".
   const synced = toMs(acct.last_refresh_ts);
-  const providerCrawl = toMs(acct.rivals_synced_at);
-  const reqAt = toMs(acct.rivals_update_requested_at);
-  const lastRefreshTs = toMs(acct.last_refresh_ts);
-  // marvelrivalsapi locks a player for 30 min after an /update — that same
-  // window is both "recrawl in progress" and "can't request another yet".
-  const recrawlLeft = reqAt != null ? RECRAWL_PENDING_MS - (Date.now() - reqAt) : -1;
-  const recrawlPending = recrawlLeft > 0;
-  // Window elapsed and we haven't refreshed since asking for it: the recrawled
-  // data is now sitting on the API, but the card still shows the pre-recrawl
-  // rank until the next refresh pulls it in. Nothing auto-fetches.
-  const recrawlReady = reqAt != null && !recrawlPending
-    && (lastRefreshTs == null || lastRefreshTs <= reqAt);
-  useMinuteTick(recrawlPending);
 
   if (state === "none") {
-    return hasApiKey ? (
+    return (
       <div className="sync-chip sync-chip-muted" data-state="none">
         <span className="sync-chip-i" aria-hidden="true">○</span>
         <span className="sync-chip-t">Not synced yet — hit ↻ to pull the live rank</span>
       </div>
-    ) : null;
+    );
   }
 
   const srcLabel = SOURCE_LABEL[acct.last_refresh_source] || null;
@@ -446,18 +392,6 @@ function SyncChip({ acct, hasApiKey }) {
     longText = m.long || m.text;
   }
 
-  // Display-only caveat (see trackerPrivateCaveat): we're on an ok state but
-  // tracker.gg says private. Recolor amber + 🔒 and append the note, without
-  // touching syncState / last_refresh_status.
-  if (trackerPrivateCaveat(acct)) {
-    cls = "warn";
-    icon = "🔒";
-    text = `${text} · ${TRACKER_PRIVATE_NOTE}`;
-    longText = providerCrawl
-      ? `${TRACKER_PRIVATE_NOTE}. Showing the last marvelrivalsapi crawl from ${fmtRelative(providerCrawl)}.`
-      : `${TRACKER_PRIVATE_NOTE}.`;
-  }
-
   // History-private (see historyPrivateCaveat): ranks are valid/current but the
   // crawl age is NOT a last-played signal. Stay green and say plainly that
   // activity is hidden, not stale — never imply last-played from the crawl age.
@@ -468,40 +402,11 @@ function SyncChip({ acct, hasApiKey }) {
     longText = HISTORY_PRIVATE_NOTE;
   }
 
-  const recrawlMins = recrawlPending ? Math.max(1, Math.ceil(recrawlLeft / 60000)) : 0;
-  // Recrawl is a marvelrivalsapi-only mechanic. Suppress the verbose
-  // "recrawl queued / done" suffixes when:
-  //   1. the account has any ok-status sync (current/fresh) — the data is
-  //      good, the recrawl is moot, and the chip is just noise.
-  //   2. tracker.gg sourced the latest refresh — recrawl wouldn't help
-  //      (tracker pulls live every call, no caching layer to thaw).
-  const showRecrawl = state !== "current"
-                   && state !== "fresh"
-                   && acct.last_refresh_source !== "tracker";
   return (
     <div className={"sync-chip sync-chip-" + cls} data-state={state}
          title={acct.last_refresh_error || longText || text}>
       <span className="sync-chip-i" aria-hidden="true">{icon}</span>
       <span className="sync-chip-t">{text}</span>
-      {showRecrawl && recrawlPending && (
-        <span className="sync-chip-pending"
-              title={"Recrawl queued on marvelrivalsapi (fallback only) — "
-                     + "their backend is re-fetching this player's live stats. "
-                     + "Refresh again in a few minutes to pull the updated rank. "
-                     + "Another recrawl can't be queued for ~"
-                     + recrawlMins + " min. tracker.gg pulls live data on every "
-                     + "refresh, so no recrawl is needed there."}>
-          · recrawl queued · ~{recrawlMins}m
-        </span>
-      )}
-      {showRecrawl && recrawlReady && (
-        <span className="sync-chip-ready"
-              title={"The 30-min marvelrivalsapi recrawl window has elapsed. "
-                     + "Hit ↻ to pull the recrawled rank — relevant only if "
-                     + "this account falls back to marvelrivalsapi."}>
-          · recrawl done — hit ↻
-        </span>
-      )}
     </div>
   );
 }
@@ -509,7 +414,7 @@ function SyncChip({ acct, hasApiKey }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // B. CARDS  (refined trading-card)
 // ─────────────────────────────────────────────────────────────────────────────
-function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids }) {
+function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, activeSteam, localRivalsUids }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -538,7 +443,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         <span className="rcard-eyebrow">{lab.text}</span>
         <div className="rcard-head-r">
           <RefreshBtn acct={acct} refreshing={refreshing}
-                      onRefresh={onRefresh} hasApiKey={hasApiKey} size="sm" />
+                      onRefresh={onRefresh} size="sm" />
           <button
             type="button"
             className={"rcard-mark" + (lab.kind === "alt" ? " rcard-mark-alt" : "")}
@@ -589,7 +494,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         </div>
       </div>
 
-      <SyncChip acct={acct} hasApiKey={hasApiKey} />
+      <SyncChip acct={acct} />
 
       {!opts.hideCopy && (
         <footer className="rcard-foot">
@@ -611,7 +516,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
 // ─────────────────────────────────────────────────────────────────────────────
 // C. TABLE  (data-dense list)
 // ─────────────────────────────────────────────────────────────────────────────
-function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, sortLabel, activeSteam, localRivalsUids }) {
+function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, sortLabel, activeSteam, localRivalsUids }) {
   return (
     <section className="tbl">
       <header className="tbl-head">
@@ -632,7 +537,6 @@ function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshin
                     onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                     onRefresh={onRefresh}
                     refreshing={refreshingIds && refreshingIds.has(a.id)}
-                    hasApiKey={hasApiKey}
                     activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
         ))}
       </ol>
@@ -640,7 +544,7 @@ function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshin
   );
 }
 
-function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids }) {
+function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, activeSteam, localRivalsUids }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
@@ -697,7 +601,7 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
 
         <div className="tbl-actions">
           <RefreshBtn acct={acct} refreshing={refreshing}
-                      onRefresh={onRefresh} hasApiKey={hasApiKey} size="sm" />
+                      onRefresh={onRefresh} size="sm" />
           <button
             type="button"
             className="tbl-more"
@@ -710,7 +614,7 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ha
 
       {open && (
         <div className="tbl-row-detail">
-          <SyncChip acct={acct} hasApiKey={hasApiKey} />
+          <SyncChip acct={acct} />
           {!opts.hideDetails && (
             <div className="tbl-detail-meta">
               <span><i>steam</i> {acct.username || "—"}</span>
@@ -775,7 +679,7 @@ function RankCheckpoints() {
   );
 }
 
-function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids, rankField }) {
+function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, activeSteam, localRivalsUids, rankField }) {
   // Group by tier of the chosen rank field (current_rank or peak_rank).
   const field = rankField === "peak_rank" ? "peak_rank" : "current_rank";
   const groups = React.useMemo(() => {
@@ -796,14 +700,14 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
       {groups.map(([tier, list]) => (
         <LadderGroup key={tier} tier={tier} list={list} rankField={field}
                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
-                     onRefresh={onRefresh} refreshingIds={refreshingIds} hasApiKey={hasApiKey}
+                     onRefresh={onRefresh} refreshingIds={refreshingIds}
                      activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
       ))}
     </div>
   );
 }
 
-function LadderGroup({ tier, list, rankField, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, hasApiKey, activeSteam, localRivalsUids }) {
+function LadderGroup({ tier, list, rankField, opts, onOpen, onCopy, onPin, onRefresh, refreshingIds, activeSteam, localRivalsUids }) {
   const t = themeFor(tier === "One Above All" ? "One Above All" : tier + " I") || { fg: "#9aa3b2" };
   return (
     <section className="ladder-group" style={{ "--tier-fg": t.fg }}>
@@ -818,7 +722,6 @@ function LadderGroup({ tier, list, rankField, opts, onOpen, onCopy, onPin, onRef
                       opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
                       onRefresh={onRefresh}
                       refreshing={refreshingIds && refreshingIds.has(a.id)}
-                      hasApiKey={hasApiKey}
                       activeSteam={activeSteam} localRivalsUids={localRivalsUids} />
         ))}
       </div>
@@ -826,7 +729,7 @@ function LadderGroup({ tier, list, rankField, opts, onOpen, onCopy, onPin, onRef
   );
 }
 
-function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKey, activeSteam, localRivalsUids, rankField }) {
+function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, activeSteam, localRivalsUids, rankField }) {
   // Ladder can be grouped by current or peak rank; the chosen field is the
   // card's primary line, the other becomes the small sub-line.
   const byPeak = rankField === "peak_rank";
@@ -865,7 +768,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, hasApiKe
         <div className="lad-line-r">
           <TagPill acct={acct} />
           <RefreshBtn acct={acct} refreshing={refreshing}
-                      onRefresh={onRefresh} hasApiKey={hasApiKey} size="xs" />
+                      onRefresh={onRefresh} size="xs" />
           {lab.kind !== "alt" && (
             <span className="lad-icon" style={{ color: lab.color || "currentColor" }}>
               <Icon kind={lab.kind} />

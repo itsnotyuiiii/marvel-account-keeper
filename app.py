@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -52,7 +53,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.14.1"
+APP_VERSION = "2.15.0"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -82,43 +83,29 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "neon": False,
     "current_points": None,
     "peak_points": None,
-    # Stats refresh (marvelrivalsapi.com integration)
+    # Stats refresh (public Tracker.gg profile data)
     "rivals_uid": None,
-    "last_refresh_ts": None,       # epoch — when *we* last hit the API for this account
-    "last_refresh_status": None,   # "ok" | "private" | "not_found" | "bad_key" | "error" | "missing_handle"
+    "last_refresh_ts": None,       # epoch — when we last requested stats for this account
+    "last_refresh_status": None,   # "ok" | "not_found" | "error" | "missing_handle"
     "last_refresh_error": None,
-    "last_refresh_source": None,   # "tracker" | "marvelrivalsapi" — which provider gave us the rank
-    "tracker_private": False,      # DISPLAY-ONLY: tracker.gg reported this profile private on the
-                                   # last refresh while we still showed a (cached) marvelrivalsapi
-                                   # rank. Never feeds last_refresh_status — purely a UI hint.
+    "last_refresh_source": None,   # currently "tracker" when a refresh succeeds
     "tracker_history_private": False,  # DISPLAY-ONLY: tracker served public ranks but the profile's
                                    # match history is private, so the "last crawled" age is NOT a
                                    # last-played/last-login signal. Suppresses the misleading
                                    # "dormant — Xd ago" framing. Never feeds last_refresh_status.
-    "rivals_synced_at": None,      # epoch — when marvelrivalsapi last crawled this player
-    "rivals_update_requested_at": None,  # epoch — when we last asked the API to recrawl
-    # Match history (lazy — populated only when the drawer is opened for an account)
-    "recent_matches": [],
-    "matches_synced_at": None,
-    "matches_error": None,
+    "rivals_synced_at": None,      # epoch — upstream profile timestamp when available
 }
 
-# marvelrivalsapi.com integration
-RIVALS_API_BASE = "https://marvelrivalsapi.com/api/v1"
-RIVALS_API_TIMEOUT_S = 12
-RIVALS_UPDATE_TIMEOUT_S = 8  # fire-and-forget recrawl request
-REFRESH_ALL_DELAY_S = 2.0  # polite spacing between calls in /refresh-all (30 req/min)
+# Keep refresh-all deliberately slow so a local vault never hammers the
+# upstream profile service.
+REFRESH_ALL_DELAY_S = 2.0
 PER_ACCOUNT_REFRESH_COOLDOWN_S = 20  # min spacing between refreshes for the SAME account
-# The /update endpoint locks a player for 30 min and penalizes repeat requests
-# (queue position resets, risk of a stuck processing loop) — never re-request
-# a recrawl for the same player inside this window.
-RIVALS_UPDATE_COOLDOWN_S = 30 * 60
 
-# tracker.gg integration (PRIMARY data source — marvelrivalsapi is fallback).
-# Tracker exposes richer data (per-season peak history, hero stats, lifetime
-# peak) and crucially bypasses the in-game "private" flag that gates
-# marvelrivalsapi. Undocumented though — schema may change, and the endpoint
-# sits behind Cloudflare, so realistic UA + sane request spacing matter.
+# tracker.gg rank refresh. This is an undocumented website endpoint, so its
+# schema may change; failures are surfaced plainly and never fall through to a
+# second hidden provider. RivalsData is integrated only as a user-opened profile
+# link because it does not publish a developer API and explicitly discourages
+# programmatic access.
 TRACKER_API_BASE = "https://api.tracker.gg/api/v2/marvel-rivals/standard"
 TRACKER_TIMEOUT_S = 15
 TRACKER_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -797,17 +784,6 @@ _state: dict[str, Any] = {
     "last_activity": 0.0,   # epoch seconds
 }
 
-# marvelrivalsapi usage accounting. The limit is dynamic (per the docs) and
-# surfaced via X-RateLimit-Limit / -Remaining / -Reset headers — but the API
-# serves the literal string "cache" for them on cached hits, so we keep the
-# last *numeric* values seen and also count calls locally as a fallback.
-# 429 responses carry Retry-After.
-_rivals_lock = threading.Lock()
-_rivals_usage: dict[str, Any] = {"date": "", "count": 0}
-_rivals_rate_limited_until = 0.0  # epoch; > now means we're in a 429 cooldown
-_rivals_quota: dict[str, Any] = {"limit": None, "remaining": None,
-                                 "reset": None, "at": None}
-
 # Serializes vault read-modify-write across endpoints. The server runs with
 # threaded=True, so without this a refresh-all (which mutates account-by-account
 # over many seconds) and a concurrent mutation (single-account refresh, create /
@@ -956,7 +932,9 @@ def _migrate_vault_if_needed() -> None:
     """Backfill new schema fields onto an existing vault without losing data.
 
     Encrypted material (kdf / verifier / password_enc) is left untouched, so
-    the current master password keeps working.
+    the current master password keeps working. Provider credentials and cached
+    provider-only records removed in v2.15 are pruned here; _write_vault keeps
+    the normal timestamped backup as a rollback path.
     """
     if not VAULT_PATH.exists():
         return
@@ -968,11 +946,35 @@ def _migrate_vault_if_needed() -> None:
     cfg = vault.get("config")
     if not isinstance(cfg, dict):
         vault["config"] = {"lockout_minutes": DEFAULT_LOCKOUT_MINUTES}
+        cfg = vault["config"]
         changed = True
     elif "lockout_minutes" not in cfg:
         cfg["lockout_minutes"] = DEFAULT_LOCKOUT_MINUTES
         changed = True
+    for legacy_key in ("marvel_rivals_api_key", "rivals_api_usage"):
+        if legacy_key in cfg:
+            del cfg[legacy_key]
+            changed = True
     for acct in vault.get("accounts", []):
+        for legacy_field in (
+            "tracker_private",
+            "rivals_update_requested_at",
+            "recent_matches",
+            "matches_synced_at",
+            "matches_error",
+        ):
+            if legacy_field in acct:
+                del acct[legacy_field]
+                changed = True
+        if acct.get("last_refresh_source") == "marvelrivalsapi":
+            acct["last_refresh_source"] = None
+            acct["last_refresh_error"] = None
+            changed = True
+        if acct.get("last_refresh_status") in ("bad_key", "private"):
+            acct["last_refresh_status"] = None
+            acct["last_refresh_source"] = None
+            acct["last_refresh_error"] = None
+            changed = True
         for field, default in ACCOUNT_FIELD_DEFAULTS.items():
             if field not in acct:
                 acct[field] = default
@@ -1198,7 +1200,7 @@ def _coerce_points(value: Any) -> int | None:
         return None
 
 
-# ---------- marvelrivalsapi.com integration ----------
+# ---------- Marvel Rivals rank parsing ----------
 
 # In-app rank vocabulary (kept in sync with static/data.js RANK_TIERS).
 _RANK_TIERS = {
@@ -1212,19 +1214,6 @@ _RANK_TIERS = {
     "Eternity", "One Above All",
 }
 
-# Marvel Rivals ranked progression — numeric level → tier string.
-# Bronze III is level 1, Roman numerals descend within a tier (III lowest,
-# I highest). Level 22+ is Eternity (score-gated). One Above All is the
-# top-N system and isn't directly derivable from level, so it falls through.
-_LEVEL_TO_RANK = {
-    1: "Bronze III", 2: "Bronze II", 3: "Bronze I",
-    4: "Silver III", 5: "Silver II", 6: "Silver I",
-    7: "Gold III",   8: "Gold II",   9: "Gold I",
-    10: "Platinum III", 11: "Platinum II", 12: "Platinum I",
-    13: "Diamond III",  14: "Diamond II",  15: "Diamond I",
-    16: "Grandmaster III", 17: "Grandmaster II", 18: "Grandmaster I",
-    19: "Celestial III", 20: "Celestial II", 21: "Celestial I",
-}
 _TIER_FAMILIES = {
     "bronze": "Bronze", "silver": "Silver", "gold": "Gold",
     "platinum": "Platinum", "diamond": "Diamond",
@@ -1285,39 +1274,6 @@ def _normalize_rank(value: Any) -> str:
     return candidate if candidate in _RANK_TIERS else ""
 
 
-def _extract_score(value: Any) -> int | None:
-    """Pull a points/score number from common API shapes."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    if isinstance(value, dict):
-        for k in ("score", "points", "rank_score", "rankScore", "value"):
-            if k in value and isinstance(value[k], (int, float)):
-                return int(value[k])
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _dig(payload: Any, *paths: tuple[str, ...]) -> Any:
-    """Walk a list of nested-key paths, returning the first hit (non-None)."""
-    for path in paths:
-        cur = payload
-        ok = True
-        for k in path:
-            if not isinstance(cur, dict) or k not in cur:
-                ok = False
-                break
-            cur = cur[k]
-        if ok and cur is not None and cur != "":
-            return cur
-    return None
-
-
 # Ordered list mirroring static/data.js RANK_TIERS for comparing rank strings.
 _RANK_ORDER = [
     "Bronze III", "Bronze II", "Bronze I",
@@ -1332,89 +1288,8 @@ _RANK_ORDER = [
 _RANK_INDEX = {r: i for i, r in enumerate(_RANK_ORDER)}
 
 
-def _peak_from_seasons(player: dict[str, Any]) -> tuple[str, int | None]:
-    """Walk every ranked season and return (rank_string, peak_rank_score).
-
-    Picks the highest max_level across seasons (tiebreak: max_rank_score).
-    Level 22+ is reported as 'Eternity'. The score is the player's absolute
-    Marvel Rivals MMR / SR at that peak — used as-is for every tier (the
-    in-game ranked system is absolute-score, not 0/100 within a division).
-    """
-    seasons = ((player or {}).get("info") or {}).get("rank_game_season")
-    if not isinstance(seasons, dict):
-        return "", None
-    best_level = 0
-    best_score = 0.0
-    for sd in seasons.values():
-        if not isinstance(sd, dict):
-            continue
-        ml = sd.get("max_level") or 0
-        ms = sd.get("max_rank_score") or 0.0
-        try:
-            ml, ms = int(ml), float(ms)
-        except (TypeError, ValueError):
-            continue
-        if ml > best_level or (ml == best_level and ms > best_score):
-            best_level, best_score = ml, ms
-    if best_level <= 0:
-        return "", None
-    score = int(best_score) if best_score > 0 else None
-    if best_level in _LEVEL_TO_RANK:
-        return _LEVEL_TO_RANK[best_level], score
-    # Above Celestial I: Eternity (we can't tell OAA from level alone).
-    return "Eternity", score
-
-
-def _current_from_seasons(player: dict[str, Any]) -> tuple[str, int | None]:
-    """Current rank + rank_score from the most-recently-updated season.
-
-    The season's `level` maps straight through _LEVEL_TO_RANK. This is the
-    dependable current-rank source: player.rank.rank is frequently stale
-    ('Invalid level') for players marvelrivalsapi hasn't recrawled lately,
-    but the season snapshots survive. Returns ('', None) when there is no
-    season history at all.
-    """
-    seasons = ((player or {}).get("info") or {}).get("rank_game_season")
-    if not isinstance(seasons, dict):
-        return "", None
-    latest = None
-    latest_t = -1
-    for sd in seasons.values():
-        if not isinstance(sd, dict):
-            continue
-        t = sd.get("update_time") or 0
-        try:
-            t = int(t)
-        except (TypeError, ValueError):
-            continue
-        if t > latest_t:
-            latest_t, latest = t, sd
-    if not latest:
-        return "", None
-    try:
-        level = int(latest.get("level") or 0)
-    except (TypeError, ValueError):
-        level = 0
-    try:
-        score = int(float(latest.get("rank_score") or 0)) or None
-    except (TypeError, ValueError):
-        score = None
-    if level in _LEVEL_TO_RANK:
-        return _LEVEL_TO_RANK[level], score
-    if level >= 22:  # above Celestial I — Eternity (can't tell OAA from level)
-        return "Eternity", score
-    return "", score
-
-
 def _parse_api_timestamp(value: Any) -> int | None:
-    """Parse the assorted timestamp shapes the two providers emit into an epoch
-    int (None when unparseable). marvelrivalsapi 'updates' look like
-    '12/16/2025, 7:20:27 AM' (US Eastern); tracker.gg's `lastUpdated` is ISO
-    8601 like '2026-05-29T19:00:27Z'. Without the ISO formats below the tracker
-    path never set rivals_synced_at, so the 'synced X ago' freshness indicator
-    was blank on every tracker-served account. A few hours of timezone slop is
-    irrelevant for the 'X days ago' display this feeds.
-    """
+    """Parse an upstream profile timestamp into epoch seconds."""
     if not value or not isinstance(value, str):
         return None
     for fmt in ("%m/%d/%Y, %I:%M:%S %p", "%m/%d/%Y, %H:%M:%S", "%m/%d/%Y",
@@ -1456,11 +1331,9 @@ def _parse_tracker_payload(payload: dict[str, Any]) -> dict[str, Any]:
         out["tracker_handle"] = handle.strip()
 
     # NetEase UID — tracker carries it in platformInfo. Capturing it here is
-    # what lets name-based accounts (the common case tracker serves on the
-    # primary path) finally populate a rivals_uid, which unlocks match history
-    # and UID-keyed lookups. Without this the UID only ever arrives via the
-    # marvelrivalsapi fallback, so a healthy tracker-served account stays
-    # UID-less indefinitely. Guard to a plausible UID shape (digits, 6-11 long
+    # what lets name-based accounts populate a rivals_uid, which unlocks stable
+    # UID-keyed lookups and a direct RivalsData profile link. Guard to a
+    # plausible UID shape (digits, 6-11 long
     # — matching _detected_rivals_uids) so a platform slug never lands here.
     uid_raw = pinfo.get("platformUserId") or pinfo.get("platformUserIdentifier")
     uid_digits = re.sub(r"\D", "", str(uid_raw or ""))
@@ -1533,9 +1406,8 @@ def _parse_tracker_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if cur_score is not None:
             out["current_points"] = cur_score
     if peak_tier:
-        # Apply the same upward clamp the marvelrivalsapi parser uses: peak
-        # can't be lower than current. The two providers occasionally disagree
-        # on which season's data is fresh, so this keeps the UI consistent.
+        # Peak can't be lower than current. Upstream season history can be
+        # temporarily sparse, so clamp it to keep the UI internally consistent.
         if cur_tier and _RANK_INDEX.get(cur_tier, -1) > _RANK_INDEX.get(peak_tier, -1):
             peak_tier = cur_tier
             peak_score = cur_score
@@ -1558,6 +1430,27 @@ def _round_score(v: Any) -> int | None:
 
 _tracker_scraper = None
 _tracker_scraper_lock = threading.Lock()
+_tracker_rate_limit_lock = threading.Lock()
+_tracker_rate_limited_until = 0.0  # monotonic clock; process-local by design
+
+
+def _tracker_rate_limit_remaining() -> int:
+    """Seconds left in Tracker's provider-wide Retry-After window."""
+    with _tracker_rate_limit_lock:
+        remaining = _tracker_rate_limited_until - time.monotonic()
+    return max(0, math.ceil(remaining))
+
+
+def _remember_tracker_rate_limit(retry_after: int | None) -> int:
+    """Extend the provider-wide guard and return its current remaining time."""
+    global _tracker_rate_limited_until
+    seconds = max(1, int(retry_after or 60))
+    with _tracker_rate_limit_lock:
+        _tracker_rate_limited_until = max(
+            _tracker_rate_limited_until,
+            time.monotonic() + seconds,
+        )
+    return _tracker_rate_limit_remaining()
 
 
 def _get_tracker_scraper():
@@ -1630,113 +1523,6 @@ def _fetch_tracker_player(ign: str) -> tuple[int, dict[str, Any] | None, int | N
         return e.code, body, retry
 
 
-def _parse_rivals_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Extract the bits we care about from a marvelrivalsapi player response.
-
-    Known schema (from a real response, May 2026):
-      payload.uid                                    → numeric UID
-      payload.player.rank.rank                       → 'Celestial III' etc.
-      payload.player.info.rank_game_season[<sid>]    → per-season {level, rank_score, max_level, max_rank_score, update_time}
-      payload.isPrivate                              → boolean
-    Peak is derived from the highest max_level across all seasons.
-    `rank_score` is the player's absolute Marvel Rivals MMR/SR and is
-    captured for every tier (the game's ranked system is absolute-score,
-    not 0/100 within a division).
-    """
-    if not isinstance(payload, dict):
-        return {}
-    player = payload.get("player") if isinstance(payload.get("player"), dict) else {}
-    uid = _dig(payload, ("uid",), ("player", "uid"), ("id",))
-
-    # Current rank: the canonical string from player.rank.rank, with legacy
-    # fallbacks in case the API ever moves it.
-    cur_raw = _dig(
-        payload,
-        ("player", "rank", "rank"),
-        ("player", "rank"),
-        ("rank", "current"), ("current_rank",), ("rank",),
-    )
-    cur_rank = _normalize_rank(cur_raw)
-
-    # The season history is the dependable source. player.rank.rank is often
-    # 'Invalid level' (or otherwise unparseable) for players marvelrivalsapi
-    # hasn't recrawled recently — when that happens, fall back to the most
-    # recently updated season's level, which still maps cleanly to a tier.
-    season_cur_rank, season_score = _current_from_seasons(player)
-    if not cur_rank:
-        cur_rank = season_cur_rank
-
-    out: dict[str, Any] = {}
-    if uid:
-        out["rivals_uid"] = str(uid)
-
-    # When marvelrivalsapi last crawled this player — drives the freshness
-    # ("synced 2h ago" / "stale") indicator. The freshest of the several
-    # 'updates' timestamps wins; info_update_time alone lags badly (it can sit
-    # months behind a player whose match history updated yesterday). Captured
-    # even on the bail path so a not_found row still shows its data age.
-    updates = payload.get("updates")
-    if isinstance(updates, dict):
-        stamps = [_parse_api_timestamp(updates.get(k)) for k in
-                  ("info_update_time", "last_history_update", "last_inserted_match")]
-        stamps = [s for s in stamps if s is not None]
-        if stamps:
-            out["rivals_synced_at"] = max(stamps)
-
-    # Nothing usable from player.rank OR the season history — bail with UID
-    # only; the caller flags not_found and the user's rank fields stay put.
-    if not cur_rank:
-        return out
-
-    # Peak: derived from the season history. Trust the level table over any
-    # API-supplied "peak" string, since their player.rank is sometimes stale.
-    peak_rank, peak_score = _peak_from_seasons(player)
-
-    # Peak floor: a peak can't be lower than the current rank. The season
-    # snapshots sometimes lag (or undercount placements), so clamp upward.
-    if peak_rank and _RANK_INDEX.get(cur_rank, -1) > _RANK_INDEX.get(peak_rank, -1):
-        peak_rank = cur_rank
-        peak_score = season_score   # peak == current when we clamp
-    elif not peak_rank:
-        peak_rank = cur_rank
-        peak_score = season_score
-
-    out["current_rank"] = cur_rank
-    out["peak_rank"] = peak_rank
-
-    # Absolute MMR score from the latest season → current_points; highest
-    # season's max_rank_score → peak_points. Captured for every tier (the
-    # in-game ranked system is absolute-score, not 0/100 RR within division).
-    if season_score is not None:
-        out["current_points"] = season_score
-    if peak_score is not None:
-        out["peak_points"] = peak_score
-    return out
-
-
-def _is_private_payload(status_code: int, payload: Any) -> bool:
-    """Detect 'profile is private' responses by inspecting the body content.
-
-    Status alone is unreliable — marvelrivalsapi returns 403 for both an
-    invalid API key AND a private profile, so we always check the message
-    text to disambiguate.
-    """
-    if not isinstance(payload, dict):
-        return status_code == 451  # spec-only "unavailable for legal reasons"
-    if any(payload.get(k) is True for k in ("private", "is_private", "isPrivate")):
-        return True
-    msg = (payload.get("message") or payload.get("error") or "").lower()
-    return "private" in msg or "hidden" in msg
-
-
-def _is_bad_key_payload(payload: Any) -> bool:
-    """Heuristic: does the upstream message say the API key is the problem?"""
-    if not isinstance(payload, dict):
-        return False
-    msg = (payload.get("message") or payload.get("error") or "").lower()
-    return ("api key" in msg) or ("unauthorized" in msg) or ("invalid key" in msg)
-
-
 def _retry_after_s(headers: Any) -> int | None:
     """Parse a Retry-After header (delta-seconds form) into an int, or None."""
     try:
@@ -1747,225 +1533,11 @@ def _retry_after_s(headers: Any) -> int | None:
     return int(v) if v.isdigit() else None
 
 
-def _http_get_json(url: str, headers: dict[str, str]) -> tuple[int, Any, int | None]:
-    """GET url → (status, parsed_json_or_None, retry_after_seconds_or_None).
-
-    Records any X-RateLimit-* headers seen as a side effect (see _note_rate_headers).
-    """
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=RIVALS_API_TIMEOUT_S) as r:
-            body = r.read()
-            _note_rate_headers(r.headers)
-            retry_after = _retry_after_s(r.headers)
-        try:
-            return r.status, json.loads(body.decode("utf-8")), retry_after
-        except (ValueError, UnicodeDecodeError):
-            return r.status, None, retry_after
-    except urllib.error.HTTPError as e:
-        _note_rate_headers(e.headers)
-        retry_after = _retry_after_s(e.headers)
-        try:
-            return e.code, json.loads(e.read().decode("utf-8")), retry_after
-        except Exception:
-            return e.code, None, retry_after
-
-
-def _request_player_update(uid: str, api_key: str) -> None:
-    """Best-effort: ask marvelrivalsapi to recrawl this player.
-
-    marvelrivalsapi serves cached data and only recrawls a profile when one
-    is explicitly requested; the recrawl completes asynchronously (0-30 min,
-    usually 0-5). The endpoint locks a player for 30 min and penalizes repeat
-    requests, so callers MUST gate this via _maybe_request_recrawl — never
-    call it directly on a hot path. Errors are swallowed: a failed recrawl
-    request must never break the refresh that triggered it.
-    """
-    if not uid or not api_key:
-        return
-    url = f"{RIVALS_API_BASE}/player/{urllib.parse.quote(str(uid), safe='')}/update"
-    headers = {"x-api-key": api_key, "Accept": "application/json",
-               "User-Agent": "MarvelAccountKeeper/1.0"}
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(url, headers=headers),
-            timeout=RIVALS_UPDATE_TIMEOUT_S,
-        ) as r:
-            _note_api_call()
-            _note_rate_headers(r.headers)
-    except urllib.error.HTTPError as e:
-        _note_api_call()
-        _note_rate_headers(e.headers)
-        if e.code == 429:
-            _note_rate_limited(_retry_after_s(e.headers) or 60)
-    except Exception:
-        pass
-
-
-def _queue_player_update(uid: Any, api_key: str) -> None:
-    """Spawn _request_player_update on a daemon thread (non-blocking)."""
-    if not uid or not api_key:
-        return
-    threading.Thread(
-        target=_request_player_update,
-        args=(str(uid), api_key),
-        daemon=True,
-    ).start()
-
-
-def _maybe_request_recrawl(acct: dict[str, Any], updates: dict[str, Any],
-                           api_key: str, force: bool = False) -> None:
-    """Queue a marvelrivalsapi recrawl for this account — but only when it is
-    actually warranted.
-
-    The /update endpoint locks a player for 30 min and *penalizes* repeat
-    requests (queue position resets, risk of a stuck processing loop), so we
-    fire at most once per RIVALS_UPDATE_COOLDOWN_S and only when the cached
-    data is itself stale. Records rivals_update_requested_at into `updates`
-    when it fires so the cooldown persists in the vault.
-
-    Pass force=True to bypass the "private" auto-skip — used by the manual
-    "Queue recrawl" button so the user can explicitly retry a private account
-    in case it's gone public.
-    """
-    if updates.get("last_refresh_status") == "bad_key":
-        return
-    # Private accounts: never auto-queue. Both providers agreed the profile
-    # is private, so a recrawl on marvelrivalsapi won't change that until
-    # the player flips their in-game setting. The manual recrawl button
-    # passes force=True to override this when the user knows it changed.
-    if not force and updates.get("last_refresh_status") == "private":
-        return
-    uid = updates.get("rivals_uid") or acct.get("rivals_uid")
-    if not uid or not api_key:
-        return
-    now = time.time()
-    # Respect the per-player lock — another request now would only reset the
-    # queue position and delay the recrawl we already asked for.
-    last_req = acct.get("rivals_update_requested_at") or 0
-    if last_req and now - last_req < RIVALS_UPDATE_COOLDOWN_S:
-        return
-    # No point recrawling data that is already fresh.
-    synced = updates.get("rivals_synced_at") or acct.get("rivals_synced_at") or 0
-    if synced and now - synced < RIVALS_UPDATE_COOLDOWN_S:
-        return
-    _queue_player_update(str(uid), api_key)
-    updates["rivals_update_requested_at"] = int(now)
-
-
-def _marvel_rivals_api_key() -> str:
-    try:
-        return (_read_vault().get("config", {}) or {}).get("marvel_rivals_api_key") or ""
-    except (OSError, json.JSONDecodeError):
-        return ""
-
-
-def _utc_today() -> str:
-    return time.strftime("%Y-%m-%d", time.gmtime())
-
-
-def _note_api_call(n: int = 1) -> None:
-    """Count calls made to marvelrivalsapi, bucketed by UTC day."""
-    with _rivals_lock:
-        if _rivals_usage["date"] != _utc_today():
-            _rivals_usage["date"] = _utc_today()
-            _rivals_usage["count"] = 0
-        _rivals_usage["count"] += n
-
-
-def _note_rate_limited(retry_after_s: int) -> None:
-    """Record a 429 cooldown so the UI can warn until it clears."""
-    global _rivals_rate_limited_until
-    with _rivals_lock:
-        _rivals_rate_limited_until = time.time() + max(1, int(retry_after_s or 0))
-
-
-def _parse_rate_headers(headers: Any) -> dict[str, int] | None:
-    """Pull numeric X-RateLimit-* values from a response.
-
-    Returns None when the API serves the literal 'cache' for them (a cached
-    hit carries no real numbers) so callers keep the last known-good values.
-    """
-    if not headers:
-        return None
-
-    def num(name: str) -> int | None:
-        try:
-            v = headers.get(name)
-        except Exception:
-            return None
-        v = str(v).strip() if v is not None else ""
-        return int(v) if v.lstrip("-").isdigit() else None
-
-    parsed = {k: num(h) for k, h in (
-        ("limit", "X-RateLimit-Limit"),
-        ("remaining", "X-RateLimit-Remaining"),
-        ("reset", "X-RateLimit-Reset"),
-    )}
-    if all(v is None for v in parsed.values()):
-        return None
-    return {k: v for k, v in parsed.items() if v is not None}
-
-
-def _note_rate_headers(headers: Any) -> None:
-    """Store the latest numeric X-RateLimit-* values seen (ignores cached hits)."""
-    parsed = _parse_rate_headers(headers)
-    if not parsed:
-        return
-    with _rivals_lock:
-        _rivals_quota.update(parsed)
-        _rivals_quota["at"] = int(time.time())
-
-
-def _sync_status() -> dict[str, Any]:
-    """Snapshot of API usage / rate-limit state for the frontend.
-
-    `quota_*` come straight from the API's X-RateLimit-* headers (the limit is
-    dynamic, so there is no fixed daily number); `calls_today` is our own count.
-    """
-    with _rivals_lock:
-        count = _rivals_usage["count"] if _rivals_usage["date"] == _utc_today() else 0
-        cooldown = max(0, int(_rivals_rate_limited_until - time.time()))
-        quota = dict(_rivals_quota)
-    return {
-        "calls_today": count,
-        "quota_limit": quota.get("limit"),
-        "quota_remaining": quota.get("remaining"),
-        "quota_reset": quota.get("reset"),
-        "quota_seen_at": quota.get("at"),
-        "rate_limited": cooldown > 0,
-        "rate_limited_for_s": cooldown,
-        "has_key": bool(_marvel_rivals_api_key()),
-    }
-
-
-def _persist_api_usage(vault: dict[str, Any]) -> None:
-    """Mirror the in-memory call count into the vault config so it survives an
-    app restart within the same UTC day."""
-    with _rivals_lock:
-        snapshot = dict(_rivals_usage)
-    vault.setdefault("config", {})["rivals_api_usage"] = snapshot
-
-
-def _load_api_usage() -> None:
-    """Restore today's call count from the vault config at startup."""
-    try:
-        u = (_read_vault().get("config") or {}).get("rivals_api_usage")
-    except (OSError, json.JSONDecodeError):
-        return
-    if isinstance(u, dict) and u.get("date") == _utc_today():
-        with _rivals_lock:
-            _rivals_usage["date"] = u["date"]
-            try:
-                _rivals_usage["count"] = max(0, int(u.get("count") or 0))
-            except (TypeError, ValueError):
-                _rivals_usage["count"] = 0
-
-
 def _tracker_says_private(payload: Any) -> bool:
     """tracker.gg returns HTTP 400 with body.errors[].code == 'CollectorResultStatus::Private'
-    for accounts NetEase flagged as private. Detect that so we don't burn a
-    marvelrivalsapi fallback call (which will also say private)."""
+    for profiles it cannot expose. Treat that as unavailable rather than proof
+    of a specific privacy setting; the collector uses the same result for some
+    uncrawled and transient cases."""
     if not isinstance(payload, dict):
         return False
     for e in (payload.get("errors") or []):
@@ -1976,49 +1548,57 @@ def _tracker_says_private(payload: Any) -> bool:
     return False
 
 
-def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Hit tracker.gg for one account. Returns a partial update dict on
-    a clean rank parse OR an explicit private/not_found from tracker.
-    Returns None for ambiguous failures (network, Cloudflare 5xx, etc.)
-    so the caller still tries marvelrivalsapi.
+def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
+    """Fetch one public tracker.gg profile, UID first and then IGN.
 
-    If `signals` is passed, records side-channel observations the caller may
-    want even when we fall through — currently `tracker_private` (tracker's
-    400 CollectorResultStatus::Private). This is DISPLAY-ONLY context, never a
-    status: it stays out of the return dict so it can't become authoritative.
-
-    tracker.gg's /profile/ign/<slug> endpoint resolves a numeric NetEase UID
-    just as well as a name (verified live). LOOKUP ORDER IS UID-FIRST: the UID
-    is stable across renames and immune to the special-character / casing
-    problems that make a stored IGN unreliable, so we query by UID first and
-    only fall back to the IGN when there's no UID (or the UID lookup yields no
-    rank). A UID lookup also backfills the canonical IGN from tracker's handle.
-    tracker is always preferred over the inconsistent marvelrivalsapi, which the
-    caller only reaches if every tracker attempt here comes up empty."""
+    The endpoint resolves a numeric NetEase UID as well as a name. UID-first
+    lookup survives renames and special-character/casing issues; a successful
+    response can backfill both the canonical IGN and a missing UID. Every path
+    returns a user-facing status because there is deliberately no hidden
+    fallback provider.
+    """
     ign = (acct.get("in_game_name") or "").strip()
     uid = (acct.get("rivals_uid") or "").strip()
     # UID first, IGN fallback. dict.fromkeys dedupes while preserving order in
     # the (unlikely) event the two are equal.
     candidates = list(dict.fromkeys(c for c in (uid, ign) if c))
     if not candidates:
-        return None
+        return {
+            "last_refresh_status": "missing_handle",
+            "last_refresh_error": "Account has no in-game name or UID to look up.",
+        }
+
+    blocked_for = _tracker_rate_limit_remaining()
+    if blocked_for:
+        return {
+            "last_refresh_status": "error",
+            "last_refresh_source": "tracker",
+            "last_refresh_error": (
+                f"Tracker.gg is rate limiting requests. Try again in about "
+                f"{blocked_for} seconds."
+            ),
+            "_retry_after_s": blocked_for,
+        }
 
     saw_private = False
     saw_not_found = False
+    saw_empty_profile = False
+    last_failure_status = 0
     for lookup in candidates:
-        try:
-            status, payload, _retry = _fetch_tracker_player(lookup)
-        except (urllib.error.URLError, TimeoutError, OSError):
-            continue
-        # tracker.gg's collector returns 400 CollectorResultStatus::Private for
-        # ANY profile it hasn't successfully crawled — new accounts, transient
-        # collector misses, and genuinely-private ones alike. It is NOT a
-        # reliable privacy signal: tracker is the PRIMARY source precisely
-        # because it bypasses the in-game private flag, so if it had crawled a
-        # private profile it would return the data, not "Private". Treating it
-        # as authoritative permanently strands public-but-uncrawled profiles as
-        # "private". Record it as a display-only hint and keep trying / fall
-        # through to marvelrivalsapi, the authority on genuine privacy.
+        status, payload, retry_after = _fetch_tracker_player(lookup)
+        if status == 429:
+            retry_after = _remember_tracker_rate_limit(retry_after)
+            return {
+                "last_refresh_status": "error",
+                "last_refresh_source": "tracker",
+                "last_refresh_error": (
+                    f"Tracker.gg is rate limiting requests. Try again in "
+                    f"about {retry_after} seconds."
+                ),
+                # Internal control field: callers remove it before any vault
+                # write and use it to return/stream an explicit rate-limit.
+                "_retry_after_s": retry_after,
+            }
         if status == 400 and _tracker_says_private(payload):
             saw_private = True
             continue
@@ -2026,6 +1606,7 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
             saw_not_found = True
             continue
         if status != 200 or not isinstance(payload, dict):
+            last_failure_status = status
             continue
         parsed = _parse_tracker_payload(payload)
         # Accept the parse if EITHER current OR peak rank came back. Players who
@@ -2033,6 +1614,7 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
         # from prior seasons — still useful. No rank at all → try the next
         # candidate (e.g. UID lookup empty → retry by IGN).
         if "current_rank" not in parsed and "peak_rank" not in parsed:
+            saw_empty_profile = True
             continue
         out: dict[str, Any] = {"last_refresh_status": "ok",
                               "last_refresh_source": "tracker"}
@@ -2069,262 +1651,43 @@ def _try_tracker(acct: dict[str, Any], signals: dict[str, Any] | None = None) ->
         out.update(parsed)
         return out
 
-    # No candidate produced a rank. Surface the private hint (display-only) and
-    # fall through to marvelrivalsapi.
-    if saw_private and signals is not None:
-        signals["tracker_private"] = True
-    # tracker positively reported "no such player" and there's no UID for
-    # marvelrivalsapi to try a different lookup with — short-circuit with the
-    # clearer name-specific message rather than the vaguer marvelrivalsapi one.
-    if saw_not_found and not saw_private and not uid:
+    if saw_private:
+        return {
+            "last_refresh_status": "error",
+            "last_refresh_source": "tracker",
+            "last_refresh_error": (
+                "Tracker.gg could not expose this profile. It may be private, "
+                "uncrawled, or temporarily unavailable."
+            ),
+        }
+    if saw_not_found:
         return {"last_refresh_status": "not_found",
                 "last_refresh_source": "tracker",
-                "last_refresh_error": "tracker.gg couldn't find a player with that name. "
-                                      "If the account was renamed in-game, update the IGN — "
-                                      "the UID links on the next successful refresh."}
-    return None
+                "last_refresh_error": "Tracker.gg couldn't find that player. "
+                                      "Check the UID or in-game name."}
+    if saw_empty_profile:
+        return {"last_refresh_status": "not_found",
+                "last_refresh_source": "tracker",
+                "last_refresh_error": "Tracker.gg returned a profile with no ranked data."}
+    detail = f" (HTTP {last_failure_status})" if last_failure_status else ""
+    return {"last_refresh_status": "error",
+            "last_refresh_source": "tracker",
+            "last_refresh_error": f"Tracker.gg could not be reached{detail}. Try again later."}
 
 
-def _refresh_account_stats(acct: dict[str, Any], api_key: str) -> dict[str, Any]:
-    """Refresh one account's rank. Tries tracker.gg first (richer data, no
-    key, bypasses the in-game private flag) by UID then IGN, then falls back to
-    marvelrivalsapi when tracker can't service the request — Cloudflare 403, no
-    identifier at all, or no rank parse.
-
-    Always sets last_refresh_ts / last_refresh_status / last_refresh_error.
-    Sets last_refresh_source to whichever provider produced the rank.
-    """
+def _refresh_account_stats(acct: dict[str, Any]) -> dict[str, Any]:
+    """Refresh one account's public rank data without credentials."""
     now = int(time.time())
     base: dict[str, Any] = {
         "last_refresh_ts": now,
         "last_refresh_status": None,
         "last_refresh_error": None,
         "last_refresh_source": None,
-        # Reset every refresh so the hint self-heals when a profile goes public
-        # again. Only re-raised below if tracker says private AND we still end
-        # up serving a marvelrivalsapi rank.
-        "tracker_private": False,
         # Reset every refresh; set True only when tracker serves ranks but flags
         # the profile's match history private (see _parse_tracker_payload).
         "tracker_history_private": False,
     }
-
-    # 1. PRIMARY: tracker.gg, looked up by UID first then IGN (see _try_tracker).
-    # `signals` captures tracker's private verdict without letting it
-    # short-circuit the fallback or set a status.
-    signals: dict[str, Any] = {}
-    tracker_result = _try_tracker(acct, signals)
-    if tracker_result is not None:
-        return {**base, **tracker_result}
-
-    # 2. FALLBACK: marvelrivalsapi. Honors the global rate-limit cooldown
-    # and supports UID-only lookups, so it covers gaps tracker.gg can't.
-    if not api_key:
-        return {**base, "last_refresh_status": "bad_key",
-                "last_refresh_error": "No Marvel Rivals API key set in Options "
-                                      "(tracker.gg fallback also unavailable)."}
-
-    cooldown_left = int(_rivals_rate_limited_until - time.time())
-    if cooldown_left > 0:
-        return {**base, "last_refresh_status": "error",
-                "last_refresh_error": f"Rate limit cooldown — wait ~{cooldown_left}s, then retry."}
-
-    handle = acct.get("rivals_uid") or acct.get("in_game_name") or ""
-    handle = (handle or "").strip()
-    if not handle:
-        return {**base, "last_refresh_status": "missing_handle",
-                "last_refresh_error": "Account has no in-game name to look up."}
-
-    url = f"{RIVALS_API_BASE}/player/{urllib.parse.quote(handle, safe='')}"
-    headers = {"x-api-key": api_key, "Accept": "application/json",
-               "User-Agent": f"{APP_NAME}/{APP_VERSION}"}
-    try:
-        status, payload, retry_after = _http_get_json(url, headers)
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return {**base, "last_refresh_status": "error",
-                "last_refresh_error": f"Network error: {e}"}
-    _note_api_call()
-
-    if status in (401, 403):
-        if _is_private_payload(status, payload):
-            tried_tracker = bool((acct.get("in_game_name") or acct.get("rivals_uid") or "").strip())
-            tail = (" (tracker.gg also couldn't fetch it)." if tried_tracker
-                    else " (no in-game name or UID set, so tracker.gg wasn't tried — add one to bypass.)")
-            return {**base, "last_refresh_status": "private",
-                    "last_refresh_source": "marvelrivalsapi",
-                    "last_refresh_error": "Profile is set to private in-game" + tail}
-        return {**base, "last_refresh_status": "bad_key",
-                "last_refresh_error": (
-                    (isinstance(payload, dict) and (payload.get("error") or payload.get("message")))
-                    or f"API rejected the key (HTTP {status})."
-                )}
-    if status == 404:
-        return {**base, "last_refresh_status": "not_found",
-                "last_refresh_error": "Player not found on marvelrivalsapi.com."}
-    if status == 429:
-        wait = retry_after or 60
-        _note_rate_limited(wait)
-        return {**base, "last_refresh_status": "error",
-                "last_refresh_error": f"Rate limited by marvelrivalsapi — wait ~{wait}s, then retry."}
-    if _is_private_payload(status, payload):
-        tried_tracker = bool((acct.get("in_game_name") or acct.get("rivals_uid") or "").strip())
-        tail = (" (tracker.gg also couldn't fetch it)." if tried_tracker
-                else " (no in-game name or UID set, so tracker.gg wasn't tried — add one to bypass.)")
-        return {**base, "last_refresh_status": "private",
-                "last_refresh_source": "marvelrivalsapi",
-                "last_refresh_error": "Profile is set to private in-game" + tail}
-    if _is_bad_key_payload(payload):
-        return {**base, "last_refresh_status": "bad_key",
-                "last_refresh_error": payload.get("error") or payload.get("message")}
-    if status >= 400 or not isinstance(payload, dict):
-        return {**base, "last_refresh_status": "error",
-                "last_refresh_error": f"Unexpected HTTP {status}."}
-
-    parsed = _parse_rivals_payload(payload)
-    if not parsed:
-        return {**base, "last_refresh_status": "not_found",
-                "last_refresh_error": "Response had no recognizable rank fields."}
-
-    extra: dict[str, Any] = {}
-    api_name = payload.get("name")
-    api_name = api_name.strip() if isinstance(api_name, str) else ""
-    current_ign = (acct.get("in_game_name") or "").strip()
-    by_uid = bool((acct.get("rivals_uid") or "").strip())
-    if api_name and (not current_ign or (by_uid and api_name != current_ign)):
-        extra["in_game_name"] = api_name
-
-    if "current_rank" not in parsed:
-        return {**base, "last_refresh_status": "not_found",
-                "last_refresh_source": "marvelrivalsapi",
-                "last_refresh_error": "marvelrivalsapi has stale/incomplete rank data for this player.",
-                **extra,
-                **{k: v for k, v in parsed.items()
-                   if k in ("rivals_uid", "rivals_synced_at")}}
-
-    return {**base, "last_refresh_status": "ok",
-            "last_refresh_source": "marvelrivalsapi",
-            # Showing a marvelrivalsapi rank while tracker.gg reported private:
-            # surface that as a display-only caveat (the rank is likely cached
-            # from before the profile went private). Status stays "ok".
-            "tracker_private": bool(signals.get("tracker_private")),
-            **extra, **parsed}
-
-
-# ---------- match history ----------
-# marvelrivalsapi exposes /player/{uid}/match-history with the last 20 ranked
-# matches. We slim each match to the few fields the UI shows and stash them
-# on the account so they survive a page reload — much friendlier than a fresh
-# API hit on every drawer-open.
-
-MATCH_HISTORY_KEEP = 20
-
-# play_mode_id / game_mode_id labels — derived empirically from real data.
-# These are best-effort; the API doesn't publish a key list and we fall back
-# to "Match" when an ID is unrecognized.
-_GAME_MODE_LABELS = {0: "Quick Match", 1: "Ranked", 2: "Competitive", 3: "Custom", 4: "Tournament"}
-
-
-def _slim_match(raw: dict[str, Any], player_uid: int | str | None) -> dict[str, Any] | None:
-    """Compress one match payload into the row the UI renders."""
-    if not isinstance(raw, dict):
-        return None
-    mp = raw.get("match_player") if isinstance(raw.get("match_player"), dict) else {}
-    hero = mp.get("player_hero") if isinstance(mp.get("player_hero"), dict) else {}
-    score = mp.get("score_info") if isinstance(mp.get("score_info"), dict) else {}
-    # is_win may arrive as a bool/int, a nested object {is_win: ...}, or a
-    # string ("true"/"false"/"0"). Normalize all three — note bool("false")
-    # is True, so strings must be parsed explicitly rather than coerced.
-    iw = mp.get("is_win")
-    if isinstance(iw, dict):
-        iw = iw.get("is_win")
-    if isinstance(iw, str):
-        is_win_val = iw.strip().lower() in ("1", "true", "yes", "win", "t")
-    else:
-        is_win_val = bool(iw)
-
-    try:
-        own_uid = int(player_uid) if player_uid is not None else None
-    except (TypeError, ValueError):
-        own_uid = None
-
-    def _i(v: Any, default: int = 0) -> int:
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return default
-
-    def _f(v: Any, default: float = 0.0) -> float:
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return default
-
-    return {
-        "uid": str(raw.get("match_uid") or ""),
-        "ts": _i(raw.get("match_time_stamp")),
-        "duration_s": int(_f(raw.get("match_play_duration"))),
-        "map_id": _i(raw.get("match_map_id")),
-        "map_thumbnail": raw.get("map_thumbnail") or "",
-        "hero_name": (hero.get("hero_name") or "").title(),
-        "hero_image": hero.get("hero_type") or "",
-        "kda": [_i(mp.get("kills")), _i(mp.get("deaths")), _i(mp.get("assists"))],
-        "is_win": is_win_val,
-        "is_mvp": own_uid is not None and _i(raw.get("mvp_uid")) == own_uid,
-        "is_svp": own_uid is not None and _i(raw.get("svp_uid")) == own_uid,
-        "sr_delta": round(_f(score.get("add_score")), 1),
-        "sr_after": round(_f(score.get("new_score")), 1),
-        "level_after": _i(score.get("new_level")),
-        "season": str(raw.get("match_season") or ""),
-        "play_mode_id": _i(raw.get("play_mode_id")),
-        "game_mode_id": _i(raw.get("game_mode_id")),
-        "mode_label": _GAME_MODE_LABELS.get(_i(raw.get("game_mode_id")), "Match"),
-        "disconnected": bool(mp.get("disconnected")),
-    }
-
-
-def _fetch_match_history(acct: dict[str, Any], api_key: str) -> dict[str, Any]:
-    """Call /player/{uid}/match-history and return updates to merge in."""
-    now = int(time.time())
-    base: dict[str, Any] = {
-        "matches_synced_at": now,
-        "matches_error": None,
-    }
-    if not api_key:
-        return {**base, "matches_error": "No Marvel Rivals API key set in Options."}
-    uid = (acct.get("rivals_uid") or "").strip()
-    if not uid:
-        return {**base,
-                "matches_error": "Refresh the account's rank first to resolve its UID."}
-
-    url = f"{RIVALS_API_BASE}/player/{urllib.parse.quote(uid, safe='')}/match-history"
-    headers = {"x-api-key": api_key, "Accept": "application/json",
-               "User-Agent": "MarvelAccountKeeper/1.0"}
-    try:
-        status, payload, retry_after = _http_get_json(url, headers)
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return {**base, "matches_error": f"Network error: {e}"}
-    _note_api_call()
-
-    if status == 429:
-        _note_rate_limited(retry_after or 60)
-        return {**base, "matches_error":
-                f"Rate limited — wait ~{retry_after or 60}s, then retry."}
-    if status in (401, 403):
-        if _is_private_payload(status, payload):
-            return {**base, "matches_error": "Profile is set to private in-game."}
-        return {**base, "matches_error": f"API rejected the key (HTTP {status})."}
-    if status == 404:
-        return {**base, "matches_error": "No matches on file for this player."}
-    if status >= 400 or not isinstance(payload, dict):
-        return {**base, "matches_error": f"Unexpected HTTP {status}."}
-
-    raw_matches = payload.get("match_history") or []
-    if not isinstance(raw_matches, list):
-        return {**base, "matches_error": "Response had no match_history list."}
-
-    slim = [m for m in (_slim_match(r, uid) for r in raw_matches) if m]
-    slim.sort(key=lambda m: m["ts"], reverse=True)
-    return {**base, "recent_matches": slim[:MATCH_HISTORY_KEEP]}
+    return {**base, **_try_tracker(acct)}
 
 
 def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | None = None) -> dict[str, Any]:
@@ -2389,9 +1752,6 @@ def status():
         "lock_in_s": lock_in_s,
         "lockout_minutes": _lockout_minutes(),
         "idle_timeout_s": timeout or 0,
-        "has_marvel_rivals_api_key": bool(
-            (vault.get("config", {}) or {}).get("marvel_rivals_api_key")
-        ),
         "version": APP_VERSION,
         "commit": APP_COMMIT,
         "built_at": APP_BUILT_AT,
@@ -2406,15 +1766,8 @@ def status():
 def get_options():
     return jsonify({
         "lockout_minutes": _lockout_minutes(),
-        "has_marvel_rivals_api_key": bool(_marvel_rivals_api_key()),
         "ui_options": _ui_options(),
     })
-
-
-@app.route("/api/rivals/sync-status")
-def rivals_sync_status():
-    """API usage / rate-limit snapshot. No secrets — safe without unlock."""
-    return jsonify(_sync_status())
 
 
 @app.route("/api/options", methods=["POST"])
@@ -2448,17 +1801,12 @@ def set_options():
             cfg["lockout_minutes"] = max(0, m)
         if "ui_options" in payload:
             cfg["ui_options"] = ui
-        if "marvel_rivals_api_key" in payload:
-            raw = payload.get("marvel_rivals_api_key")
-            # Empty / None clears the key; anything else is stored as-is.
-            cfg["marvel_rivals_api_key"] = (str(raw).strip() if raw else "")
         # UI-preference-only writes happen on every toggle — skip the backup
-        # snapshot for those (see _write_vault); key/lockout changes keep it.
+        # snapshot for those (see _write_vault); lockout changes keep it.
         _write_vault(vault, backup=any(k != "ui_options" for k in payload))
         return jsonify({
             "ok": True,
             "lockout_minutes": cfg.get("lockout_minutes", DEFAULT_LOCKOUT_MINUTES),
-            "has_marvel_rivals_api_key": bool(cfg.get("marvel_rivals_api_key")),
         })
 
 
@@ -2637,13 +1985,6 @@ def _apply_refresh_updates(vault: dict[str, Any], acct_id: str, updates: dict[st
     for acct in vault.get("accounts", []):
         if acct["id"] == acct_id:
             acct.update(updates)
-            # When the result is "private", clear any stale recrawl-pending
-            # flag so the UI stops showing "recrawl queued ~Nm". The user
-            # didn't auto-queue this round (per _maybe_request_recrawl's
-            # private-skip), so any leftover timestamp from a prior session
-            # is misleading.
-            if updates.get("last_refresh_status") == "private":
-                acct["rivals_update_requested_at"] = None
             acct["updated_at"] = int(time.time())
             return acct
     return None
@@ -2651,8 +1992,8 @@ def _apply_refresh_updates(vault: dict[str, Any], acct_id: str, updates: dict[st
 
 def _commit_updates(acct_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
     """Atomically merge `updates` onto one account: under the vault-write lock,
-    re-read the vault fresh, apply only this account's updates, persist API usage,
-    and write. Returns the merged record (or None if the account is gone).
+    re-read the vault fresh, apply only this account's updates, and write.
+    Returns the merged record (or None if the account is gone).
 
     Re-reading fresh (rather than writing a snapshot captured seconds earlier) is
     what makes a long refresh-all safe against a concurrent single-account
@@ -2660,7 +2001,6 @@ def _commit_updates(acct_id: str, updates: dict[str, Any]) -> dict[str, Any] | N
     with _vault_write_lock:
         vault = _read_vault()
         merged = _apply_refresh_updates(vault, acct_id, updates)
-        _persist_api_usage(vault)
         _write_vault(vault, backup=False)  # metadata-only; no credential change
         return merged
 
@@ -2687,32 +2027,38 @@ def refresh_account_stats(acct_id: str):
     target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
     if target is None:
         return jsonify({"error": "not_found"}), 404
-    # Per-account spam guard. Spamming refresh hammers tracker.gg / Cloudflare
-    # and burns marvelrivalsapi quota. Block re-refresh inside the cooldown.
+    # Per-account spam guard. Block repeated upstream requests inside the
+    # cooldown even if the button is double-clicked or multiple tabs are open.
     last_ts = int(target.get("last_refresh_ts") or 0)
     since = int(time.time()) - last_ts
     if last_ts and since < PER_ACCOUNT_REFRESH_COOLDOWN_S:
         wait = PER_ACCOUNT_REFRESH_COOLDOWN_S - since
         return jsonify({"error": "cooldown", "retry_after_s": wait,
                         "message": f"Just refreshed — wait {wait}s before another pull."}), 429
-    api_key = _marvel_rivals_api_key()
-    updates = _refresh_account_stats(target, api_key)
-    # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
-    _maybe_request_recrawl(target, updates, api_key)
+    updates = _refresh_account_stats(target)
+    retry_after = updates.pop("_retry_after_s", None)
+    if retry_after:
+        response = jsonify({
+            "error": "rate_limited",
+            "retry_after_s": retry_after,
+            "message": updates.get("last_refresh_error"),
+        })
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
     merged = _commit_updates(acct_id, updates)  # atomic RMW under the vault lock
     if merged is None:
         return jsonify({"error": "not_found"}), 404
-    return jsonify({"ok": True, "account": _public_account(merged, key),
-                    "sync": _sync_status()})
+    return jsonify({"ok": True, "account": _public_account(merged, key)})
 
 
-def _refresh_all_steps(vault: dict[str, Any], key: bytes, api_key: str):
+def _refresh_all_steps(vault: dict[str, Any], key: bytes):
     """Refresh every account in series, yielding a progress dict per account and
     a terminal summary dict. Shared by the plain-JSON and NDJSON-streaming
     refresh-all endpoints so the loop logic lives in one place.
 
     Progress events: {"type":"progress","done":k,"total":n,"status":st,"account":pub|None}
-    Terminal event:  {"type":"summary","summary":{...},"accounts":[...],"sync":{...}}
+    Terminal event:  {"type":"summary","summary":{...},"accounts":[...]}
 
     `vault` is only a read snapshot of which accounts to refresh; each result is
     persisted via _commit_updates (fresh read-modify-write under the vault lock),
@@ -2722,8 +2068,8 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes, api_key: str):
     ids = [a["id"] for a in vault.get("accounts", [])]
     targets = {a["id"]: a for a in vault.get("accounts", [])}
     total = len(ids)
-    summary = {"ok": 0, "private": 0, "not_found": 0, "bad_key": 0,
-               "error": 0, "missing_handle": 0, "skipped": 0}
+    summary = {"ok": 0, "not_found": 0, "error": 0,
+               "missing_handle": 0, "rate_limited": 0, "skipped": 0}
     updated_accounts: list[dict[str, Any]] = []
     now_ts = int(time.time())
     done = 0
@@ -2746,9 +2092,24 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes, api_key: str):
             yield {"type": "progress", "done": done, "total": total,
                    "status": "cooldown", "account": None}
             continue
-        updates = _refresh_account_stats(target, api_key)
-        # Queue a background recrawl when warranted (gated — see _maybe_request_recrawl).
-        _maybe_request_recrawl(target, updates, api_key)
+        updates = _refresh_account_stats(target)
+        retry_after = updates.pop("_retry_after_s", None)
+        if retry_after:
+            # Stop the sweep immediately. Retrying another identifier or
+            # account would only extend the upstream rate limit.
+            done += 1
+            summary["rate_limited"] += 1
+            summary["retry_after_s"] = retry_after
+            yield {"type": "progress", "done": done, "total": total,
+                   "status": "rate_limited", "account": None,
+                   "retry_after_s": retry_after}
+            remaining = total - done
+            if remaining:
+                summary["skipped"] += remaining
+                done = total
+                yield {"type": "progress", "done": done, "total": total,
+                       "status": "skipped", "account": None}
+            break
         merged = _commit_updates(acct_id, updates)  # atomic RMW under the vault lock
         _touch_activity()  # keep the session alive across a long sweep
         st = updates.get("last_refresh_status") or "error"
@@ -2759,45 +2120,11 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes, api_key: str):
         done += 1
         yield {"type": "progress", "done": done, "total": total,
                "status": st, "account": pub}
-        # Bail early on bad_key — every subsequent call would also fail.
-        # Mark the rest skipped so the progress bar still reaches 100%.
-        if st == "bad_key":
-            for _ in ids[i + 1:]:
-                done += 1
-                summary["skipped"] += 1
-                yield {"type": "progress", "done": done, "total": total,
-                       "status": "skipped", "account": None}
-            break
-        # Same for a 429: the cooldown applies globally, so plowing through
-        # the remaining accounts just stacks up more rate-limited failures.
-        if st == "error" and _rivals_rate_limited_until > time.time():
-            # Mark the rest as skipped so the UI surfaces *why* they didn't run.
-            for skipped_id in ids[i + 1:]:
-                if skipped_id not in targets:
-                    done += 1
-                    summary["skipped"] += 1
-                    yield {"type": "progress", "done": done, "total": total,
-                           "status": "skipped", "account": None}
-                    continue
-                cooldown_s = max(1, int(_rivals_rate_limited_until - time.time()))
-                merged_skip = _commit_updates(skipped_id, {
-                    "last_refresh_ts": int(time.time()),
-                    "last_refresh_status": "error",
-                    "last_refresh_error": f"Skipped — rate limit cooldown ~{cooldown_s}s. Retry later.",
-                })
-                summary["error"] = summary.get("error", 0) + 1
-                pub_skip = _public_account(merged_skip, key) if merged_skip is not None else None
-                if pub_skip is not None:
-                    updated_accounts.append(pub_skip)
-                done += 1
-                yield {"type": "progress", "done": done, "total": total,
-                       "status": "error", "account": pub_skip}
-            break
         if i < len(ids) - 1:
             time.sleep(REFRESH_ALL_DELAY_S)
     _touch_activity()
     yield {"type": "summary", "summary": summary,
-           "accounts": updated_accounts, "sync": _sync_status()}
+           "accounts": updated_accounts}
 
 
 def _refresh_all_busy():
@@ -2811,23 +2138,17 @@ def refresh_all_accounts():
     key, err = _require_key()
     if err:
         return err
-    api_key = _marvel_rivals_api_key()
-    # tracker.gg is unauthenticated, so refresh-all works even without a
-    # marvelrivalsapi key — the key is only needed for fallback / UID-only
-    # accounts. No hard gate.
     if not _refresh_all_lock.acquire(blocking=False):
         return _refresh_all_busy()
     try:
         vault = _read_vault()
         summary: dict[str, Any] = {}
         accounts: list[dict[str, Any]] = []
-        sync = None
-        for ev in _refresh_all_steps(vault, key, api_key):
+        for ev in _refresh_all_steps(vault, key):
             if ev.get("type") == "summary":
                 summary = ev["summary"]
                 accounts = ev["accounts"]
-                sync = ev["sync"]
-        return jsonify({"ok": True, "summary": summary, "accounts": accounts, "sync": sync})
+        return jsonify({"ok": True, "summary": summary, "accounts": accounts})
     finally:
         _refresh_all_lock.release()
 
@@ -2839,7 +2160,6 @@ def refresh_all_accounts_stream():
     key, err = _require_key()
     if err:
         return err
-    api_key = _marvel_rivals_api_key()
     # Single-flight: a second concurrent sweep would double-hammer tracker.gg.
     # Hold the lock for the life of the stream and release when the generator
     # is exhausted (or the client disconnects and Flask closes it).
@@ -2852,7 +2172,7 @@ def refresh_all_accounts_stream():
         # try/finally and strand the lock held → permanent 409 until restart.
         try:
             vault = _read_vault()
-            for ev in _refresh_all_steps(vault, key, api_key):
+            for ev in _refresh_all_steps(vault, key):
                 yield json.dumps(ev) + "\n"
         finally:
             _refresh_all_lock.release()
@@ -2884,7 +2204,6 @@ def delete_account(acct_id: str):
 # backups/ before any write.
 _migrate_from_app_folder()
 _migrate_vault_if_needed()
-_load_api_usage()
 _cleanup_post_update()
 # Attempt to install a remembered key from a previous "remember me" unlock.
 # Silent — if DPAPI is unavailable or the blob is stale, the app just starts
@@ -3130,73 +2449,6 @@ def rivals_local_uids():
     Unauthenticated for the same reason as /api/steam-active.
     """
     return jsonify({"uids": _detected_rivals_uids()})
-
-
-@app.route("/api/rivals/lookup-uid/<uid>")
-def rivals_lookup_uid(uid: str):
-    """Resolve a Marvel Rivals UID to its current in-game name via
-    marvelrivalsapi. Used by the drawer to preview which player owns
-    each locally-detected UID before claiming it for a vault entry.
-
-    Authenticated (needs the unlocked vault to read the stored API key)."""
-    _key, err = _require_key()
-    if err:
-        return err
-    api_key = _marvel_rivals_api_key()
-    if not api_key:
-        return jsonify({"error": "missing_api_key"}), 400
-    uid = re.sub(r"\D", "", uid or "")
-    if not uid:
-        return jsonify({"error": "bad_uid"}), 400
-    cooldown_left = int(_rivals_rate_limited_until - time.time())
-    if cooldown_left > 0:
-        return jsonify({"error": "rate_limited", "retry_after_s": cooldown_left}), 429
-
-    url = f"{RIVALS_API_BASE}/player/{urllib.parse.quote(uid, safe='')}"
-    headers = {"x-api-key": api_key, "Accept": "application/json",
-               "User-Agent": f"{APP_NAME}/{APP_VERSION}"}
-    try:
-        status, payload, retry_after = _http_get_json(url, headers)
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return jsonify({"error": "network", "message": str(e)}), 502
-    _note_api_call()
-    if status == 429:
-        _note_rate_limited(retry_after or 60)
-        return jsonify({"error": "rate_limited", "retry_after_s": retry_after or 60}), 429
-    if status == 404 or not isinstance(payload, dict):
-        return jsonify({"error": "not_found"}), 404
-    if _is_private_payload(status, payload):
-        # Even a private profile usually returns a `name` field — surface it
-        # so the user still gets the IGN; just flag the privacy state.
-        name = (payload.get("name") or "").strip() if isinstance(payload, dict) else ""
-        return jsonify({"uid": uid, "name": name or None, "private": True})
-    if status >= 400:
-        return jsonify({"error": "upstream", "status": status}), 502
-    return jsonify({"uid": uid, "name": (payload.get("name") or "").strip() or None})
-
-
-@app.route("/api/accounts/<acct_id>/matches", methods=["POST"])
-def fetch_match_history(acct_id: str):
-    """Pull the last 20 ranked matches for an account and persist them."""
-    key, err = _require_key()
-    if err:
-        return err
-    vault = _read_vault()
-    target = next((a for a in vault.get("accounts", []) if a["id"] == acct_id), None)
-    if target is None:
-        return jsonify({"error": "not_found"}), 404
-    if not (target.get("rivals_uid") or "").strip():
-        return jsonify({"error": "no_uid",
-                        "message": "Refresh this account's rank first to resolve its UID."}), 400
-
-    api_key = _marvel_rivals_api_key()
-    updates = _fetch_match_history(target, api_key)
-    merged = _commit_updates(acct_id, updates)  # atomic RMW under the vault lock
-    if merged is None:
-        # The account was deleted between the lookup above and the commit.
-        return jsonify({"error": "not_found"}), 404
-    return jsonify({"ok": True, "account": _public_account(merged, key),
-                    "sync": _sync_status()})
 
 
 @app.route("/api/heartbeat", methods=["POST"])
