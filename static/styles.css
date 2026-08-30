@@ -142,7 +142,8 @@ html[data-theme="light"] .sync-chip-warn,
 html[data-theme="light"] .sync-legend-i-warn { color: #b9871f; }
 html[data-theme="light"] .sync-chip-err,
 html[data-theme="light"] .sync-legend-i-err { color: #c0394a; }
-html[data-theme="light"] .refresh-btn.has-issue[data-status="error"] { color: #d4691f; }
+html[data-theme="light"] .refresh-btn.has-issue[data-status="error"],
+html[data-theme="light"] .refresh-btn.has-issue.refresh-btn-err { color: #d4691f; }
 /* Neon border opt-in (per account). Uses --neon-fg from the React style.
    Scoped .rcard.rcard-neon (two classes) so it outranks the plain .rcard
    border + the light-theme card shadow, both defined later in this file. */
@@ -1673,9 +1674,11 @@ html[data-theme="light"] .lad-peak-val {
 
 /* Show a status indicator (! / ?) overlay when last refresh wasn't ok. */
 .refresh-btn.has-issue{opacity:1}
-.refresh-btn.has-issue[data-status="error"]{color:#ff8a4a}
-.refresh-btn.has-issue[data-status="not_found"]{color:#9aa3b2}
-.refresh-btn.has-issue[data-status="missing_handle"]{color:#9aa3b2}
+.refresh-btn.has-issue[data-status="error"],
+.refresh-btn.has-issue.refresh-btn-err{color:#ff8a4a}
+.refresh-btn.has-issue[data-status="not_found"],
+.refresh-btn.has-issue[data-status="missing_handle"],
+.refresh-btn.has-issue.refresh-btn-muted{color:#9aa3b2}
 .refresh-btn-issue{
   position:absolute;top:-3px;right:-3px;
   font-size:9px;line-height:1;font-weight:700;

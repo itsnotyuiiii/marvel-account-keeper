@@ -1086,9 +1086,11 @@ const SYNC_LEGEND = [
   { icon: "✓", tone: "ok",    name: "Current",   desc: "You refreshed this within the last 30 min — as live as it gets." },
   { icon: "●", tone: "ok",    name: "Synced",    desc: "Synced — the time shown is when you last refreshed it, not the provider's crawl stamp. Rank only changes when the account plays, so an older sync isn't stale." },
   { icon: "🛡", tone: "ok",    name: "History private", desc: "Profile is public so the ranks shown are current, but match history is private — the account's last-played time can't be determined." },
-  { icon: "?", tone: "muted", name: "Not found", desc: "Tracker.gg did not return ranked data for this player." },
+  { icon: "?", tone: "muted", name: "Not found", desc: "Tracker.gg did not find the saved UID or in-game name." },
+  { icon: "?", tone: "muted", name: "No ranked data", desc: "Tracker.gg found the profile, but it has no ranked result to import." },
+  { icon: "!", tone: "err",   name: "Profile unavailable", desc: "Tracker.gg recognizes the player but cannot expose the profile; cached ranks are kept." },
   { icon: "?", tone: "muted", name: "No handle", desc: "Account has no in-game name or UID to look up." },
-  { icon: "!", tone: "err",   name: "Failed",    desc: "Last refresh hit an error — retry in a bit." },
+  { icon: "!", tone: "err",   name: "Provider error", desc: "Tracker.gg was unreachable, refused the request, or returned an unreadable response." },
   { icon: "○", tone: "muted", name: "Not synced", desc: "Never refreshed from Tracker.gg yet." },
 ];
 
@@ -1663,6 +1665,18 @@ function App() {
     missing_handle: "No in-game name set on this account",
     error: "Refresh failed",
   };
+  const REFRESH_CODE_LABEL = {
+    profile_unavailable: "Tracker.gg recognizes this player but cannot expose the profile — cached rank kept",
+    player_not_found: "Tracker.gg did not find the saved UID or in-game name",
+    no_ranked_data: "Profile found, but Tracker.gg returned no ranked data",
+    missing_identity: "No in-game name or UID is saved for this account",
+    rate_limited: "Tracker.gg is rate limiting requests — retry later",
+    network_error: "Could not connect to Tracker.gg — cached rank kept",
+    invalid_response: "Tracker.gg returned an unreadable response — cached rank kept",
+    provider_blocked: "Tracker.gg refused the profile request — retry later",
+    provider_unavailable: "Tracker.gg is temporarily unavailable — retry later",
+    provider_error: "Tracker.gg returned an unexpected response — retry later",
+  };
 
   // Refresh one account's rank from Tracker.gg.
   const onRefresh = async (acct) => {
@@ -1672,7 +1686,11 @@ function App() {
       const res = await api(`/api/accounts/${acct.id}/refresh-stats`, { method: "POST" });
       mergeRefreshed(res?.account);
       const st = res?.account?.last_refresh_status || "error";
-      showToast(REFRESH_LABEL[st] || "Done");
+      const code = res?.account?.last_refresh_code;
+      showToast(REFRESH_CODE_LABEL[code]
+        || res?.account?.last_refresh_error
+        || REFRESH_LABEL[st]
+        || "Done");
     } catch (e) {
       if (e.locked) return;
       if (e.status === 429 && e.data?.error === "cooldown") {
@@ -1742,10 +1760,27 @@ function App() {
         const skipped = sum.skipped || 0;
         const failed = (sum.not_found || 0) + (sum.error || 0)
                      + (sum.missing_handle || 0);
+        const byCode = sum.by_code || {};
+        const unavailable = byCode.profile_unavailable || 0;
+        const notFound = byCode.player_not_found || 0;
+        const noRank = byCode.no_ranked_data || 0;
+        const missing = byCode.missing_identity || 0;
+        const providerErrors = (byCode.network_error || 0)
+          + (byCode.invalid_response || 0)
+          + (byCode.provider_blocked || 0)
+          + (byCode.provider_unavailable || 0)
+          + (byCode.provider_error || 0);
+        const detailedFailures = unavailable + notFound + noRank + missing + providerErrors;
+        const otherFailures = Math.max(0, failed - detailedFailures);
         const parts = [];
         if (ok) parts.push(`${ok} refreshed`);
         if (limited) parts.push(`Tracker.gg limited requests — retry in ${sum.retry_after_s || 60}s`);
-        if (failed) parts.push(`${failed} failed`);
+        if (unavailable) parts.push(`${unavailable} profile${unavailable === 1 ? "" : "s"} unavailable`);
+        if (notFound) parts.push(`${notFound} player${notFound === 1 ? "" : "s"} not found`);
+        if (noRank) parts.push(`${noRank} without ranked data`);
+        if (missing) parts.push(`${missing} missing UID / IGN`);
+        if (providerErrors) parts.push(`${providerErrors} provider error${providerErrors === 1 ? "" : "s"}`);
+        if (otherFailures) parts.push(`${otherFailures} failed`);
         if (skipped) parts.push(`${skipped} skipped`);
         showToast(parts.length ? parts.join(" · ") : "Nothing to refresh");
       }

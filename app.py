@@ -87,6 +87,10 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "rivals_uid": None,
     "last_refresh_ts": None,       # epoch — when we last requested stats for this account
     "last_refresh_status": None,   # "ok" | "not_found" | "error" | "missing_handle"
+    # Stable machine-readable reason for non-ok refreshes. Keep the broad
+    # status above for compatibility; this lets the UI distinguish an absent
+    # player from a recognized-but-unavailable profile and a provider outage.
+    "last_refresh_code": None,
     "last_refresh_error": None,
     "last_refresh_source": None,   # currently "tracker" when a refresh succeeds
     "tracker_history_private": False,  # DISPLAY-ONLY: tracker served public ranks but the profile's
@@ -966,7 +970,24 @@ def _migrate_vault_if_needed() -> None:
             if legacy_field in acct:
                 del acct[legacy_field]
                 changed = True
-        if acct.get("last_refresh_source") == "marvelrivalsapi":
+        refresh_error = str(acct.get("last_refresh_error") or "").lower()
+        refresh_status = acct.get("last_refresh_status")
+        refresh_source = acct.get("last_refresh_source")
+        legacy_provider_refresh = (
+            refresh_source == "marvelrivalsapi"
+            # v2.14 did not attach last_refresh_source on every provider
+            # failure, so also recognize its literal name in stored errors.
+            or "marvelrivalsapi" in refresh_error
+            # All v2.15 Tracker outcomes except missing identity carry an
+            # explicit source. A source-less error/not-found result therefore
+            # belongs to the retired fallback (including its generic HTTP and
+            # network messages, which did not name the provider).
+            or (not refresh_source and refresh_status in ("error", "not_found"))
+        )
+        if legacy_provider_refresh:
+            acct["last_refresh_ts"] = None
+            acct["last_refresh_status"] = None
+            acct["last_refresh_code"] = None
             acct["last_refresh_source"] = None
             acct["last_refresh_error"] = None
             changed = True
@@ -1417,14 +1438,78 @@ def _parse_tracker_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _tracker_payload_shape_valid(payload: Any) -> bool:
+    """Validate only the successful-response containers the parser touches.
+
+    Tracker's endpoint is undocumented. Treat schema drift as an unreadable
+    provider response instead of letting a nested list/string abort a whole
+    refresh-all stream with an AttributeError.
+    """
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False
+    for field in ("platformInfo", "metadata"):
+        value = data.get(field)
+        if value is not None and not isinstance(value, dict):
+            return False
+    metadata = data.get("metadata") or {}
+    last_updated = metadata.get("lastUpdated")
+    if last_updated is not None and not isinstance(last_updated, dict):
+        return False
+    segments = data.get("segments")
+    if segments is None:
+        segments = []
+    if not isinstance(segments, list):
+        return False
+    for segment in segments:
+        if not isinstance(segment, dict):
+            return False
+        segment_type = segment.get("type")
+        if segment_type not in ("overview", "ranked-peaks"):
+            # Ignore unrelated segments exactly as the parser does. Their
+            # internal schema may evolve independently of rank data.
+            continue
+        stats = segment.get("stats")
+        if stats is None:
+            continue
+        if not isinstance(stats, dict):
+            return False
+        fields = ("ranked", "peakRanked") if segment_type == "overview" \
+            else ("peakTiers",)
+        for field in fields:
+            stat = stats.get(field)
+            if stat is not None and not isinstance(stat, dict):
+                return False
+            if isinstance(stat, dict) and segment_type == "overview":
+                stat_meta = stat.get("metadata")
+                if stat_meta is not None and not isinstance(stat_meta, dict):
+                    return False
+            elif isinstance(stat, dict) and segment_type == "ranked-peaks":
+                # peakTiers container metadata is not consumed. Validate only
+                # its value list and the entry metadata the parser reads.
+                peak_values = stat.get("value")
+                if peak_values is not None and not isinstance(peak_values, list):
+                    return False
+                for peak in peak_values or []:
+                    if not isinstance(peak, dict):
+                        continue
+                    peak_meta = peak.get("metadata")
+                    if peak_meta is not None and not isinstance(peak_meta, dict):
+                        return False
+    return True
+
+
 def _round_score(v: Any) -> int | None:
     """Tracker scores come as float (e.g. 5044.087); rank-score fields in
     the vault are stored as int."""
     if v is None:
         return None
     try:
-        return int(round(float(v)))
-    except (TypeError, ValueError):
+        number = float(v)
+        return int(round(number)) if math.isfinite(number) else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -1512,7 +1597,12 @@ def _fetch_tracker_player(ign: str) -> tuple[int, dict[str, Any] | None, int | N
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TRACKER_TIMEOUT_S) as r:
-            return r.status, json.loads(r.read().decode("utf-8")), None
+            body_raw = r.read()
+            try:
+                body = json.loads(body_raw.decode("utf-8")) if body_raw else None
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                body = None
+            return r.status, body, None
     except urllib.error.HTTPError as e:
         retry = _retry_after_s(e.headers) if hasattr(e, "headers") else None
         body_raw = e.read() if hasattr(e, "read") else b""
@@ -1521,6 +1611,11 @@ def _fetch_tracker_player(ign: str) -> tuple[int, dict[str, Any] | None, int | N
         except (UnicodeDecodeError, json.JSONDecodeError):
             body = None
         return e.code, body, retry
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # Keep transport details out of the vault/UI, but return a distinct
+        # status sentinel so callers can say this was connectivity rather than
+        # incorrectly calling the player missing.
+        return 0, None, None
 
 
 def _retry_after_s(headers: Any) -> int | None:
@@ -1565,6 +1660,7 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
     if not candidates:
         return {
             "last_refresh_status": "missing_handle",
+            "last_refresh_code": "missing_identity",
             "last_refresh_error": "Account has no in-game name or UID to look up.",
         }
 
@@ -1572,6 +1668,7 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
     if blocked_for:
         return {
             "last_refresh_status": "error",
+            "last_refresh_code": "rate_limited",
             "last_refresh_source": "tracker",
             "last_refresh_error": (
                 f"Tracker.gg is rate limiting requests. Try again in about "
@@ -1583,13 +1680,16 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
     saw_private = False
     saw_not_found = False
     saw_empty_profile = False
-    last_failure_status = 0
+    # None means no provider/transport failure occurred. Zero is a real
+    # sentinel from _fetch_tracker_player for a connection/timeout failure.
+    last_failure_status: int | None = None
     for lookup in candidates:
         status, payload, retry_after = _fetch_tracker_player(lookup)
         if status == 429:
             retry_after = _remember_tracker_rate_limit(retry_after)
             return {
                 "last_refresh_status": "error",
+                "last_refresh_code": "rate_limited",
                 "last_refresh_source": "tracker",
                 "last_refresh_error": (
                     f"Tracker.gg is rate limiting requests. Try again in "
@@ -1608,7 +1708,16 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
         if status != 200 or not isinstance(payload, dict):
             last_failure_status = status
             continue
-        parsed = _parse_tracker_payload(payload)
+        if not _tracker_payload_shape_valid(payload):
+            last_failure_status = 200
+            continue
+        try:
+            parsed = _parse_tracker_payload(payload)
+        except (AttributeError, TypeError, ValueError):
+            # A provider schema change must be a per-account invalid-response
+            # result, never an uncaught exception that kills refresh-all.
+            last_failure_status = 200
+            continue
         # Accept the parse if EITHER current OR peak rank came back. Players who
         # didn't play ranked this season have no current rank but a real peak
         # from prior seasons — still useful. No rank at all → try the next
@@ -1654,25 +1763,71 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
     if saw_private:
         return {
             "last_refresh_status": "error",
+            "last_refresh_code": "profile_unavailable",
             "last_refresh_source": "tracker",
             "last_refresh_error": (
-                "Tracker.gg could not expose this profile. It may be private, "
-                "uncrawled, or temporarily unavailable."
+                "Tracker.gg recognized this player, but its collector cannot "
+                "expose the profile. It may have private career data, may not "
+                "be indexed yet, or may be affected by a Tracker/game API sync "
+                "issue. Any saved rank was kept."
             ),
         }
-    if saw_not_found:
-        return {"last_refresh_status": "not_found",
-                "last_refresh_source": "tracker",
-                "last_refresh_error": "Tracker.gg couldn't find that player. "
-                                      "Check the UID or in-game name."}
+    if last_failure_status is not None:
+        if last_failure_status == 0:
+            code = "network_error"
+            message = (
+                "Could not connect to Tracker.gg. Check the connection and try "
+                "again; any saved rank was kept."
+            )
+        elif last_failure_status == 200:
+            code = "invalid_response"
+            message = (
+                "Tracker.gg returned an unreadable profile response. Try again "
+                "later; any saved rank was kept."
+            )
+        elif last_failure_status in (401, 403):
+            code = "provider_blocked"
+            message = (
+                f"Tracker.gg refused the profile request (HTTP "
+                f"{last_failure_status}). Try again later; any saved rank was kept."
+            )
+        elif last_failure_status >= 500:
+            code = "provider_unavailable"
+            message = (
+                f"Tracker.gg is temporarily unavailable (HTTP "
+                f"{last_failure_status}). Try again later; any saved rank was kept."
+            )
+        else:
+            code = "provider_error"
+            message = (
+                f"Tracker.gg returned an unexpected response (HTTP "
+                f"{last_failure_status}). Try again later; any saved rank was kept."
+            )
+        return {
+            "last_refresh_status": "error",
+            "last_refresh_code": code,
+            "last_refresh_source": "tracker",
+            "last_refresh_error": message,
+        }
     if saw_empty_profile:
         return {"last_refresh_status": "not_found",
+                "last_refresh_code": "no_ranked_data",
                 "last_refresh_source": "tracker",
-                "last_refresh_error": "Tracker.gg returned a profile with no ranked data."}
-    detail = f" (HTTP {last_failure_status})" if last_failure_status else ""
+                "last_refresh_error": "Tracker.gg found the profile but returned "
+                                      "no ranked data. Any saved rank was kept."}
+    if saw_not_found:
+        return {"last_refresh_status": "not_found",
+                "last_refresh_code": "player_not_found",
+                "last_refresh_source": "tracker",
+                "last_refresh_error": "Tracker.gg couldn't find that player. "
+                                      "Check the saved UID or in-game name."}
+    # Defensive fallback: all candidates should have produced one of the
+    # outcomes above, but retain a clear code if Tracker changes its schema.
     return {"last_refresh_status": "error",
+            "last_refresh_code": "provider_error",
             "last_refresh_source": "tracker",
-            "last_refresh_error": f"Tracker.gg could not be reached{detail}. Try again later."}
+            "last_refresh_error": "Tracker.gg did not return a usable profile. "
+                                  "Try again later; any saved rank was kept."}
 
 
 def _refresh_account_stats(acct: dict[str, Any]) -> dict[str, Any]:
@@ -1681,6 +1836,7 @@ def _refresh_account_stats(acct: dict[str, Any]) -> dict[str, Any]:
     base: dict[str, Any] = {
         "last_refresh_ts": now,
         "last_refresh_status": None,
+        "last_refresh_code": None,
         "last_refresh_error": None,
         "last_refresh_source": None,
         # Reset every refresh; set True only when tracker serves ranks but flags
@@ -2069,7 +2225,8 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes):
     targets = {a["id"]: a for a in vault.get("accounts", [])}
     total = len(ids)
     summary = {"ok": 0, "not_found": 0, "error": 0,
-               "missing_handle": 0, "rate_limited": 0, "skipped": 0}
+               "missing_handle": 0, "rate_limited": 0, "skipped": 0,
+               "by_code": {}}
     updated_accounts: list[dict[str, Any]] = []
     now_ts = int(time.time())
     done = 0
@@ -2099,6 +2256,8 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes):
             # account would only extend the upstream rate limit.
             done += 1
             summary["rate_limited"] += 1
+            summary["by_code"]["rate_limited"] = \
+                summary["by_code"].get("rate_limited", 0) + 1
             summary["retry_after_s"] = retry_after
             yield {"type": "progress", "done": done, "total": total,
                    "status": "rate_limited", "account": None,
@@ -2114,12 +2273,15 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes):
         _touch_activity()  # keep the session alive across a long sweep
         st = updates.get("last_refresh_status") or "error"
         summary[st] = summary.get(st, 0) + 1
+        reason = updates.get("last_refresh_code")
+        if reason and st != "ok":
+            summary["by_code"][reason] = summary["by_code"].get(reason, 0) + 1
         pub = _public_account(merged, key) if merged is not None else None
         if pub is not None:
             updated_accounts.append(pub)
         done += 1
         yield {"type": "progress", "done": done, "total": total,
-               "status": st, "account": pub}
+               "status": st, "code": reason, "account": pub}
         if i < len(ids) - 1:
             time.sleep(REFRESH_ALL_DELAY_S)
     _touch_activity()

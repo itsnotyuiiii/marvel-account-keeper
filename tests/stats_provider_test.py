@@ -74,6 +74,15 @@ class ProviderMigrationTest(unittest.TestCase):
                     "last_refresh_source": "tracker",
                     "last_refresh_error": "old private-provider state",
                 },
+                {
+                    "id": "legacy-sourceless-account",
+                    "in_game_name": "SourceLess",
+                    "current_rank": "Platinum I",
+                    "last_refresh_ts": 123,
+                    "last_refresh_status": "not_found",
+                    "last_refresh_source": None,
+                    "last_refresh_error": "Unexpected HTTP 502",
+                },
             ],
         }
         tracker_app.VAULT_PATH.write_text(json.dumps(legacy), encoding="utf-8")
@@ -98,12 +107,21 @@ class ProviderMigrationTest(unittest.TestCase):
         ):
             self.assertNotIn(removed, account)
         self.assertIsNone(account["last_refresh_status"])
+        self.assertIsNone(account["last_refresh_code"])
         self.assertIsNone(account["last_refresh_source"])
         self.assertIsNone(account["last_refresh_error"])
         private_account = migrated["accounts"][1]
         self.assertIsNone(private_account["last_refresh_status"])
+        self.assertIsNone(private_account["last_refresh_code"])
         self.assertIsNone(private_account["last_refresh_source"])
         self.assertIsNone(private_account["last_refresh_error"])
+        sourceless_account = migrated["accounts"][2]
+        self.assertEqual(sourceless_account["current_rank"], "Platinum I")
+        self.assertIsNone(sourceless_account["last_refresh_ts"])
+        self.assertIsNone(sourceless_account["last_refresh_status"])
+        self.assertIsNone(sourceless_account["last_refresh_code"])
+        self.assertIsNone(sourceless_account["last_refresh_source"])
+        self.assertIsNone(sourceless_account["last_refresh_error"])
         self.assertTrue(list(tracker_app.BACKUP_DIR.glob("vault-*.json")))
         self.assertTrue(list(tracker_app.EXTRA_BACKUP_DIR.glob("vault-*.json")))
 
@@ -160,6 +178,7 @@ class TrackerRefreshTest(unittest.TestCase):
             })
 
         self.assertEqual(result["last_refresh_status"], "ok")
+        self.assertIsNone(result["last_refresh_code"])
         self.assertEqual(result["last_refresh_source"], "tracker")
         self.assertEqual(result["rivals_uid"], "123456789")
         self.assertEqual(result["current_rank"], "Gold II")
@@ -183,8 +202,106 @@ class TrackerRefreshTest(unittest.TestCase):
             })
 
         self.assertEqual(result["last_refresh_status"], "error")
-        self.assertIn("private, uncrawled, or temporarily unavailable",
-                      result["last_refresh_error"])
+        self.assertEqual(result["last_refresh_code"], "profile_unavailable")
+        self.assertIn("collector cannot expose", result["last_refresh_error"])
+        self.assertIn("Tracker/game API sync issue", result["last_refresh_error"])
+
+    def test_refresh_failures_have_stable_specific_reason_codes(self) -> None:
+        cases = [
+            (
+                (404, {"errors": [{"code": "CollectorResultStatus::NotFound"}]}, None),
+                "not_found",
+                "player_not_found",
+            ),
+            (
+                (200, {"data": {"segments": []}}, None),
+                "not_found",
+                "no_ranked_data",
+            ),
+            ((0, None, None), "error", "network_error"),
+            ((200, None, None), "error", "invalid_response"),
+            ((200, {"data": {"platformInfo": []}}, None),
+             "error", "invalid_response"),
+            ((403, None, None), "error", "provider_blocked"),
+            ((503, None, None), "error", "provider_unavailable"),
+        ]
+        for fetch_result, expected_status, expected_code in cases:
+            with self.subTest(expected_code=expected_code), \
+                    patch.object(tracker_app, "_fetch_tracker_player",
+                                 return_value=fetch_result):
+                result = tracker_app._try_tracker({
+                    "in_game_name": "ReasonCodePlayer",
+                    "rivals_uid": "",
+                })
+            self.assertEqual(result["last_refresh_status"], expected_status)
+            self.assertEqual(result["last_refresh_code"], expected_code)
+
+    def test_unrelated_segment_schema_drift_does_not_hide_valid_rank(self) -> None:
+        payload = {
+            "data": {
+                "platformInfo": {"platformUserHandle": "StablePlayer"},
+                "metadata": {},
+                "segments": [
+                    {
+                        "type": "overview",
+                        "stats": {
+                            "ranked": {
+                                "value": 1500,
+                                "metadata": {"tierName": "Gold I"},
+                            },
+                        },
+                    },
+                    {
+                        "type": "ranked-peaks",
+                        "stats": {
+                            "peakTiers": {
+                                "metadata": "future-container-field",
+                                "value": [{
+                                    "value": 2200,
+                                    "metadata": {"tierName": "Diamond III"},
+                                }],
+                            },
+                        },
+                    },
+                    {"type": "unrelated-future-segment", "stats": "new schema"},
+                ],
+            },
+        }
+        with patch.object(tracker_app, "_fetch_tracker_player",
+                          return_value=(200, payload, None)):
+            result = tracker_app._try_tracker({
+                "in_game_name": "StablePlayer",
+                "rivals_uid": "",
+            })
+
+        self.assertEqual(result["last_refresh_status"], "ok")
+        self.assertEqual(result["current_rank"], "Gold I")
+        self.assertEqual(result["peak_rank"], "Diamond III")
+
+    def test_non_finite_score_does_not_abort_rank_refresh(self) -> None:
+        payload = {
+            "data": {
+                "segments": [{
+                    "type": "overview",
+                    "stats": {
+                        "ranked": {
+                            "value": "Infinity",
+                            "metadata": {"tierName": "Gold II"},
+                        },
+                    },
+                }],
+            },
+        }
+        with patch.object(tracker_app, "_fetch_tracker_player",
+                          return_value=(200, payload, None)):
+            result = tracker_app._try_tracker({
+                "in_game_name": "NonFiniteScore",
+                "rivals_uid": "",
+            })
+
+        self.assertEqual(result["last_refresh_status"], "ok")
+        self.assertEqual(result["current_rank"], "Gold II")
+        self.assertNotIn("current_points", result)
 
     def test_rate_limit_stops_identifier_fallback_and_bulk_sweep(self) -> None:
         with patch.object(tracker_app, "_fetch_tracker_player",
@@ -200,7 +317,9 @@ class TrackerRefreshTest(unittest.TestCase):
 
         self.assertEqual(fetch.call_count, 1)
         self.assertEqual(result["_retry_after_s"], 37)
+        self.assertEqual(result["last_refresh_code"], "rate_limited")
         self.assertGreaterEqual(guarded["_retry_after_s"], 36)
+        self.assertEqual(guarded["last_refresh_code"], "rate_limited")
         self.assertIn("rate limiting", result["last_refresh_error"])
 
         vault = {
@@ -222,6 +341,7 @@ class TrackerRefreshTest(unittest.TestCase):
         commit.assert_not_called()
         summary = events[-1]["summary"]
         self.assertEqual(summary["rate_limited"], 1)
+        self.assertEqual(summary["by_code"], {"rate_limited": 1})
         self.assertEqual(summary["retry_after_s"], 37)
         self.assertEqual(summary["skipped"], 1)
         self.assertEqual(events[-2]["done"], 2)
@@ -253,6 +373,46 @@ class TrackerRefreshTest(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.headers["Retry-After"], "23")
         self.assertEqual(response.get_json()["error"], "rate_limited")
+
+    def test_refresh_all_summary_breaks_failures_down_by_reason(self) -> None:
+        vault = {
+            "accounts": [
+                {"id": "unavailable", "in_game_name": "Unavailable"},
+                {"id": "missing", "in_game_name": "Missing"},
+            ],
+        }
+        outcomes = [
+            {
+                "last_refresh_status": "error",
+                "last_refresh_code": "profile_unavailable",
+                "last_refresh_error": "unavailable",
+            },
+            {
+                "last_refresh_status": "not_found",
+                "last_refresh_code": "player_not_found",
+                "last_refresh_error": "not found",
+            },
+        ]
+
+        def merged(acct_id: str, updates: dict) -> dict:
+            return {"id": acct_id, **updates}
+
+        with patch.object(tracker_app, "_refresh_account_stats",
+                          side_effect=outcomes), \
+                patch.object(tracker_app, "_commit_updates",
+                             side_effect=merged), \
+                patch.object(tracker_app.time, "sleep"):
+            events = list(tracker_app._refresh_all_steps(vault, b"unused"))
+
+        summary = events[-1]["summary"]
+        self.assertEqual(summary["error"], 1)
+        self.assertEqual(summary["not_found"], 1)
+        self.assertEqual(summary["by_code"], {
+            "profile_unavailable": 1,
+            "player_not_found": 1,
+        })
+        self.assertEqual(events[0]["code"], "profile_unavailable")
+        self.assertEqual(events[1]["code"], "player_not_found")
 
 
 class SurfaceCleanupTest(unittest.TestCase):

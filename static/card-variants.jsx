@@ -100,8 +100,10 @@ function isIncomplete(acct) {
   if (uid) return false;            // UID set → considered set up
   if (!ign) return true;            // no UID, no IGN → definitely not set up
   // IGN exists but lookups never resolved a UID — treat the typed name as
-  // probably stale / wrong since the UID is the source of truth.
-  return acct.last_refresh_status === "not_found"
+  // probably stale / wrong only when Tracker explicitly did not find it. A
+  // found profile with no ranked data is valid and should not be greyed out.
+  return (acct.last_refresh_status === "not_found"
+          && (!acct.last_refresh_code || acct.last_refresh_code === "player_not_found"))
       || acct.last_refresh_status === "missing_handle";
 }
 
@@ -250,7 +252,10 @@ function useSecondTick(active) {
 function syncState(acct) {
   const st = acct.last_refresh_status;
   if (!st) return "none";
-  if (st !== "ok") return st;
+  if (st !== "ok") {
+    const reason = acct.last_refresh_code;
+    return reason && SYNC_META[reason] ? reason : st;
+  }
   const synced = toMs(acct.last_refresh_ts);
   if (synced == null) return "fresh";
   const age = Date.now() - synced;
@@ -278,9 +283,29 @@ const HISTORY_PRIVATE_NOTE =
 // through to the chip's `title` attribute as a native hover tooltip.
 const SYNC_META = {
   not_found:      { sym: "?",  cls: "muted", text: "Player not found — check IGN",
-                    long: "No data for this player on Tracker.gg — IGN or UID may be wrong" },
+                    long: "Tracker.gg did not find the saved UID or in-game name" },
+  player_not_found: { sym: "?", cls: "muted", text: "Player not found — check UID / IGN",
+                      long: "Tracker.gg did not find the saved UID or in-game name" },
+  no_ranked_data: { sym: "?", cls: "muted", text: "Profile found — no ranked data",
+                    long: "Tracker.gg found the profile but returned no ranked data" },
+  profile_unavailable: { sym: "!", cls: "err", text: "Profile unavailable — cached rank kept",
+                         long: "Tracker.gg recognizes this player but cannot expose the profile" },
   missing_handle: { sym: "?",  cls: "muted", text: "No IGN set — refresh skipped",
                     long: "No in-game name set — refresh skipped" },
+  missing_identity: { sym: "?", cls: "muted", text: "No UID or IGN — refresh skipped",
+                      long: "No in-game name or UID is saved for this account" },
+  rate_limited:   { sym: "!", cls: "err", text: "Tracker.gg rate limited — retry later",
+                    long: "Tracker.gg is rate limiting profile requests" },
+  network_error:  { sym: "!", cls: "err", text: "Could not reach Tracker.gg",
+                    long: "The app could not connect to Tracker.gg" },
+  invalid_response: { sym: "!", cls: "err", text: "Unreadable Tracker.gg response",
+                      long: "Tracker.gg returned a response the app could not read" },
+  provider_blocked: { sym: "!", cls: "err", text: "Tracker.gg refused the request",
+                      long: "Tracker.gg refused the profile request" },
+  provider_unavailable: { sym: "!", cls: "err", text: "Tracker.gg unavailable — retry later",
+                          long: "Tracker.gg is temporarily unavailable" },
+  provider_error: { sym: "!", cls: "err", text: "Tracker.gg response error",
+                    long: "Tracker.gg returned an unexpected response" },
   error:          { sym: "!",  cls: "err",   text: "Refresh failed — retry shortly",
                     long: "Last refresh failed — retry shortly" },
 };
