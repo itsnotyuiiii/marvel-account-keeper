@@ -48,7 +48,16 @@ def find_exe() -> Path:
     sys.exit("no built exe in dist/ — run `python build.py` first, or pass a path")
 
 
-EXE = find_exe()
+EXE: Path | None = None
+
+
+def _exe() -> Path:
+    """Resolve the packaged executable only when this standalone test runs."""
+
+    global EXE
+    if EXE is None:
+        EXE = find_exe()
+    return EXE
 
 
 def _read(p: Path) -> str:
@@ -105,7 +114,7 @@ def _kill(pid: int) -> None:
 def test_extraction_isolation() -> None:
     with tempfile.TemporaryDirectory() as td:
         sentinel = Path(td) / "sentinel.txt"
-        r = subprocess.run([str(EXE), "--selftest-spawn", str(sentinel)], timeout=30)
+        r = subprocess.run([str(_exe()), "--selftest-spawn", str(sentinel)], timeout=30)
         assert r.returncode == 0, f"parent exited {r.returncode}"
         data = _wait_for(sentinel, "STAGE2=", timeout=25)
         pm = re.search(r"PARENT_MEI=(.+)", data)
@@ -129,7 +138,7 @@ def test_restart_end_to_end() -> None:
     with tempfile.TemporaryDirectory() as td:
         sentinel = Path(td) / "restart.txt"
         env = {**os.environ, "MARVEL_KEEPER_DATA": td}
-        r = subprocess.run([str(EXE), "--selftest-restart", str(sentinel)],
+        r = subprocess.run([str(_exe()), "--selftest-restart", str(sentinel)],
                            env=env, timeout=30)
         assert r.returncode == 0, f"parent exited {r.returncode}"
         data = _wait_for(sentinel, "UP=", timeout=30)
@@ -150,7 +159,7 @@ def test_restart_end_to_end() -> None:
 
 
 def main() -> int:
-    print(f"exe under test: {EXE}")
+    print(f"exe under test: {_exe()}")
     failures = 0
     for t in (test_extraction_isolation, test_restart_end_to_end):
         try:

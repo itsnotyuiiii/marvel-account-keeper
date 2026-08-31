@@ -13,10 +13,22 @@ const MATCH_PLATFORM_OPTIONS = [
 ];
 const MATCH_API_PAGE_SIZE = 500;
 const MATCH_RENDER_BATCH = 100;
+const MATCH_RESULT_CLASSES = Object.freeze({
+  win: "mh-result-win",
+  loss: "mh-result-loss",
+  draw: "mh-result-draw",
+});
 
 function matchPlatformLabel(value) {
   const found = MATCH_PLATFORM_OPTIONS.find((row) => row.value === value);
   return found ? found.label : (value || "Unknown");
+}
+
+function matchResultClass(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MATCH_RESULT_CLASSES, normalized)
+    ? MATCH_RESULT_CLASSES[normalized]
+    : "";
 }
 
 function matchHistoryError(error, fallback) {
@@ -187,6 +199,8 @@ function MatchRow({ match }) {
   const rank = fact.rank_at_match || fact.rank;
   const duration = formatMatchDuration(match.duration_seconds || match.duration || fact.duration_seconds);
   const evidence = fact.evidence_kind || match.evidence_kind || "direct";
+  const result = match.result || fact.result;
+  const resultClass = ["mh-result", matchResultClass(result)].filter(Boolean).join(" ");
   const kda = [fact.kills, fact.deaths, fact.assists]
     .some((value) => value !== undefined && value !== null && value !== "")
     ? `${fact.kills ?? "–"}/${fact.deaths ?? "–"}/${fact.assists ?? "–"} K/D/A`
@@ -201,9 +215,9 @@ function MatchRow({ match }) {
       <div className="mh-match-title">
         <strong>{match.mode || fact.mode || "Match"}</strong>
         {mapName && <span>· {mapName}</span>}
-        {(match.result || fact.result) && (
-          <span className={`mh-result mh-result-${String(match.result || fact.result).toLowerCase()}`}>
-            {match.result || fact.result}
+        {result && (
+          <span className={resultClass}>
+            {result}
           </span>
         )}
       </div>
@@ -558,14 +572,19 @@ function MatchHistoryPanel({
     setClearing(true);
     setOperationError("");
     try {
-      await request(`/api/accounts/${encodeURIComponent(accountId)}/matches`, { method: "DELETE" });
+      const response = await request(
+        `/api/accounts/${encodeURIComponent(accountId)}/matches`,
+        { method: "DELETE" },
+      );
       resetLoadedPages();
       setStatus((current) => current ? { ...current, count: 0, last_error: null } : current);
       setImportSummary(null);
       setConfirmingClear(false);
       focusAfterRender(historyToggleRef);
       setReloadToken((value) => value + 1);
-      showToast?.("Match history cleared");
+      showToast?.(response?.backup
+        ? "Active match history cleared; local recovery backup retained"
+        : "Active match history cleared");
     } catch (error) {
       if (!error.locked) setOperationError(matchHistoryError(error, "Could not clear match history."));
     } finally {
@@ -828,7 +847,10 @@ function MatchHistoryPanel({
               <div className="mh-danger">
                 {confirmingClear ? (
                   <div className="mh-clear-confirm" role="group" aria-label="Confirm clear match history">
-                    <p>Clear all {statusCount} stored match {statusCount === 1 ? "fact" : "facts"} for this account?</p>
+                    <p>
+                      Clear all {statusCount} active match {statusCount === 1 ? "fact" : "facts"}
+                      {" "}for this account? A local recovery backup is retained; the newest 10 backups are kept.
+                    </p>
                     <button ref={clearKeepRef} type="button" className="drawer-btn-ghost"
                             onClick={onCancelClear} disabled={clearing}>Keep history</button>
                     <button type="button" className="drawer-btn-del-confirm"

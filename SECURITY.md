@@ -19,7 +19,8 @@ no backend server, and no network service beyond a loopback web UI.
   and ownership/authorization attestation.
 - Complete participant lists are processed only in memory to recognize other
   opted-in vault accounts. Unrelated names/UIDs and the raw imported payload are
-  discarded before commit; the database schema has no columns for them.
+  discarded before commit; deterministic match and provenance values are keyed
+  with the unlocked vault key before SQLite.
 - The vault is `vault.json` and the optional match index is
   `match-index.sqlite3` in your per-user data folder (see the README). Anyone
   with both read access to that folder *and* your master password can read the

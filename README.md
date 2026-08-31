@@ -76,11 +76,16 @@ Your vault and optional match index live in a per-user data folder:
 Credentials and account metadata are in `vault.json`. Optional normalized
 match facts are in `match-index.sqlite3`; they are plain text, not encrypted.
 The app never stores the imported raw file or unrelated participant identities.
+Internal match, provenance, and source tokens are keyed with the unlocked vault
+key before they cross into SQLite, so discarded participant identities cannot
+be tested against deterministic database hashes offline.
 
 Timestamped vault backups are written under `backups/` (and a second copy under
 your `Documents/MarvelAccountsBackups/`) on credential/account saves. The match
 index uses consistent SQLite backups under `match-backups/` before migrations
-and destructive purges. If you ran an older script-style version, your existing
+and destructive purges. Match backups are plaintext local recovery copies; the
+newest 10 are retained, so clearing active history is not secure erasure of
+those recovery copies. If you ran an older script-style version, your existing
 `vault.json` is imported automatically the first time the new app starts.
 
 ## Security notes

@@ -118,8 +118,8 @@ Suggested tables:
   rank-at-match, and evidence kind (`direct` or `inferred_owned_account`).
 - `import_batches`: source kind, source digest, policy/schema version,
   authorization basis, timestamps, and accepted/rejected/duplicate counts.
-- `match_provenance`: account-match row to batch, source-record digest, and
-  source account ID when the fact was inferred.
+- `match_provenance`: account-match row to batch, vault-keyed source-record
+  token, and source account ID when the fact was inferred.
 - `match_source_state`: per-account/source last attempt, last success, stable
   error code, and retry time.
 
@@ -132,6 +132,8 @@ Database rules:
 - Use sequential transactional migrations with `PRAGMA user_version`.
 - Before schema migration or purge, create a consistent backup with
   `Connection.backup()`; never copy only the main database while WAL is live.
+- Keep only the newest 10 verified match-index backups and disclose that clear
+  removes active rows while a bounded local recovery copy remains.
 - A corrupt or unavailable match index must disable only match features. Vault
   access and rank refresh must continue to work.
 

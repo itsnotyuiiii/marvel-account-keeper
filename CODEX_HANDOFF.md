@@ -38,8 +38,25 @@ Current state:
   origin/main before any release, preserving APP_VERSION 2.16.0 for this
   development candidate unless the release plan changes explicitly.
 
+Latest continuation checkpoint (verified 2026-08-30):
+- The required focused suite and full `*_test.py` discovery both pass: 76 tests.
+- Preview and commit now share control-character validation.
+- Persisted match, provenance, and exact-source tokens are keyed with the
+  unlocked vault key before entering plaintext SQLite.
+- Stale rank-refresh results cannot overwrite a newer nonblank Marvel Rivals
+  UID, and destructive startup reconciliation runs only after the packaged
+  single-instance wait/lock.
+- Match-result styling uses an explicit CSS-class allowlist. Match-index backup
+  retention is bounded to the newest 10 files, and the clear-history flow
+  discloses the retained local recovery backup.
+- `tests/update_hop_test.py` resolves its packaged executable lazily, so normal
+  unittest discovery no longer mistakes the discovery argument for an EXE.
+
 First verification command:
 python -m unittest tests.match_index_test tests.match_import_test tests.match_routes_test tests.stats_provider_test -v
+
+Broader source-test discovery:
+python -m unittest discover -s tests -p "*_test.py" -v
 
 Then review the implementation and tests for any regression or missing safety
 gate. If preparing a release, rebuild from the reconciled committed tree, run

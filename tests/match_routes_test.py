@@ -447,6 +447,20 @@ class MatchRoutesTest(unittest.TestCase):
         self.assertEqual(preview["inferred_count"], 1)
         self.assertFalse(tracker_app.MATCH_INDEX_PATH.exists())
 
+    def test_preview_rejects_text_that_commit_cannot_persist(self) -> None:
+        source_id = self._create_account()
+        raw = _json_bytes(_document(matches=[_match(season="season-4\nspoofed")]))
+
+        response = self._preview(source_id, raw)
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        preview = response.get_json()["preview"]
+        self.assertEqual(preview["state"], "rejected")
+        self.assertEqual(preview["accepted_count"], 0)
+        self.assertEqual(preview["rejections"][0]["code"], "invalid_text")
+        self.assertEqual(preview["rejections"][0]["path"], "$.matches[0].season")
+        self.assertFalse(tracker_app.MATCH_INDEX_PATH.exists())
+
     def test_commit_scope_is_bound_to_previewed_owned_accounts(self) -> None:
         source_id = self._create_account()
         raw = _json_bytes()
@@ -667,7 +681,9 @@ class MatchRoutesTest(unittest.TestCase):
 
     def test_sqlite_contains_no_uids_player_names_or_raw_payload(self) -> None:
         source_id, _inferred_id = self._create_owned_pair()
-        self._import_standard_match(source_id)
+        raw = _json_bytes()
+        normalized = tracker_app.parse_source_bytes(raw, format_hint="json")
+        self._import_standard_match(source_id, raw)
 
         with closing(sqlite3.connect(tracker_app.MATCH_INDEX_PATH)) as connection:
             schema = "\n".join(
@@ -685,7 +701,23 @@ class MatchRoutesTest(unittest.TestCase):
                 "match_source_state",
             ):
                 persisted.extend(connection.execute(f"SELECT * FROM {table}").fetchall())
+            stored_match_key = connection.execute(
+                "SELECT match_key FROM matches"
+            ).fetchone()[0]
+            stored_record_digest = connection.execute(
+                "SELECT source_record_digest FROM match_provenance"
+            ).fetchone()[0]
+            stored_source_digest = connection.execute(
+                "SELECT source_digest FROM import_batches"
+            ).fetchone()[0]
         serialized = repr(persisted)
+        self.assertTrue(stored_match_key.startswith("m2_"))
+        self.assertNotEqual(stored_match_key, normalized.matches[0].match_key)
+        self.assertNotEqual(
+            stored_record_digest,
+            normalized.matches[0].source_record_digest,
+        )
+        self.assertNotEqual(stored_source_digest, normalized.source_digest)
         for forbidden in (
             SOURCE_UID,
             INFERRED_UID,

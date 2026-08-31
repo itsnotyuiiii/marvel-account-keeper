@@ -1971,7 +1971,7 @@ def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | 
 # ---------- owner-authorized match history ----------
 
 _MATCH_UID_RE = RIVALS_UID_RE
-_MATCH_POLICY_VERSION = "owner-local-v1"
+_MATCH_POLICY_VERSION = "owner-local-v2"
 _MANUAL_MATCH_FIELDS = frozenset({
     "occurred_at", "platform", "season", "mode", "map_name", "result",
     "duration_seconds", "hero_name", "kills", "deaths", "assists",
@@ -2175,16 +2175,28 @@ def _ensure_route_source(normalized, account: dict[str, Any]) -> None:
         )
 
 
-def _index_facts(source_preview) -> tuple[IndexMatchFact, ...]:
-    """Cross the parser/storage boundary using only the explicit safe fields."""
+def _match_storage_token(key: bytes, kind: str, value: str) -> str:
+    """Return a vault-keyed token for deterministic match-index metadata."""
+
+    message = b"MarvelAccountKeeper::match-index::v2\0" + kind.encode("ascii") \
+        + b"\0" + value.encode("utf-8")
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def _index_facts(source_preview, storage_key: bytes) -> tuple[IndexMatchFact, ...]:
+    """Cross the parser/storage boundary using only keyed, explicit safe fields."""
 
     return tuple(IndexMatchFact(
         account_id=fact.account_id,
-        match_key=fact.match_key,
+        match_key="m2_" + _match_storage_token(
+            storage_key, "match-key", fact.match_key
+        ),
         occurred_at=fact.occurred_at,
         platform=fact.platform,
         evidence_kind=fact.evidence_kind,
-        source_record_digest=fact.source_record_digest,
+        source_record_digest=_match_storage_token(
+            storage_key, "source-record", fact.source_record_digest
+        ),
         season=fact.season,
         mode=fact.mode,
         map_name=fact.map_name,
@@ -2266,7 +2278,11 @@ def _require_preview_scope(actual: str, expected: Any) -> None:
 
 
 def _prepare_match_import(
-    vault: dict[str, Any], account: dict[str, Any], *, bind_expected_digest: bool = False
+    vault: dict[str, Any],
+    account: dict[str, Any],
+    storage_key: bytes,
+    *,
+    bind_expected_digest: bool = False,
 ):
     _require_match_import_account(account)
     normalized, expected_digest, expected_scope = _read_match_import(account)
@@ -2274,7 +2290,7 @@ def _prepare_match_import(
         require_source_digest(normalized, expected_digest)
     _ensure_route_source(normalized, account)
     source_preview = preview_owned_matches(normalized, _authorized_owned_accounts(vault))
-    facts = _index_facts(source_preview)
+    facts = _index_facts(source_preview, storage_key)
     classification = _preview_classification(facts)
     scope_digest = _preview_scope_digest(normalized, facts, classification)
     if bind_expected_digest:
@@ -2672,7 +2688,14 @@ def _apply_refresh_updates(vault: dict[str, Any], acct_id: str, updates: dict[st
     """Merge refresh-result fields onto an account by id; return the merged record."""
     for acct in vault.get("accounts", []):
         if acct["id"] == acct_id:
-            acct.update(updates)
+            safe_updates = dict(updates)
+            # Tracker may auto-fill a UID only for the blank-UID snapshot used
+            # for that request. A manual UID can land while the network call is
+            # in flight and may immediately become match-history-bound. Never
+            # let the stale provider result overwrite that newer identity.
+            if safe_updates.get("rivals_uid") and acct.get("rivals_uid"):
+                safe_updates.pop("rivals_uid", None)
+            acct.update(safe_updates)
             acct["updated_at"] = int(time.time())
             return acct
     return None
@@ -2950,7 +2973,7 @@ def account_match_status(acct_id: str):
 
 @app.route("/api/accounts/<acct_id>/matches/import/preview", methods=["POST"])
 def preview_account_match_import(acct_id: str):
-    _key, err = _require_key()
+    key, err = _require_key()
     if err:
         return err
     vault = _read_vault()
@@ -2959,7 +2982,7 @@ def preview_account_match_import(acct_id: str):
         return jsonify({"error": "not_found"}), 404
     try:
         normalized, source_preview, facts, classification, scope_digest = \
-            _prepare_match_import(vault, account)
+            _prepare_match_import(vault, account, key)
         payload = _preview_response_payload(
             vault, normalized, source_preview, facts, classification, scope_digest
         )
@@ -2970,7 +2993,7 @@ def preview_account_match_import(acct_id: str):
 
 @app.route("/api/accounts/<acct_id>/matches/import", methods=["POST"])
 def commit_account_match_import(acct_id: str):
-    _key, err = _require_key()
+    key, err = _require_key()
     if err:
         return err
     # Re-read authorization and every owned identity under the vault write lock,
@@ -2982,7 +3005,9 @@ def commit_account_match_import(acct_id: str):
             return jsonify({"error": "not_found"}), 404
         try:
             normalized, source_preview, facts, classification, _scope_digest = \
-                _prepare_match_import(vault, account, bind_expected_digest=True)
+                _prepare_match_import(
+                    vault, account, key, bind_expected_digest=True
+                )
             if classification.conflict_count:
                 raise MatchIndexConflict(
                     "fact_conflict",
@@ -2999,9 +3024,12 @@ def commit_account_match_import(acct_id: str):
             # source. NormalizedImport is the sole object that can retain raw
             # participant UIDs/names; it must not remain referenced while the
             # SQLite transaction runs.
+            exact_source_digest = normalized.source_digest
             batch = MatchImportBatch(
                 source_kind=normalized.source_kind,
-                source_digest=normalized.source_digest,
+                source_digest=_match_storage_token(
+                    key, "source-bytes", exact_source_digest
+                ),
                 schema_version=normalized.schema_id,
                 policy_version=_MATCH_POLICY_VERSION,
                 authorization_basis="owner_attestation",
@@ -3055,7 +3083,7 @@ def commit_account_match_import(acct_id: str):
             summary = {
                 "state": result_state,
                 "batch_id": result.batch_id,
-                "digest": batch.source_digest,
+                "digest": exact_source_digest,
                 "source_kind": batch.source_kind,
                 "inserted_match_count": len({
                     fact.match_key
@@ -3197,12 +3225,12 @@ def delete_account(acct_id: str):
     })
 
 
-# Run migrations as soon as the module is imported, so they happen regardless
-# of how the app is launched. Both are idempotent and snapshot the vault into
-# backups/ before any write.
+# Run vault migrations as soon as the module is imported, so they happen
+# regardless of how the app is launched. Both are idempotent and snapshot the
+# vault into backups/ before any write. Match-index reconciliation is deferred
+# until main() has honored --await-pid and acquired the packaged-instance lock.
 _migrate_from_app_folder()
 _migrate_vault_if_needed()
-_reconcile_match_index_if_present()
 _cleanup_post_update()
 # Attempt to install a remembered key from a previous "remember me" unlock.
 # Silent — if DPAPI is unavailable or the blob is stale, the app just starts
@@ -3728,6 +3756,11 @@ def main() -> None:
             print("  Marvel Rivals Account Tracker is already running.")
             _focus_existing_window()
             sys.exit(0)
+
+    # This can delete facts for identities no longer eligible in the vault, so
+    # it must run only after a packaged process owns the single-instance lock
+    # (and an update successor has waited for its predecessor).
+    _reconcile_match_index_if_present()
 
     # Quiet the per-request Werkzeug log lines — the banner is what matters.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)

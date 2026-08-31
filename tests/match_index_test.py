@@ -99,6 +99,12 @@ class MatchIndexTestCase(unittest.TestCase):
 
 
 class CreationAndMigrationTest(MatchIndexTestCase):
+    def test_constructor_rejects_invalid_backup_retention(self) -> None:
+        for value in (True, 0, 1001):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    MatchIndex(self.db_path, self.backup_dir, backup_keep=value)
+
     def test_constructor_is_lazy_and_creation_is_idempotent(self) -> None:
         self.assertFalse(self.db_path.exists())
         self.assertEqual(self.index.health().schema_version, 0)
@@ -559,6 +565,22 @@ class BackupPurgeAndReconcileTest(MatchIndexTestCase):
         self.assertTrue(restored.has_history("owned-a"))
         self.assertTrue(restored.has_history("owned-b"))
         self.assertTrue(restored.has_history("owned-c"))
+
+    def test_verified_backups_are_pruned_to_configured_retention(self) -> None:
+        bounded = MatchIndex(self.db_path, self.backup_dir, backup_keep=2)
+        self.assertTrue(bounded.initialize().available)
+
+        first = bounded.backup(purpose="retention")
+        second = bounded.backup(purpose="retention")
+        third = bounded.backup(purpose="retention")
+
+        self.assertFalse(first.exists())
+        self.assertTrue(second.exists())
+        self.assertTrue(third.exists())
+        self.assertEqual(
+            len(list(self.backup_dir.glob("match-index-*.sqlite3"))),
+            2,
+        )
 
     def test_closed_database_can_be_replaced_with_backup_to_restore_facts(self) -> None:
         original = _fact("owned-a", "match-before-backup")

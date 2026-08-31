@@ -39,6 +39,7 @@ STAT_FIELDS = frozenset(
 )
 
 _UID_RE = re.compile(r"^[0-9]{6,11}$")
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _EVIDENCE_KINDS = frozenset({"direct", "inferred_owned_account"})
 _ROOT_KEYS = frozenset({"schema", "source", "matches"})
 _MANUAL_ROOT_KEYS = frozenset({"schema", "source", "match"})
@@ -401,6 +402,12 @@ def _optional_text(
             path=path,
         )
     value = value.strip()
+    if _CONTROL_RE.search(value):
+        _validation(
+            "invalid_text",
+            "Text must not contain control characters.",
+            path,
+        )
     return value or None
 
 

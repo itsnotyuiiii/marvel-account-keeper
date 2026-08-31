@@ -142,6 +142,32 @@ class ProviderMigrationTest(unittest.TestCase):
 
 
 class TrackerRefreshTest(unittest.TestCase):
+    def test_stale_refresh_cannot_replace_a_newer_nonblank_uid(self) -> None:
+        vault = {
+            "accounts": [{
+                "id": "match-bound-account",
+                "in_game_name": "CorrectedPlayer",
+                "rivals_uid": "222222222",
+                "current_rank": "Bronze III",
+            }],
+        }
+        stale_updates = {
+            "rivals_uid": "111111111",
+            "current_rank": "Gold II",
+            "last_refresh_status": "ok",
+        }
+
+        with patch.object(tracker_app, "_read_vault", return_value=vault), \
+                patch.object(tracker_app, "_write_vault") as write:
+            merged = tracker_app._commit_updates(
+                "match-bound-account", stale_updates
+            )
+
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged["rivals_uid"], "222222222")
+        self.assertEqual(merged["current_rank"], "Gold II")
+        write.assert_called_once_with(vault, backup=False)
+
     def setUp(self) -> None:
         with tracker_app._tracker_rate_limit_lock:
             tracker_app._tracker_rate_limited_until = 0.0
@@ -461,6 +487,22 @@ class TrackerRefreshTest(unittest.TestCase):
 
 
 class SurfaceCleanupTest(unittest.TestCase):
+    def test_second_packaged_launch_exits_before_match_reconciliation(self) -> None:
+        with patch.object(sys, "argv", ["MarvelRivalsAccountTracker"]), \
+                patch.object(tracker_app, "_is_packaged", return_value=True), \
+                patch.object(
+                    tracker_app, "_acquire_single_instance", return_value=None
+                ), \
+                patch.object(tracker_app, "_focus_existing_window"), \
+                patch.object(
+                    tracker_app, "_reconcile_match_index_if_present"
+                ) as reconcile:
+            with self.assertRaises(SystemExit) as exited:
+                tracker_app.main()
+
+        self.assertEqual(exited.exception.code, 0)
+        reconcile.assert_not_called()
+
     def test_retired_provider_surface_is_absent_and_local_matches_exist(self) -> None:
         client = tracker_app.app.test_client()
         status = client.get("/api/status")
@@ -488,6 +530,15 @@ class SurfaceCleanupTest(unittest.TestCase):
         self.assertNotIn("marvelrivalsapi", public_text.lower())
         self.assertIn("https://rivalsdata.com/player/", public_text)
         self.assertNotIn("fetch(\"https://rivalsdata.com", public_text)
+
+    def test_match_result_styles_use_an_explicit_class_allowlist(self) -> None:
+        source = (_ROOT / "static" / "match-history.jsx").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("MATCH_RESULT_CLASSES", source)
+        self.assertIn("hasOwnProperty.call(MATCH_RESULT_CLASSES", source)
+        self.assertIn("className={resultClass}", source)
+        self.assertNotIn("mh-result-${String(", source)
 
 
 if __name__ == "__main__":

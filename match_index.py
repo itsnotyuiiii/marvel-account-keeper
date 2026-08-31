@@ -26,6 +26,7 @@ _EVIDENCE_KINDS = frozenset({"direct", "inferred_owned_account"})
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _DIGEST_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+DEFAULT_BACKUP_KEEP = 10
 
 
 class MatchIndexError(RuntimeError):
@@ -389,16 +390,22 @@ class MatchIndex:
         backup_dir: Path | str,
         *,
         busy_timeout_ms: int = 5000,
+        backup_keep: int = DEFAULT_BACKUP_KEEP,
     ) -> None:
         if isinstance(busy_timeout_ms, bool) or not isinstance(busy_timeout_ms, int):
             raise ValueError("busy_timeout_ms must be an integer")
         if busy_timeout_ms < 1 or busy_timeout_ms > 120_000:
             raise ValueError("busy_timeout_ms must be between 1 and 120000")
+        if isinstance(backup_keep, bool) or not isinstance(backup_keep, int):
+            raise ValueError("backup_keep must be an integer")
+        if backup_keep < 1 or backup_keep > 1000:
+            raise ValueError("backup_keep must be between 1 and 1000")
         self.db_path = Path(db_path)
         self.backup_dir = Path(backup_dir)
         if self.db_path == self.backup_dir:
             raise ValueError("db_path and backup_dir must differ")
         self.busy_timeout_ms = busy_timeout_ms
+        self.backup_keep = backup_keep
         self._match_write_lock = threading.RLock()
         self._initialized = False
 
@@ -881,6 +888,7 @@ class MatchIndex:
                 )
             destination.close()
             destination = None
+            self._prune_backups()
             return destination_path
         except MatchIndexStorageFull:
             raise
@@ -902,6 +910,19 @@ class MatchIndex:
                 "backup_failed",
                 "A required match index backup could not be created.",
             ) from None
+
+    def _prune_backups(self) -> None:
+        """Best-effort bounded retention after a verified backup succeeds."""
+
+        try:
+            backups = sorted(self.backup_dir.glob("match-index-*.sqlite3"))
+        except OSError:
+            return
+        for old in backups[:-self.backup_keep]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
     @staticmethod
     def _unlink_partial_backup(path: Path) -> None:

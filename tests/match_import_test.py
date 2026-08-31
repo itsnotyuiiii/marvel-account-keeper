@@ -312,6 +312,15 @@ class MatchImportTests(unittest.TestCase):
             sources.MatchSourceLimitError,
         )
 
+        control_character = match()
+        control_character["season"] = "season-4\nspoofed"
+        parsed = sources.parse_json_bytes(
+            json_bytes(document(matches=[control_character])), now=NOW
+        )
+        self.assertEqual(parsed.matches, ())
+        self.assertEqual(parsed.rejections[0].code, "invalid_text")
+        self.assertEqual(parsed.rejections[0].path, "$.matches[0].season")
+
     def test_schema_source_uid_and_source_platform_are_fatal(self):
         self.assert_error(
             "unsupported_schema",

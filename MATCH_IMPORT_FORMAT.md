@@ -35,8 +35,8 @@ fact is labeled `direct`.
 
 Participant UIDs and names are used in memory for matching. The app persists
 only normalized match facts for matching authorized accounts plus internal
-provenance digests; unrelated participant identities and the raw input payload
-are not stored.
+vault-keyed provenance tokens; unrelated participant identities, deterministic
+hashes of those identities, and the raw input payload are not stored.
 
 Normalized match facts are stored in the separate local
 `match-index.sqlite3` database as **plaintext SQLite**, not SQLCipher. Treat
@@ -273,7 +273,13 @@ atomic commit; no partial database write from that commit is retained.
 
 Names and source formatting do not define match identity. Hero, rank, result,
 and statistics are normalized content. Names are transient but are included in
-the normalized source-record digest, so two records with one identity but
-different names conflict within the same preview. Reformatting alone changes
-only the exact-file source digest, not the normalized record digest or match
-key.
+the in-memory normalized source-record digest, so two records with one identity
+but different names conflict within the same preview. Before persistence, match
+keys, source-record digests, and exact-file digests are transformed into
+domain-separated HMAC-SHA-256 tokens keyed by the unlocked vault key. The
+plaintext index therefore supports deterministic local deduplication without
+retaining an offline-testable hash of unrelated participant identities.
+
+The active index is backed up before destructive operations. These backups are
+plaintext local recovery data and are not erased by **Clear match history**;
+the app keeps the newest 10 match-index backups.
