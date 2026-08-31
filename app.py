@@ -34,12 +34,38 @@ import urllib.parse
 import urllib.request
 import uuid
 import webbrowser
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+
+from match_index import (
+    ImportBatch as MatchImportBatch,
+    MatchFact as IndexMatchFact,
+    MatchIndex,
+    MatchIndexConflict,
+    MatchIndexError,
+    MatchIndexStorageFull,
+    MatchIndexUnavailable,
+    RecordClassification,
+    SourceStateUpdate,
+)
+from match_sources import (
+    MAX_UPLOAD_BYTES as MATCH_MAX_UPLOAD_BYTES,
+    MatchSourceAuthorizationError,
+    MatchSourceConflictError,
+    MatchSourceError,
+    MatchSourceLimitError,
+    MatchSourceValidationError,
+    normalize_manual_entry,
+    parse_source_bytes,
+    preview_owned_matches,
+    require_source_digest,
+)
 
 # Packaged as a windowed PyInstaller exe (no console), sys.stdout / sys.stderr
 # come up as None on Windows and every print() in this file would raise
@@ -53,7 +79,7 @@ if sys.stdout is None or sys.stderr is None:
         sys.stderr = _devnull
 
 APP_NAME = "MarvelAccountKeeper"
-APP_VERSION = "2.15.0"
+APP_VERSION = "2.16.0"
 WINDOW_TITLE = "Marvel Rivals Account Tracker"  # native window title; also matched for single-instance focus
 GITHUB_REPO_SLUG = "itsnotyuiiii/marvel-account-keeper"
 
@@ -85,6 +111,11 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "peak_points": None,
     # Stats refresh (public Tracker.gg profile data)
     "rivals_uid": None,
+    # Match-history identity/consent. Platform is required because a numeric
+    # UID is not globally unique across every Marvel Rivals platform. Match
+    # imports remain disabled until the owner explicitly opts this account in.
+    "rivals_platform": "unknown",
+    "match_history_authorized": False,
     "last_refresh_ts": None,       # epoch — when we last requested stats for this account
     "last_refresh_status": None,   # "ok" | "not_found" | "error" | "missing_handle"
     # Stable machine-readable reason for non-ok refreshes. Keep the broad
@@ -115,6 +146,18 @@ TRACKER_TIMEOUT_S = 15
 TRACKER_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) "
                       "Chrome/120.0.0.0 Safari/537.36")
+RIVALS_PLATFORMS = {"unknown", "pc", "playstation", "xbox"}
+RIVALS_UID_RE = re.compile(r"^[0-9]{6,11}$")
+
+
+class AccountPayloadValidationError(ValueError):
+    """Stable, user-facing validation failure for account edits."""
+
+    def __init__(self, code: str, message: str, *, path: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.path = path
 
 
 # ---------- locations ----------
@@ -181,6 +224,8 @@ RESOURCE_DIR = _resource_dir()
 DATA_DIR = _data_dir()
 VAULT_PATH = DATA_DIR / "vault.json"
 BACKUP_DIR = DATA_DIR / "backups"
+MATCH_INDEX_PATH = DATA_DIR / "match-index.sqlite3"
+MATCH_BACKUP_DIR = DATA_DIR / "match-backups"
 EXTRA_BACKUP_DIR = Path.home() / "Documents" / "MarvelAccountsBackups"
 # Single-instance guard: an OS-locked file. A second launch fails to take the
 # lock, focuses the running window, and exits.
@@ -685,6 +730,10 @@ app = Flask(
     static_url_path="/static",
     template_folder=str(RESOURCE_DIR / "templates"),
 )
+# Bound request parsing before Werkzeug buffers a multipart upload. The parser
+# separately enforces an exact 8 MiB file limit; this allowance covers only the
+# multipart envelope and field names.
+app.config["MAX_CONTENT_LENGTH"] = MATCH_MAX_UPLOAD_BYTES + (1024 * 1024)
 
 # Methods that can't change state — no CSRF protection needed.
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -765,6 +814,14 @@ def _os_error_handler(e: OSError):
     }), 500
 
 
+@app.errorhandler(413)
+def _request_too_large(_e):
+    return jsonify({
+        "error": "upload_too_large",
+        "message": f"Match imports are limited to {MATCH_MAX_UPLOAD_BYTES // (1024 * 1024)} MiB.",
+    }), 413
+
+
 @app.errorhandler(Exception)
 def _generic_error_handler(e: Exception):
     """Last-resort JSON wrapper so unhandled exceptions don't fall through
@@ -799,10 +856,27 @@ _state: dict[str, Any] = {
 # (os.replace), so a reader always sees a complete old or new file. Reentrant so
 # nested helpers under an already-held lock don't deadlock.
 _vault_write_lock = threading.RLock()
+# The match index is intentionally separate from the encrypted credential
+# vault. Its constructor performs no I/O; the SQLite file is created only when
+# a match feature is first used. Any code needing both locks must take the
+# vault lock first, then let MatchIndex take its private write lock.
+_match_index_instance: MatchIndex | None = None
+_match_index_instance_lock = threading.Lock()
 # Single-flight guard for refresh-all (shared by the JSON + streaming endpoints)
 # so two tabs / a double-submit can't run concurrent sweeps and double-hammer
 # tracker.gg. Acquired non-blocking; a second caller gets 409 busy.
 _refresh_all_lock = threading.Lock()
+
+
+def _match_index() -> MatchIndex:
+    """Return the process singleton without touching SQLite on construction."""
+
+    global _match_index_instance
+    if _match_index_instance is None:
+        with _match_index_instance_lock:
+            if _match_index_instance is None:
+                _match_index_instance = MatchIndex(MATCH_INDEX_PATH, MATCH_BACKUP_DIR)
+    return _match_index_instance
 
 
 # ---------- vault file helpers ----------
@@ -1353,13 +1427,15 @@ def _parse_tracker_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     # NetEase UID — tracker carries it in platformInfo. Capturing it here is
     # what lets name-based accounts populate a rivals_uid, which unlocks stable
-    # UID-keyed lookups and a direct RivalsData profile link. Guard to a
-    # plausible UID shape (digits, 6-11 long
-    # — matching _detected_rivals_uids) so a platform slug never lands here.
+    # UID-keyed lookups and a direct RivalsData profile link. Guard to the
+    # same 6-11 digit shape as _detected_rivals_uids so a platform slug never
+    # lands here.
+    # Do not strip punctuation or letters: a malformed upstream identity must
+    # never be rewritten into a different UID that can authorize match data.
     uid_raw = pinfo.get("platformUserId") or pinfo.get("platformUserIdentifier")
-    uid_digits = re.sub(r"\D", "", str(uid_raw or ""))
-    if 6 <= len(uid_digits) <= 11:
-        out["rivals_uid"] = uid_digits
+    uid_value = str(uid_raw or "").strip()
+    if RIVALS_UID_RE.fullmatch(uid_value):
+        out["rivals_uid"] = uid_value
 
     # Synced timestamp — tracker exposes a `lastUpdated` ISO field. tracker
     # zeroes this to the 0001-01-01 / 2000-01-01 sentinels when it has no real
@@ -1859,15 +1935,29 @@ def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | 
     for field in ("pinned", "neon"):
         if field in payload:
             acct[field] = bool(payload.get(field))
+    if "match_history_authorized" in payload:
+        # Consent is fail-closed: malformed JSON such as the string "false"
+        # must never become truthy and silently opt an account in.
+        acct["match_history_authorized"] = \
+            payload.get("match_history_authorized") is True
     for field in ("current_points", "peak_points"):
         if field in payload:
             acct[field] = _coerce_points(payload.get(field))
-    # Marvel Rivals UID — optional manual override for stats lookup. UIDs are
-    # numeric, so we keep only digits (cleans pasted whitespace); blank clears
-    # it back to None and the lookup falls back to the in-game name.
+    # Marvel Rivals UID — optional manual override for stats lookup. Trim only
+    # surrounding whitespace and fail closed on every other non-digit. Silently
+    # stripping punctuation/text could authorize a different numeric account.
     if "rivals_uid" in payload:
-        uid_digits = re.sub(r"\D", "", str(payload.get("rivals_uid") or ""))
-        acct["rivals_uid"] = uid_digits or None
+        rivals_uid = str(payload.get("rivals_uid") or "").strip()
+        if rivals_uid and RIVALS_UID_RE.fullmatch(rivals_uid) is None:
+            raise AccountPayloadValidationError(
+                "invalid_rivals_uid",
+                "Leave the Marvel Rivals UID blank or enter 6-11 digits only.",
+                path="$.rivals_uid",
+            )
+        acct["rivals_uid"] = rivals_uid or None
+    if "rivals_platform" in payload:
+        platform = str(payload.get("rivals_platform") or "unknown").strip().lower()
+        acct["rivals_platform"] = platform if platform in RIVALS_PLATFORMS else "unknown"
     if "password" in payload:
         pw = payload.get("password") or ""
         acct["password_enc"] = _encrypt(key, pw) if pw else None
@@ -1876,6 +1966,414 @@ def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | 
         acct.setdefault(field, default)
     acct["updated_at"] = now
     return acct
+
+
+# ---------- owner-authorized match history ----------
+
+_MATCH_UID_RE = RIVALS_UID_RE
+_MATCH_POLICY_VERSION = "owner-local-v1"
+_MANUAL_MATCH_FIELDS = frozenset({
+    "occurred_at", "platform", "season", "mode", "map_name", "result",
+    "duration_seconds", "hero_name", "kills", "deaths", "assists",
+    "rank_at_match",
+})
+
+
+def _utc_match_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _match_feature_error(exc: Exception):
+    """Map stable parser/index failures without exposing paths or SQLite text."""
+
+    if isinstance(exc, MatchSourceError):
+        return jsonify({
+            "error": exc.code,
+            "message": exc.message,
+            "path": exc.path,
+        }), exc.http_status
+    if isinstance(exc, MatchIndexStorageFull):
+        status_code = 507
+    elif isinstance(exc, MatchIndexConflict):
+        status_code = 409
+    elif isinstance(exc, MatchIndexUnavailable):
+        status_code = 503
+    elif isinstance(exc, MatchIndexError):
+        status_code = 503
+    elif isinstance(exc, ValueError):
+        return jsonify({
+            "error": "invalid_match_data",
+            "message": str(exc),
+        }), 422
+    else:  # pragma: no cover - callers pass only the handled families
+        raise exc
+    return jsonify({"error": exc.code, "message": exc.detail}), status_code
+
+
+def _account_by_id(vault: dict[str, Any], acct_id: str) -> dict[str, Any] | None:
+    return next((a for a in vault.get("accounts", []) if a.get("id") == acct_id), None)
+
+
+def _require_match_import_account(account: dict[str, Any]) -> None:
+    if account.get("match_history_authorized") is not True:
+        raise MatchSourceAuthorizationError(
+            "source_authorization_required",
+            "Enable match-history authorization for this saved account first.",
+            path="$.account.match_history_authorized",
+        )
+    uid = str(account.get("rivals_uid") or "")
+    if _MATCH_UID_RE.fullmatch(uid) is None:
+        raise MatchSourceValidationError(
+            "account_uid_required",
+            "The saved account needs a 6 to 11 digit Marvel Rivals UID.",
+            path="$.account.rivals_uid",
+        )
+    platform = str(account.get("rivals_platform") or "unknown")
+    if platform not in RIVALS_PLATFORMS - {"unknown"}:
+        raise MatchSourceValidationError(
+            "account_platform_required",
+            "Choose an explicit platform for this saved account.",
+            path="$.account.rivals_platform",
+        )
+
+
+def _authorized_owned_accounts(vault: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only identities eligible for exact, in-memory owner matching."""
+
+    owned: list[dict[str, Any]] = []
+    for account in vault.get("accounts", []):
+        uid = str(account.get("rivals_uid") or "")
+        platform = str(account.get("rivals_platform") or "unknown")
+        if (
+            account.get("match_history_authorized") is True
+            and _MATCH_UID_RE.fullmatch(uid) is not None
+            and platform in RIVALS_PLATFORMS - {"unknown"}
+        ):
+            owned.append({
+                "account_id": account["id"],
+                "uid": uid,
+                "platform": platform,
+                "match_history_authorized": True,
+            })
+    return owned
+
+
+def _manual_source_document(account: dict[str, Any], manual: Any) -> dict[str, Any]:
+    if not isinstance(manual, dict):
+        raise MatchSourceValidationError(
+            "invalid_manual_entry", "manual must be an object.", path="$.manual"
+        )
+    unknown = sorted(set(manual) - _MANUAL_MATCH_FIELDS)
+    if unknown:
+        raise MatchSourceValidationError(
+            "unknown_field",
+            f"Unsupported manual field: {unknown[0]}",
+            path=f"$.manual.{unknown[0]}",
+        )
+    saved_platform = str(account.get("rivals_platform") or "unknown")
+    if manual.get("platform") != saved_platform:
+        raise MatchSourceValidationError(
+            "identity_mismatch",
+            "The manual entry platform must match the saved account platform.",
+            path="$.manual.platform",
+        )
+    stats = {
+        field: manual[field]
+        for field in ("kills", "deaths", "assists")
+        if manual.get(field) is not None and manual.get(field) != ""
+    }
+    match = {
+        "started_at": manual.get("occurred_at"),
+        "season": manual.get("season"),
+        "mode": manual.get("mode"),
+        "map": manual.get("map_name"),
+        "result": manual.get("result"),
+        "duration_seconds": manual.get("duration_seconds"),
+        "hero": manual.get("hero_name"),
+        "rank": manual.get("rank_at_match"),
+        "stats": stats or None,
+        # A manual row proves only the route account's own fact. It must never
+        # claim a complete lobby or infer history for another saved account.
+        "participants_complete": False,
+    }
+    return {
+        "schema": "mrat.matches.v1",
+        "source": {
+            "uid": str(account.get("rivals_uid") or ""),
+            "platform": saved_platform,
+        },
+        "match": match,
+    }
+
+
+def _read_match_import(account: dict[str, Any]):
+    """Read one bounded local source and its preview-binding digests."""
+
+    if request.is_json:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            raise MatchSourceValidationError(
+                "invalid_request", "Expected a JSON object.", path="$"
+            )
+        if body.get("authorized") is not True:
+            raise MatchSourceAuthorizationError(
+                "authorization_attestation_required",
+                "Confirm ownership or authorization for this import batch.",
+                path="$.authorized",
+            )
+        normalized = normalize_manual_entry(
+            _manual_source_document(account, body.get("manual"))
+        )
+        expected = body.get("expected_digest")
+        expected_scope = body.get("expected_scope_digest")
+    else:
+        if request.form.get("authorized") != "true":
+            raise MatchSourceAuthorizationError(
+                "authorization_attestation_required",
+                "Confirm ownership or authorization for this import batch.",
+                path="$.authorized",
+            )
+        uploaded = request.files.get("file")
+        if uploaded is None or not uploaded.filename:
+            raise MatchSourceValidationError(
+                "file_required", "Choose a local JSON or CSV file.", path="$.file"
+            )
+        explicit = str(request.form.get("format") or "").strip().lower()
+        suffix = Path(uploaded.filename).suffix.lower()
+        inferred = "json" if suffix == ".json" else "csv" if suffix == ".csv" else ""
+        format_hint = explicit or inferred
+        if format_hint not in {"json", "csv"}:
+            raise MatchSourceValidationError(
+                "unsupported_format",
+                "The local file must have a .json or .csv extension.",
+                path="$.file",
+            )
+        data = uploaded.stream.read(MATCH_MAX_UPLOAD_BYTES + 1)
+        if len(data) > MATCH_MAX_UPLOAD_BYTES:
+            raise MatchSourceLimitError(
+                "upload_too_large",
+                f"Source exceeds the {MATCH_MAX_UPLOAD_BYTES}-byte upload limit.",
+                path="$.file",
+            )
+        normalized = parse_source_bytes(data, format_hint=format_hint)
+        expected = request.form.get("expected_digest")
+        expected_scope = request.form.get("expected_scope_digest")
+    return normalized, expected, expected_scope
+
+
+def _ensure_route_source(normalized, account: dict[str, Any]) -> None:
+    if (
+        normalized.source.uid != str(account.get("rivals_uid") or "")
+        or normalized.source.platform != str(account.get("rivals_platform") or "unknown")
+    ):
+        raise MatchSourceValidationError(
+            "identity_mismatch",
+            "The import source identity must match the account in this route.",
+            path="$.source",
+        )
+
+
+def _index_facts(source_preview) -> tuple[IndexMatchFact, ...]:
+    """Cross the parser/storage boundary using only the explicit safe fields."""
+
+    return tuple(IndexMatchFact(
+        account_id=fact.account_id,
+        match_key=fact.match_key,
+        occurred_at=fact.occurred_at,
+        platform=fact.platform,
+        evidence_kind=fact.evidence_kind,
+        source_record_digest=fact.source_record_digest,
+        season=fact.season,
+        mode=fact.mode,
+        map_name=fact.map_name,
+        result=fact.result,
+        duration_seconds=fact.duration_seconds,
+        hero=fact.hero,
+        kills=fact.kills,
+        deaths=fact.deaths,
+        assists=fact.assists,
+        damage_dealt=fact.damage_dealt,
+        damage_taken=fact.damage_taken,
+        healing_done=fact.healing_done,
+        rank_at_match=fact.rank_at_match,
+        source_account_id=fact.source_account_id,
+    ) for fact in source_preview.facts)
+
+
+def _preview_classification(facts: tuple[IndexMatchFact, ...]) -> RecordClassification:
+    """Read current dispositions without creating or migrating SQLite."""
+
+    index = _match_index()
+    health = index.health()
+    if not health.available:
+        if health.error_code == "storage_full":
+            raise MatchIndexStorageFull(
+                "storage_full",
+                health.detail or "The match index storage location is full.",
+            )
+        raise MatchIndexUnavailable(
+            health.error_code or "database_unavailable",
+            health.detail or "The match index is unavailable.",
+        )
+    if health.initialized:
+        return index.classify_records(facts)
+    new_keys = tuple((fact.account_id, fact.match_key) for fact in facts)
+    return RecordClassification(len(new_keys), 0, 0, new_keys, (), ())
+
+
+def _preview_scope_digest(
+    normalized, facts: tuple[IndexMatchFact, ...], classification: RecordClassification
+) -> str:
+    """Bind commit to the exact authorized facts and DB dispositions previewed."""
+
+    payload = {
+        "policy_version": _MATCH_POLICY_VERSION,
+        "schema": normalized.schema_id,
+        "source_kind": normalized.source_kind,
+        "source": {
+            "platform": normalized.source.platform,
+            "uid": normalized.source.uid,
+        },
+        "facts": [
+            asdict(fact)
+            for fact in sorted(facts, key=lambda item: (item.account_id, item.match_key))
+        ],
+        "new_keys": sorted(classification.new_keys),
+        "duplicate_keys": sorted(classification.duplicate_keys),
+        "conflict_keys": sorted(classification.conflict_keys),
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _require_preview_scope(actual: str, expected: Any) -> None:
+    if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+        raise MatchSourceValidationError(
+            "invalid_expected_scope_digest",
+            "Expected preview scope digest must be 64 lowercase hexadecimal characters.",
+            path="$.expected_scope_digest",
+        )
+    if not hmac.compare_digest(actual, expected):
+        raise MatchSourceConflictError(
+            "preview_scope_mismatch",
+            "Owned accounts or stored match facts changed after preview; preview this import again.",
+            path="$.expected_scope_digest",
+        )
+
+
+def _prepare_match_import(
+    vault: dict[str, Any], account: dict[str, Any], *, bind_expected_digest: bool = False
+):
+    _require_match_import_account(account)
+    normalized, expected_digest, expected_scope = _read_match_import(account)
+    if bind_expected_digest:
+        require_source_digest(normalized, expected_digest)
+    _ensure_route_source(normalized, account)
+    source_preview = preview_owned_matches(normalized, _authorized_owned_accounts(vault))
+    facts = _index_facts(source_preview)
+    classification = _preview_classification(facts)
+    scope_digest = _preview_scope_digest(normalized, facts, classification)
+    if bind_expected_digest:
+        _require_preview_scope(scope_digest, expected_scope)
+    return normalized, source_preview, facts, classification, scope_digest
+
+
+def _preview_response_payload(
+    vault: dict[str, Any], normalized, source_preview, facts, classification,
+    scope_digest: str,
+) -> dict[str, Any]:
+    names = {
+        account.get("id"): account.get("in_game_name") or account.get("username") or "Saved account"
+        for account in vault.get("accounts", [])
+    }
+    per_account: dict[str, dict[str, Any]] = {}
+    for fact in facts:
+        row = per_account.setdefault(fact.account_id, {
+            "account_id": fact.account_id,
+            "in_game_name": names.get(fact.account_id, "Saved account"),
+            "direct_count": 0,
+            "inferred_count": 0,
+        })
+        key = "direct_count" if fact.evidence_kind == "direct" else "inferred_count"
+        row[key] += 1
+    duplicate_match_count = source_preview.duplicate_match_count
+    duplicate_fact_count = classification.duplicate_count
+    if classification.conflict_count:
+        state = "conflict"
+    elif source_preview.rejected_match_count and facts:
+        # A batch that contains usable (including already-stored) facts plus
+        # rejected input is partial, never a pure duplicate.  Keep the API
+        # summary aligned with the persisted match_source_state error.
+        state = "partial_import"
+    elif classification.new_count == 0 and duplicate_fact_count:
+        state = "duplicate_only"
+    elif not facts:
+        state = "rejected" if source_preview.rejected_match_count else "no_new_matches"
+    elif source_preview.rejected_match_count:
+        state = "partial_import"
+    else:
+        state = "ready"
+    return {
+        "state": state,
+        "digest": normalized.source_digest,
+        "source_digest": normalized.source_digest,
+        "scope_digest": scope_digest,
+        "source_kind": normalized.source_kind,
+        "source": {
+            "platform": normalized.source.platform,
+            "uid": normalized.source.uid,
+        },
+        "input_count": normalized.input_match_count,
+        "accepted_match_count": source_preview.accepted_match_count,
+        "accepted_count": classification.new_count,
+        "new_fact_count": classification.new_count,
+        "direct_count": source_preview.direct_fact_count,
+        "inferred_count": source_preview.inferred_fact_count,
+        "duplicate_count": duplicate_fact_count,
+        "duplicate_fact_count": duplicate_fact_count,
+        "duplicate_match_count": duplicate_match_count,
+        "rejected_count": source_preview.rejected_match_count,
+        "conflict_count": classification.conflict_count,
+        "date_from": source_preview.started_at_min,
+        "date_to": source_preview.started_at_max,
+        "rejections": [rejection.as_dict() for rejection in source_preview.rejections],
+        "accounts": list(per_account.values()),
+    }
+
+
+def _stored_match_payload(match) -> dict[str, Any]:
+    return asdict(match)
+
+
+def _match_status_payload(account: dict[str, Any], status=None) -> dict[str, Any]:
+    total_matches = status.total_matches if status is not None else 0
+    if account.get("match_history_authorized") is not True:
+        state = "authorization_revoked" if total_matches else "authorization_required"
+    elif not _MATCH_UID_RE.fullmatch(str(account.get("rivals_uid") or "")):
+        state = "identity_required"
+    elif account.get("rivals_platform") not in RIVALS_PLATFORMS - {"unknown"}:
+        state = "identity_required"
+    else:
+        state = "ready" if total_matches else "empty"
+    return {
+        "status": state,
+        "count": total_matches,
+        "direct_count": status.direct_matches if status is not None else 0,
+        "inferred_count": status.inferred_matches if status is not None else 0,
+        "first_match": status.first_occurred_at if status is not None else None,
+        "last_match": status.last_occurred_at if status is not None else None,
+        "last_success": status.last_success_at if status is not None else None,
+        "last_error": status.last_error_code if status is not None else None,
+        "retry_at": status.retry_at if status is not None else None,
+        "sources": (
+            [asdict(source) for source in status.source_states]
+            if status is not None else []
+        ),
+    }
 
 
 # ---------- routes ----------
@@ -2060,7 +2558,14 @@ def create_account():
     if err:
         return err
     payload = request.json or {}
-    acct = _account_from_payload(payload, key)
+    try:
+        acct = _account_from_payload(payload, key)
+    except AccountPayloadValidationError as exc:
+        return jsonify({
+            "error": exc.code,
+            "message": exc.message,
+            "path": exc.path,
+        }), 422
     with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
         vault = _read_vault()
         vault.setdefault("accounts", []).append(acct)
@@ -2079,7 +2584,34 @@ def update_account(acct_id: str):
         accounts = vault.get("accounts", [])
         for i, acct in enumerate(accounts):
             if acct["id"] == acct_id:
-                accounts[i] = _account_from_payload(payload, key, existing=acct)
+                try:
+                    proposed = _account_from_payload(payload, key, existing=acct)
+                except AccountPayloadValidationError as exc:
+                    return jsonify({
+                        "error": exc.code,
+                        "message": exc.message,
+                        "path": exc.path,
+                    }), 422
+                match_identity_changed = (
+                    str(proposed.get("rivals_uid") or "")
+                    != str(acct.get("rivals_uid") or "")
+                    or proposed.get("rivals_platform", "unknown")
+                    != acct.get("rivals_platform", "unknown")
+                    or (
+                        acct.get("match_history_authorized") is True
+                        and proposed.get("match_history_authorized") is not True
+                    )
+                )
+                if match_identity_changed and MATCH_INDEX_PATH.exists():
+                    try:
+                        if _match_index().has_history(acct_id):
+                            return jsonify({
+                                "error": "match_identity_conflict",
+                                "message": "Clear this account's match history before changing its UID, platform, or authorization.",
+                            }), 409
+                    except (MatchIndexError, ValueError) as exc:
+                        return _match_feature_error(exc)
+                accounts[i] = proposed
                 _write_vault(vault)
                 return jsonify({"ok": True})
     return jsonify({"error": "not_found"}), 404
@@ -2346,6 +2878,259 @@ def refresh_all_accounts_stream():
     )
 
 
+@app.route("/api/accounts/<acct_id>/matches", methods=["GET"])
+def list_account_matches(acct_id: str):
+    _key, err = _require_key()
+    if err:
+        return err
+    vault = _read_vault()
+    account = _account_by_id(vault, acct_id)
+    if account is None:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        limit = int(request.args.get("limit", "500"))
+        offset = int(request.args.get("offset", "0"))
+        if not 1 <= limit <= 500 or offset < 0:
+            raise ValueError("limit must be 1 to 500 and offset must be non-negative")
+    except (TypeError, ValueError) as exc:
+        return _match_feature_error(
+            ValueError("limit and offset must be valid integers")
+        )
+    season = request.args.get("season") or None
+    platform = request.args.get("platform") or None
+    if not MATCH_INDEX_PATH.exists():
+        return jsonify({
+            "matches": [], "total": 0, "limit": limit, "offset": offset,
+            "has_more": False,
+        })
+    try:
+        index = _match_index()
+        rows = index.list_matches(
+            acct_id, limit=limit, offset=offset, season=season, platform=platform
+        )
+        account_status = index.status(acct_id)
+        # Status totals are intentionally account-wide, so they cannot answer
+        # whether a filtered page has a successor.  Probe the next filtered row
+        # instead of treating every exactly-full page as having more data.
+        has_more = bool(rows) and len(rows) == limit and bool(index.list_matches(
+            acct_id,
+            limit=1,
+            offset=offset + len(rows),
+            season=season,
+            platform=platform,
+        ))
+    except (MatchIndexError, ValueError) as exc:
+        return _match_feature_error(exc)
+    return jsonify({
+        "matches": [_stored_match_payload(row) for row in rows],
+        "total": account_status.total_matches,
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
+    })
+
+
+@app.route("/api/accounts/<acct_id>/matches/status", methods=["GET"])
+def account_match_status(acct_id: str):
+    _key, err = _require_key()
+    if err:
+        return err
+    vault = _read_vault()
+    account = _account_by_id(vault, acct_id)
+    if account is None:
+        return jsonify({"error": "not_found"}), 404
+    if not MATCH_INDEX_PATH.exists():
+        return jsonify({"status": _match_status_payload(account)})
+    try:
+        status_value = _match_index().status(acct_id)
+    except (MatchIndexError, ValueError) as exc:
+        return _match_feature_error(exc)
+    return jsonify({"status": _match_status_payload(account, status_value)})
+
+
+@app.route("/api/accounts/<acct_id>/matches/import/preview", methods=["POST"])
+def preview_account_match_import(acct_id: str):
+    _key, err = _require_key()
+    if err:
+        return err
+    vault = _read_vault()
+    account = _account_by_id(vault, acct_id)
+    if account is None:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        normalized, source_preview, facts, classification, scope_digest = \
+            _prepare_match_import(vault, account)
+        payload = _preview_response_payload(
+            vault, normalized, source_preview, facts, classification, scope_digest
+        )
+    except (MatchSourceError, MatchIndexError, ValueError) as exc:
+        return _match_feature_error(exc)
+    return jsonify({"preview": payload})
+
+
+@app.route("/api/accounts/<acct_id>/matches/import", methods=["POST"])
+def commit_account_match_import(acct_id: str):
+    _key, err = _require_key()
+    if err:
+        return err
+    # Re-read authorization and every owned identity under the vault write lock,
+    # then keep the documented lock order while the SQLite transaction commits.
+    with _vault_write_lock:
+        vault = _read_vault()
+        account = _account_by_id(vault, acct_id)
+        if account is None:
+            return jsonify({"error": "not_found"}), 404
+        try:
+            normalized, source_preview, facts, classification, _scope_digest = \
+                _prepare_match_import(vault, account, bind_expected_digest=True)
+            if classification.conflict_count:
+                raise MatchIndexConflict(
+                    "fact_conflict",
+                    "A stored match key already has different normalized facts.",
+                )
+            if not facts:
+                raise MatchSourceValidationError(
+                    "no_importable_matches",
+                    "The source contains no valid facts for opted-in saved accounts.",
+                    path="$.matches",
+                )
+
+            # Copy only storage-safe metadata before releasing the normalized
+            # source. NormalizedImport is the sole object that can retain raw
+            # participant UIDs/names; it must not remain referenced while the
+            # SQLite transaction runs.
+            batch = MatchImportBatch(
+                source_kind=normalized.source_kind,
+                source_digest=normalized.source_digest,
+                schema_version=normalized.schema_id,
+                policy_version=_MATCH_POLICY_VERSION,
+                authorization_basis="owner_attestation",
+                imported_at=_utc_match_timestamp(),
+            )
+            rejected_count = source_preview.rejected_match_count
+            duplicate_match_count = source_preview.duplicate_match_count
+            date_from = source_preview.started_at_min
+            date_to = source_preview.started_at_max
+            rejections = tuple(
+                rejection.as_dict() for rejection in source_preview.rejections
+            )
+            del normalized, source_preview
+
+            now = batch.imported_at
+            affected_ids = {acct_id, *(fact.account_id for fact in facts)}
+            state_error = "partial_import" if rejected_count else None
+            source_states = tuple(SourceStateUpdate(
+                account_id=affected_id,
+                source_kind=batch.source_kind,
+                last_attempt_at=now,
+                last_success_at=now,
+                error_code=state_error,
+            ) for affected_id in sorted(affected_ids))
+            result = _match_index().import_records(
+                batch,
+                facts,
+                source_states=source_states,
+                rejected_count=rejected_count,
+            )
+
+            new_keys = set(classification.new_keys)
+            inserted_direct = sum(
+                (fact.account_id, fact.match_key) in new_keys
+                and fact.evidence_kind == "direct"
+                for fact in facts
+            )
+            inserted_inferred = sum(
+                (fact.account_id, fact.match_key) in new_keys
+                and fact.evidence_kind == "inferred_owned_account"
+                for fact in facts
+            )
+            if result.rejected_count and (result.accepted_count or result.duplicate_count):
+                result_state = "partial_import"
+            elif result.accepted_count:
+                result_state = "imported"
+            elif result.duplicate_count:
+                result_state = "duplicate_only"
+            else:
+                result_state = "no_new_matches"
+            summary = {
+                "state": result_state,
+                "batch_id": result.batch_id,
+                "digest": batch.source_digest,
+                "source_kind": batch.source_kind,
+                "inserted_match_count": len({
+                    fact.match_key
+                    for fact in facts
+                    if (fact.account_id, fact.match_key) in new_keys
+                }),
+                "inserted_count": result.accepted_count,
+                "inserted_fact_count": result.accepted_count,
+                "accepted_count": result.accepted_count,
+                "direct_count": inserted_direct,
+                "inferred_count": inserted_inferred,
+                "duplicate_count": result.duplicate_count,
+                "duplicate_fact_count": result.duplicate_count,
+                "duplicate_match_count": duplicate_match_count,
+                "rejected_count": result.rejected_count,
+                "date_from": date_from,
+                "date_to": date_to,
+                "rejections": list(rejections),
+            }
+            rows = _match_index().list_matches(acct_id, limit=500)
+        except (MatchSourceError, MatchIndexError, ValueError) as exc:
+            return _match_feature_error(exc)
+    return jsonify({
+        "result": result_state,
+        "summary": summary,
+        "matches": [_stored_match_payload(row) for row in rows],
+    })
+
+
+@app.route("/api/accounts/<acct_id>/matches", methods=["DELETE"])
+def clear_account_matches(acct_id: str):
+    _key, err = _require_key()
+    if err:
+        return err
+    with _vault_write_lock:
+        vault = _read_vault()
+        if _account_by_id(vault, acct_id) is None:
+            return jsonify({"error": "not_found"}), 404
+        if not MATCH_INDEX_PATH.exists():
+            return jsonify({"ok": True, "deleted": 0, "dependent_deleted": 0})
+        try:
+            purged = _match_index().purge_account(acct_id)
+        except (MatchIndexError, ValueError) as exc:
+            return _match_feature_error(exc)
+    return jsonify({
+        "ok": True,
+        "deleted": purged.facts_deleted,
+        "dependent_deleted": purged.dependent_facts_deleted,
+        "backup": purged.backup_path.name,
+    })
+
+
+def _reconcile_match_index_if_present() -> None:
+    """Best-effort orphan cleanup that can never block vault/rank startup."""
+
+    if not MATCH_INDEX_PATH.exists():
+        return
+    try:
+        with _vault_write_lock:
+            vault = _read_vault()
+            valid_ids = [
+                account["id"]
+                for account in vault.get("accounts", [])
+                if account.get("match_history_authorized") is True
+                and _MATCH_UID_RE.fullmatch(str(account.get("rivals_uid") or ""))
+                and account.get("rivals_platform") in RIVALS_PLATFORMS - {"unknown"}
+            ]
+            _match_index().reconcile_accounts(valid_ids)
+    except (MatchIndexError, ValueError, OSError) as exc:
+        # Match storage is a deliberately isolated optional feature. Keep the
+        # failure observable in local logs while allowing the vault and Tracker
+        # rank refresh paths to start normally.
+        app.logger.warning("Match-index startup reconciliation skipped: %s", exc)
+
+
 @app.route("/api/accounts/<acct_id>", methods=["DELETE"])
 def delete_account(acct_id: str):
     _key, err = _require_key()
@@ -2353,12 +3138,63 @@ def delete_account(acct_id: str):
         return err
     with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
         vault = _read_vault()
-        before = len(vault.get("accounts", []))
-        vault["accounts"] = [a for a in vault.get("accounts", []) if a["id"] != acct_id]
-        if len(vault["accounts"]) == before:
+        account = _account_by_id(vault, acct_id)
+        if account is None:
             return jsonify({"error": "not_found"}), 404
+        # Lock order is vault -> match index.  Preflight a consistent SQLite
+        # backup while the vault account still exists, then commit the vault
+        # deletion before removing its anonymous match facts.  This ordering
+        # ensures a vault-write failure can never erase live history.  A crash
+        # or later SQLite failure can leave only the safer opposite state:
+        # orphan facts with no UID/name mapping, which startup reconciliation
+        # is designed to remove.
+        index = None
+        predelete_backup = None
+        if MATCH_INDEX_PATH.exists():
+            try:
+                index = _match_index()
+                predelete_backup = index.backup(purpose="account_delete")
+            except (MatchIndexError, ValueError) as exc:
+                return _match_feature_error(exc)
+        vault["accounts"] = [a for a in vault.get("accounts", []) if a["id"] != acct_id]
         _write_vault(vault)
-    return jsonify({"ok": True})
+        if index is not None:
+            try:
+                index.purge_account(acct_id)
+            except (MatchIndexError, ValueError) as exc:
+                # The account deletion is already durable.  Try the same
+                # idempotent orphan cleanup used at startup; if storage is
+                # still unavailable, report an accepted/pending cleanup rather
+                # than falsely claiming the account itself was not deleted.
+                valid_ids = [
+                    account["id"]
+                    for account in vault.get("accounts", [])
+                    if account.get("match_history_authorized") is True
+                    and _MATCH_UID_RE.fullmatch(str(account.get("rivals_uid") or ""))
+                    and account.get("rivals_platform") in RIVALS_PLATFORMS - {"unknown"}
+                ]
+                try:
+                    index.reconcile_accounts(valid_ids)
+                except (MatchIndexError, ValueError, OSError) as reconcile_exc:
+                    app.logger.warning(
+                        "Account deleted; match-index cleanup pending (%s; %s)",
+                        exc,
+                        reconcile_exc,
+                    )
+                    return jsonify({
+                        "ok": True,
+                        "match_cleanup_pending": True,
+                        "message": (
+                            "Account deleted. Its anonymous match-index rows "
+                            "will be retried at the next app start."
+                        ),
+                        "backup": predelete_backup.name if predelete_backup else None,
+                    }), 202
+    return jsonify({
+        "ok": True,
+        "match_cleanup_pending": False,
+        "backup": predelete_backup.name if predelete_backup else None,
+    })
 
 
 # Run migrations as soon as the module is imported, so they happen regardless
@@ -2366,6 +3202,7 @@ def delete_account(acct_id: str):
 # backups/ before any write.
 _migrate_from_app_folder()
 _migrate_vault_if_needed()
+_reconcile_match_index_if_present()
 _cleanup_post_update()
 # Attempt to install a remembered key from a previous "remember me" unlock.
 # Silent — if DPAPI is unavailable or the blob is stale, the app just starts

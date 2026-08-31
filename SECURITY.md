@@ -14,9 +14,17 @@ no backend server, and no network service beyond a loopback web UI.
   cannot be recovered.
 - Other fields (in-game name, username, email, ranks, notes) are stored in
   **plain text** in the vault file — only the password field is encrypted.
-- The vault is a single `vault.json` in your per-user data folder (see the
-  README). Anyone with both read access to that folder *and* your master
-  password can read the saved passwords — protect both accordingly.
+- Optional normalized match facts are also stored locally in **plain text** in
+  `match-index.sqlite3`. Match import requires an explicit per-account opt-in
+  and ownership/authorization attestation.
+- Complete participant lists are processed only in memory to recognize other
+  opted-in vault accounts. Unrelated names/UIDs and the raw imported payload are
+  discarded before commit; the database schema has no columns for them.
+- The vault is `vault.json` and the optional match index is
+  `match-index.sqlite3` in your per-user data folder (see the README). Anyone
+  with both read access to that folder *and* your master password can read the
+  saved passwords; anyone with read access can read non-password account and
+  match metadata — protect the folder accordingly.
 - The decryption key is held only in memory and is cleared when the vault
   auto-locks, when you click **Lock**, or when the app quits.
 

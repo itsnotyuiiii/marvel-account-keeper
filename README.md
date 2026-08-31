@@ -6,6 +6,12 @@ PC. Your vault stays there. The app goes online when you refresh a rank, open a
 RivalsData profile link, load the optional interface fonts, or it checks GitHub
 for an update.
 
+You can also opt individual accounts into a local Match History index and
+import owner-authorized JSON/CSV records. Match import is separate from rank
+refresh and never contacts a match-data website in the background. See the
+[match import format](MATCH_IMPORT_FORMAT.md) for the exact schema, limits,
+privacy boundary, and examples.
+
 Don't want to store logins? You don't have to. Username, email, and password
 are all optional — you can use it purely to track ranks if that's all you want.
 
@@ -59,18 +65,23 @@ download wasn't tampered with, run this in PowerShell (it prints `True`):
 
 ## Where your data lives
 
-Your vault is a single `vault.json` file in a per-user data folder:
+Your vault and optional match index live in a per-user data folder:
 
 | OS | Location |
 |----|----------|
-| Windows | `%APPDATA%\MarvelAccountKeeper\vault.json` |
-| macOS   | `~/Library/Application Support/MarvelAccountKeeper/vault.json` |
-| Linux   | `~/.local/share/MarvelAccountKeeper/vault.json` |
+| Windows | `%APPDATA%\MarvelAccountKeeper\` |
+| macOS   | `~/Library/Application Support/MarvelAccountKeeper/` |
+| Linux   | `~/.local/share/MarvelAccountKeeper/` |
 
-Timestamped backups are written next to it under `backups/` (and a second
-copy under your `Documents/MarvelAccountsBackups/`) on every save. If you ran
-an older script-style version, your existing `vault.json` is imported
-automatically the first time the new app starts.
+Credentials and account metadata are in `vault.json`. Optional normalized
+match facts are in `match-index.sqlite3`; they are plain text, not encrypted.
+The app never stores the imported raw file or unrelated participant identities.
+
+Timestamped vault backups are written under `backups/` (and a second copy under
+your `Documents/MarvelAccountsBackups/`) on credential/account saves. The match
+index uses consistent SQLite backups under `match-backups/` before migrations
+and destructive purges. If you ran an older script-style version, your existing
+`vault.json` is imported automatically the first time the new app starts.
 
 ## Security notes
 
@@ -84,6 +95,9 @@ automatically the first time the new app starts.
   browser only when you click them; the app does not scrape RivalsData or call
   an undocumented RivalsData endpoint. Update checks call `api.github.com`.
   Emails, usernames, passwords, and notes are never sent to any of these sites.
+- Match history is opt-in per account. Imports must be owner-authorized and are
+  parsed locally. Participant UIDs are used in memory only to match other
+  opted-in accounts in the same vault, then discarded before database commit.
 - The interface loads optional typefaces from `fonts.googleapis.com` and
   `fonts.gstatic.com`. If those hosts are unavailable, the app uses system fonts
   and remains fully functional.

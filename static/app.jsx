@@ -139,9 +139,17 @@ function filterAccounts(items, q) {
 // app drops back to the lock screen. `onLocked` / `onActivity` are supplied
 // by App so this stays a plain function.
 async function apiCall(path, opts, onLocked, onActivity) {
+  const requestOpts = opts || {};
+  // Never set Content-Type for FormData: the browser must add the multipart
+  // boundary. JSON requests retain the app's existing default.
+  const isFormData = typeof FormData !== "undefined" && requestOpts.body instanceof FormData;
+  const headers = {
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
+    ...(requestOpts.headers || {}),
+  };
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
+    ...requestOpts,
+    headers,
   });
   if (res.status === 401) {
     onLocked && onLocked();
@@ -172,7 +180,8 @@ async function apiCall(path, opts, onLocked, onActivity) {
 const DRAFT_PREFIX = "marvel-tracker-draft:";
 // Password is intentionally excluded — never store decrypted secrets in localStorage.
 const DRAFT_FIELDS = [
-  "in_game_name", "rivals_uid", "username", "email", "current_rank", "peak_rank",
+  "in_game_name", "rivals_uid", "rivals_platform", "match_history_authorized",
+  "username", "email", "current_rank", "peak_rank",
   "current_points", "peak_points", "notes", "tag", "border_color", "tag_color",
   "pinned", "neon",
 ];
@@ -443,7 +452,7 @@ const Toolbar = React.forwardRef(function Toolbar(
           disabled={refreshingAll}
           title="Pull current ranks from Tracker.gg">
           <RefreshIcon spinning={refreshingAll} />
-          <span>{refreshingAll ? "Refreshing…" : "Refresh stats"}</span>
+          <span>{refreshingAll ? "Refreshing…" : "Refresh ranks"}</span>
         </button>
       )}
 
@@ -503,9 +512,13 @@ function ViewIcon({ view }) {
 // DRAWER
 // ─────────────────────────────────────────────────────────────────────────────
 function baseFormFor(acct) {
+  const platform = ["pc", "playstation", "xbox"].includes(acct?.rivals_platform)
+    ? acct.rivals_platform : "unknown";
   return {
     in_game_name: acct?.in_game_name || "",
     rivals_uid: acct?.rivals_uid || "",
+    rivals_platform: platform,
+    match_history_authorized: !!acct?.match_history_authorized,
     username: acct?.username || "",
     email: acct?.email || "",
     password: acct?.password || "",
@@ -565,7 +578,8 @@ function UidSuggester({ currentUid, unclaimedUids, onPick }) {
 }
 
 function Drawer({ open, acct, view, onClose, onSave, onDelete,
-                  unclaimedUids, activeSteam, localRivalsUids }) {
+                  unclaimedUids, activeSteam, localRivalsUids,
+                  request, showToast }) {
   const isNew = !acct?.id;
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [form, setForm] = React.useState(() => baseFormFor(null));
@@ -575,9 +589,48 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
   const [saving, setSaving] = React.useState(false);
   const asideRef = React.useRef(null);
   const restoreFocusRef = React.useRef(null);
+  const isolatedBackgroundRef = React.useRef([]);
+  const drawerTitleId = React.useId();
 
   const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]),' +
     ' textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  const restoreBackgroundIsolation = () => {
+    for (const item of isolatedBackgroundRef.current) {
+      if (item.hadInert) item.node.setAttribute("inert", "");
+      else item.node.removeAttribute("inert");
+      if (item.ariaHidden === null) item.node.removeAttribute("aria-hidden");
+      else item.node.setAttribute("aria-hidden", item.ariaHidden);
+    }
+    isolatedBackgroundRef.current = [];
+  };
+
+  // The drawer behaves as a modal. Keep the visual backdrop and keyboard trap,
+  // and also remove the underlying app/tweaks UI from pointer, focus, and
+  // screen-reader navigation while it is open.
+  React.useEffect(() => {
+    if (!open) return undefined;
+    restoreBackgroundIsolation();
+    const drawerNode = asideRef.current;
+    const shell = drawerNode?.parentElement;
+    if (!shell) return undefined;
+    const nodes = [
+      ...Array.from(shell.children).filter((node) =>
+        node !== drawerNode && !node.classList.contains("drawer-backdrop")
+      ),
+      ...Array.from(shell.parentElement?.children || []).filter((node) => node !== shell),
+    ];
+    isolatedBackgroundRef.current = nodes.map((node) => ({
+      node,
+      hadInert: node.hasAttribute("inert"),
+      ariaHidden: node.getAttribute("aria-hidden"),
+    }));
+    for (const node of nodes) {
+      node.setAttribute("inert", "");
+      node.setAttribute("aria-hidden", "true");
+    }
+    return restoreBackgroundIsolation;
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Capture the triggering element on open and restore focus to it on close,
   // so keyboard users aren't stranded in the background grid behind the panel.
@@ -588,6 +641,9 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
     restoreFocusRef.current = document.activeElement;
     return () => {
       const prev = restoreFocusRef.current;
+      // Ensure the trigger is no longer inert before restoring focus, regardless
+      // of React's effect-cleanup ordering.
+      restoreBackgroundIsolation();
       if (prev && typeof prev.focus === "function") prev.focus();
     };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -680,12 +736,15 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
            aria-hidden="true"
            title="Click to close (your draft is kept)" />
       <aside ref={asideRef} onKeyDown={onTrapKey}
-             className={"drawer" + (open ? " open" : "")} aria-hidden={!open}>
+             className={"drawer" + (open ? " open" : "")}
+             role="dialog" aria-modal={open ? "true" : undefined}
+             aria-labelledby={open ? drawerTitleId : undefined}
+             aria-hidden={!open}>
         <header className="drawer-head">
           <div>
             <div className="drawer-eyebrow">{isNew ? "NEW ACCOUNT" : "EDIT ACCOUNT"}</div>
             <div className="drawer-title-row">
-              <h2 className="drawer-title">{isNew ? "Add an account" : form.in_game_name || "Untitled"}</h2>
+              <h2 className="drawer-title" id={drawerTitleId}>{isNew ? "Add an account" : form.in_game_name || "Untitled"}</h2>
               {!isNew && acct && (
                 <window.PresenceBadge acct={acct}
                                       activeSteam={activeSteam}
@@ -716,6 +775,19 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
             <Field label="Marvel Rivals UID" value={form.rivals_uid}
             onChange={(v) => set("rivals_uid", v)}
             placeholder="recommended — numeric player ID" />
+            <label className="dr-field">
+              <span className="dr-field-lbl">Platform</span>
+              <select value={form.rivals_platform}
+                      onChange={(e) => set("rivals_platform", e.target.value)}>
+                <option value="unknown">Unknown</option>
+                <option value="pc">PC</option>
+                <option value="playstation">PlayStation</option>
+                <option value="xbox">Xbox</option>
+              </select>
+              <span className="dr-field-hint">
+                Required for exact UID matching in the local match index.
+              </span>
+            </label>
             {isNew && (
               <UidSuggester
                 currentUid={form.rivals_uid}
@@ -740,6 +812,16 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
                 </p>
               </div>
             )}
+            <label className="drawer-pin-row drawer-auth-row">
+              <span>
+                Authorize local match history
+                <em className="drawer-hint">
+                  Enable only for an account you own or are authorized to manage.
+                </em>
+              </span>
+              <input type="checkbox" checked={form.match_history_authorized}
+                     onChange={(e) => set("match_history_authorized", e.target.checked)} />
+            </label>
           </section>
 
           <section className="drawer-section">
@@ -787,6 +869,18 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
               </div>
             </div>
           </section>
+
+          <window.MatchHistoryPanel
+            account={acct}
+            configuredPlatform={acct?.rivals_platform || "unknown"}
+            authorized={!!acct?.match_history_authorized}
+            configurationDirty={
+              String(form.rivals_uid || "").trim() !== String(acct?.rivals_uid || "").trim()
+              || form.rivals_platform !== (acct?.rivals_platform || "unknown")
+              || !!form.match_history_authorized !== !!acct?.match_history_authorized
+            }
+            request={request}
+            showToast={showToast} />
 
           <section className="drawer-section">
             <div className="drawer-section-lbl">Tag</div>
@@ -1559,6 +1653,8 @@ function App() {
     const payload = {
       in_game_name: next.in_game_name || "",
       rivals_uid: next.rivals_uid || "",
+      rivals_platform: next.rivals_platform || "unknown",
+      match_history_authorized: !!next.match_history_authorized,
       username: next.username || "",
       email: next.email || "",
       password: next.password || "",
@@ -1603,10 +1699,12 @@ function App() {
   const onDelete = async (acct) => {
     if (!acct?.id) { setDrawer({ open: false, acct: null }); return true; }
     try {
-      await api(`/api/accounts/${acct.id}`, { method: "DELETE" });
+      const result = await api(`/api/accounts/${acct.id}`, { method: "DELETE" });
       await loadAccounts();
       setDrawer({ open: false, acct: null });
-      showToast("Deleted");
+      showToast(result?.match_cleanup_pending
+        ? "Deleted · match cleanup will retry next start"
+        : "Deleted");
       return true;
     } catch (e) {
       if (!e.locked) {
@@ -1965,7 +2063,9 @@ function App() {
           onDelete={onDelete}
           unclaimedUids={unclaimedUids}
           activeSteam={activeSteam}
-          localRivalsUids={localRivalsUids} />
+          localRivalsUids={localRivalsUids}
+          request={api}
+          showToast={showToast} />
 
       </div>
 

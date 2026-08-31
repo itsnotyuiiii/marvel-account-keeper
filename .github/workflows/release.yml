@@ -45,8 +45,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Run unit and integration tests
+        run: >-
+          python -m unittest
+          tests.match_index_test
+          tests.match_import_test
+          tests.match_routes_test
+          tests.stats_provider_test
+          -v
+
       - name: Build executable
         run: python build.py
+
+      - name: Test packaged Windows restart path
+        if: runner.os == 'Windows'
+        run: python tests/update_hop_test.py "${{ matrix.built }}"
 
       - name: Stage artifact + checksum
         shell: bash

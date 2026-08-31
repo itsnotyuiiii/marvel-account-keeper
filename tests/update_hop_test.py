@@ -73,6 +73,29 @@ def _kill(pid: int) -> None:
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # taskkill can return before Windows has fully torn down the
+            # process and released its instance.lock handle. Waiting on the
+            # process handle keeps TemporaryDirectory cleanup deterministic.
+            import ctypes
+            from ctypes import wintypes
+            synchronize = 0x00100000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = (
+                wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+            )
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = (
+                wintypes.HANDLE, wintypes.DWORD,
+            )
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(synchronize, False, pid)
+            if handle:
+                try:
+                    kernel32.WaitForSingleObject(handle, 10_000)
+                finally:
+                    kernel32.CloseHandle(handle)
         else:
             os.kill(pid, signal.SIGTERM)
     except Exception:

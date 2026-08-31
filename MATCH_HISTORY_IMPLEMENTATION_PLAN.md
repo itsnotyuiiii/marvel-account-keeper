@@ -1,7 +1,37 @@
 # Safe Match History Implementation Plan
 
-Status: proposed, not yet implemented
+Status: Phases 0-4 implemented and verified locally; preserved on a WIP branch;
+Phase 5 blocked; not released
 Last reviewed: 2026-08-30
+
+## Implementation status
+
+The local owner-authorized design in Phases 0-4 is implemented in the current
+working tree as the v2.16.0 development candidate. Verification completed on
+2026-08-30 includes:
+
+- 70 focused database, import, route, rank-isolation, vault-migration, and
+  provider-regression tests.
+- A clean Windows one-file package build and both packaged update/restart-hop
+  checks.
+- A fresh packaged-app smoke test against a synthetic, isolated vault. Preview
+  remained non-mutating; commit created one direct and one inferred-owned fact;
+  the SQLite file contained no participant UID, player name, or raw payload.
+- Packaged route checks for locked-vault `401` behavior and bad-Host `403`
+  rejection, plus UI checks for lazy history loading, evidence labels,
+  plaintext disclosure, modal isolation/focus, non-destructive clear
+  confirmation, and the complete 100/500-row rendering and server-pagination
+  path with 551 synthetic matches.
+
+This candidate is preserved on the `codex/wip-safe-match-history` continuation
+branch, but it has not been merged, tagged, or published. The branch was cut
+from `23937e2`, one commit behind `origin/main` (`92de1cc`, the v2.15.1 release),
+so it must be reconciled and the package rebuilt from the resulting commit
+before any release. See `CODEX_HANDOFF.md` for the paste-ready continuation
+prompt and verification checklist.
+
+Phase 5 remains intentionally blocked. No RivalsData scraper, private endpoint,
+paid-feature bypass, or live-game/process collector has been added.
 
 ## Research result
 

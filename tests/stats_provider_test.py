@@ -41,6 +41,11 @@ class ProviderMigrationTest(unittest.TestCase):
                     item.unlink()
 
     def test_legacy_provider_data_is_pruned_with_backup(self) -> None:
+        migration_key = b"M" * 32
+        encrypted_password = tracker_app._encrypt(
+            migration_key,
+            "synthetic-v2.15-password",
+        )
         legacy = {
             "initialized": True,
             "kdf": {"salt": "preserve-me"},
@@ -57,7 +62,9 @@ class ProviderMigrationTest(unittest.TestCase):
                     "in_game_name": "LegacyPlayer",
                     "current_rank": "Gold II",
                     "peak_rank": "Diamond III",
-                    "password_enc": {"ct": "keep-ciphertext"},
+                    "current_points": 4180,
+                    "peak_points": 4312,
+                    "password_enc": encrypted_password,
                     "last_refresh_status": "bad_key",
                     "last_refresh_source": "marvelrivalsapi",
                     "last_refresh_error": "old provider error",
@@ -94,8 +101,16 @@ class ProviderMigrationTest(unittest.TestCase):
         self.assertEqual(migrated["kdf"], legacy["kdf"])
         self.assertEqual(migrated["verifier"], legacy["verifier"])
         self.assertEqual(account["password_enc"], legacy["accounts"][0]["password_enc"])
+        self.assertEqual(
+            tracker_app._decrypt(migration_key, account["password_enc"]),
+            "synthetic-v2.15-password",
+        )
         self.assertEqual(account["current_rank"], "Gold II")
         self.assertEqual(account["peak_rank"], "Diamond III")
+        self.assertEqual(account["current_points"], 4180)
+        self.assertEqual(account["peak_points"], 4312)
+        self.assertEqual(account["rivals_platform"], "unknown")
+        self.assertFalse(account["match_history_authorized"])
         self.assertNotIn("marvel_rivals_api_key", migrated["config"])
         self.assertNotIn("rivals_api_usage", migrated["config"])
         for removed in (
@@ -186,6 +201,36 @@ class TrackerRefreshTest(unittest.TestCase):
         self.assertEqual(result["peak_rank"], "Diamond III")
         self.assertEqual(result["peak_points"], 2988)
         self.assertTrue(result["tracker_history_private"])
+
+    def test_profile_refresh_does_not_rewrite_malformed_uid(self) -> None:
+        payload = {
+            "data": {
+                "platformInfo": {
+                    "platformUserHandle": "MalformedUidPlayer",
+                    "platformUserId": "abc123-456xyz",
+                },
+                "metadata": {},
+                "segments": [{
+                    "type": "overview",
+                    "stats": {
+                        "ranked": {
+                            "value": 1450,
+                            "metadata": {"tierName": "Gold II"},
+                        },
+                    },
+                }],
+            },
+        }
+        with patch.object(tracker_app, "_fetch_tracker_player",
+                          return_value=(200, payload, None)):
+            result = tracker_app._refresh_account_stats({
+                "in_game_name": "MalformedUidPlayer",
+                "rivals_uid": "",
+            })
+
+        self.assertEqual(result["last_refresh_status"], "ok")
+        self.assertEqual(result["current_rank"], "Gold II")
+        self.assertNotIn("rivals_uid", result)
 
     def test_unavailable_profile_is_not_claimed_private(self) -> None:
         unavailable = {
@@ -416,14 +461,16 @@ class TrackerRefreshTest(unittest.TestCase):
 
 
 class SurfaceCleanupTest(unittest.TestCase):
-    def test_removed_routes_and_status_field_are_absent(self) -> None:
+    def test_retired_provider_surface_is_absent_and_local_matches_exist(self) -> None:
         client = tracker_app.app.test_client()
         status = client.get("/api/status")
         self.assertEqual(status.status_code, 200)
         self.assertNotIn("has_marvel_rivals_api_key", status.get_json())
         self.assertEqual(client.get("/api/rivals/sync-status").status_code, 404)
         rules = {rule.rule for rule in tracker_app.app.url_map.iter_rules()}
-        self.assertNotIn("/api/accounts/<acct_id>/matches", rules)
+        self.assertIn("/api/accounts/<acct_id>/matches", rules)
+        self.assertIn("/api/accounts/<acct_id>/matches/import/preview", rules)
+        self.assertIn("/api/accounts/<acct_id>/matches/import", rules)
         self.assertNotIn("/api/rivals/lookup-uid/<uid>", rules)
 
     def test_public_ui_has_only_user_opened_rivalsdata_link(self) -> None:
