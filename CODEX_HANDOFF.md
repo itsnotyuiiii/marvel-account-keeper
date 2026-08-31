@@ -34,11 +34,13 @@ Current state:
   database of unrelated players, or add live-game/process/packet collection.
 - Rank refresh and match-history state must remain isolated. A match-index
   failure must not change rank-refresh state.
-- The branch was cut before the v2.15.1 release commit. Reconcile it with
-  origin/main before any release, preserving APP_VERSION 2.16.0 for this
-  development candidate unless the release plan changes explicitly.
+- The branch now includes the v2.15.1 release commit from origin/main and keeps
+  APP_VERSION 2.16.0 for this development candidate. Do not publish until a
+  fresh packaged build passes the release checks below.
 
-Latest continuation checkpoint (verified 2026-08-30):
+Latest continuation checkpoint (verified 2026-08-31):
+- The continuation branch is reconciled with origin/main at `92de1cc` while
+  preserving APP_VERSION 2.16.0.
 - The required focused suite and full `*_test.py` discovery both pass: 76 tests.
 - Preview and commit now share control-character validation.
 - Persisted match, provenance, and exact-source tokens are keyed with the

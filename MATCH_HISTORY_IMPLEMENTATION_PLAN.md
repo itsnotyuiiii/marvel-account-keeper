@@ -2,7 +2,7 @@
 
 Status: Phases 0-4 implemented and verified locally; preserved on a WIP branch;
 Phase 5 blocked; not released
-Last reviewed: 2026-08-30
+Last reviewed: 2026-08-31
 
 ## Implementation status
 
@@ -24,11 +24,11 @@ working tree as the v2.16.0 development candidate. Verification completed on
   path with 551 synthetic matches.
 
 This candidate is preserved on the `codex/wip-safe-match-history` continuation
-branch, but it has not been merged, tagged, or published. The branch was cut
-from `23937e2`, one commit behind `origin/main` (`92de1cc`, the v2.15.1 release),
-so it must be reconciled and the package rebuilt from the resulting commit
-before any release. See `CODEX_HANDOFF.md` for the paste-ready continuation
-prompt and verification checklist.
+branch, but it has not been merged into main, tagged, or published. The branch
+now includes `origin/main` at `92de1cc` (the v2.15.1 release) and preserves
+APP_VERSION 2.16.0. The package must be rebuilt from the resulting committed
+tree and pass the release checks before publication. See `CODEX_HANDOFF.md` for
+the paste-ready continuation prompt and verification checklist.
 
 Phase 5 remains intentionally blocked. No RivalsData scraper, private endpoint,
 paid-feature bypass, or live-game/process collector has been added.
