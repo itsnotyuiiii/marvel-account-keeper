@@ -2,3 +2,5 @@
 # packaging toolchain. Used by build.py and the GitHub Actions release job.
 -r requirements.txt
 pyinstaller>=6.21.0
+# Synthetic SocialMatrix compression fixtures and experimental Career builds.
+lz4==4.4.5

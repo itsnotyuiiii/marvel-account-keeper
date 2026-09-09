@@ -938,11 +938,11 @@ html[data-theme="light"] .rcard-rval {
   overflow-wrap: anywhere;
   min-width: 0;
 }
-.tbl-rank-cell > span:last-child {
+.tbl-rank-cell > .tbl-rank-value {
   color: var(--rk-fg, var(--fg));
   text-shadow: 0 0 8px color-mix(in oklab, var(--rk-fg, transparent) 45%, transparent);
 }
-html[data-theme="light"] .tbl-rank-cell > span:last-child {
+html[data-theme="light"] .tbl-rank-cell > .tbl-rank-value {
   color: var(--rk-glow, var(--fg));
   text-shadow: none;
 }
@@ -1372,6 +1372,31 @@ html[data-theme="light"] .lad-peak-val {
 /* ============================================================================
    MATCH HISTORY (local, owner-authorized index)
    ============================================================================ */
+.career-live { margin: 0 24px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.career-live-toggle { width: 100%; padding: 14px 16px; display: flex; align-items: center; gap: 14px; color: var(--text); background: none; border: 0; text-align: left; cursor: pointer; }
+.career-live-toggle b { font-size: 14px; }
+.career-live-toggle span { color: var(--muted); font-size: 12px; }
+.career-live-toggle span:last-child { margin-left: auto; font-size: 20px; }
+.career-live-content { padding: 0 18px 18px; border-top: 1px solid var(--border); }
+.career-live-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 16px 0 8px; }
+.career-live-actions p, .career-live-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.career-live-content h3 { font-size: 14px; margin: 22px 0 12px; }
+.career-live-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.career-live-stats div { padding: 14px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+.career-live-stats span { display: block; color: var(--muted); font-size: 12px; }
+.career-live-stats strong { display: block; margin-top: 8px; font-size: 24px; }
+.career-live-error { color: #f18d8d; font-size: 13px; }
+.career-rank-summary { padding: 2px 16px 10px; border: 1px solid var(--border); border-radius: 8px; margin-top: 16px; }
+.career-rank-summary p { font-size: 13px; line-height: 1.6; }
+.netease-card-details { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; font-size: 11px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.netease-card-details.is-compact { margin: 8px 0 0; font-size: 10px; }
+.tbl-rank-cell small { font-size: 10px; color: var(--muted); white-space: nowrap; flex: 0 0 auto; }
+.career-live-table-wrap { overflow: auto; max-height: 420px; }
+.career-live-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.career-live-table th, .career-live-table td { padding: 11px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.career-live-table th { color: var(--muted); font-weight: 500; }
+@media (max-width: 700px) { .career-live { margin: 0 10px 14px; } .career-live-actions { align-items: flex-start; flex-direction: column; } .career-live-stats { grid-template-columns: repeat(3, 1fr); } .career-live-toggle { flex-wrap: wrap; gap: 6px; } }
+
 .mh-section {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1866,7 +1891,7 @@ html[data-theme="light"] .mh-evidence-direct { color: #1f8c49; }
   .app-viewseg-btn { padding: 0 10px; }
   .tbl-cols, .tbl-row-main { grid-template-columns: 28px 1fr 90px 32px; }
   .tbl-cols .tbl-col-peak, .tbl-cols .tbl-col-time,
-  .tbl-row-main .tbl-rank-cell:nth-of-type(2), .tbl-row-main .tbl-time { display: none; }
+  .tbl-row-main .tbl-rank-peak, .tbl-row-main .tbl-time { display: none; }
 }
 
 /* ── Restored-draft banner (Flask integration: drawer auto-save) ───────── */

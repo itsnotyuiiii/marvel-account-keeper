@@ -306,6 +306,9 @@ class TrackerRefreshTest(unittest.TestCase):
                 })
             self.assertEqual(result["last_refresh_status"], expected_status)
             self.assertEqual(result["last_refresh_code"], expected_code)
+            if expected_code == "provider_blocked":
+                self.assertIn("does not mean your UID is invalid", result["last_refresh_error"])
+                self.assertIn("HTTP 403", result["last_refresh_error"])
 
     def test_unrelated_segment_schema_drift_does_not_hide_valid_rank(self) -> None:
         payload = {

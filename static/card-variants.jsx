@@ -282,16 +282,35 @@ const HISTORY_PRIVATE_NOTE =
 // can't push the rank rows around. The full long-form message is also passed
 // through to the chip's `title` attribute as a native hover tooltip.
 const SYNC_META = {
-  not_found:      { sym: "?",  cls: "muted", text: "Player not found — check IGN",
-                    long: "Tracker.gg did not find the saved UID or in-game name" },
+  career_not_connected: { sym: "○", cls: "muted", text: "NetEase session needed",
+                          long: "The app needs one shared NetEase connection. Target players do not need to log in locally." },
+  career_not_configured: { sym: "○", cls: "muted", text: "NetEase connection not configured" },
+  career_rate_limited: { sym: "!", cls: "err", text: "NetEase requested a pause — retry later" },
+  career_busy: { sym: "○", cls: "muted", text: "Another NetEase lookup is running" },
+  career_cooldown: { sym: "○", cls: "muted", text: "Just refreshed — wait 30 seconds" },
+  career_request_unavailable: { sym: "!", cls: "err", text: "NetEase request unavailable — saved data kept" },
+  career_identity_unavailable: { sym: "!", cls: "err", text: "Player identity unavailable — saved data kept" },
+  career_search_unavailable: { sym: "!", cls: "err", text: "NetEase name search unavailable" },
+  player_name_ambiguous: { sym: "?", cls: "muted", text: "No unique IGN match — use UID" },
+  career_profile_restricted: { sym: "○", cls: "muted", text: "Career overview restricted — saved ranks kept" },
+  career_platform_required: { sym: "?", cls: "muted", text: "Select this player’s platform" },
+  career_session_expired: { sym: "!", cls: "err", text: "NetEase session expired — reconnect" },
+  career_session_unavailable: { sym: "!", cls: "err", text: "NetEase connection unavailable" },
+  career_rank_unavailable: { sym: "!", cls: "err", text: "Rank unavailable — saved ranks kept" },
+  invalid_in_game_name: { sym: "?", cls: "muted", text: "Check the in-game name" },
+  career_current_rank_unavailable: { sym: "!", cls: "err", text: "Current rank unavailable — saved rank kept" },
+  career_request_failed: { sym: "!", cls: "err", text: "NetEase request failed — saved data kept" },
+  career_shape_changed: { sym: "!", cls: "err", text: "Unfamiliar NetEase stats — saved data kept" },
+  not_found:      { sym: "?",  cls: "muted", text: "Player not found — check UID / IGN",
+                    long: "No matching player identity was returned for the saved UID or in-game name" },
   player_not_found: { sym: "?", cls: "muted", text: "Player not found — check UID / IGN",
-                      long: "Tracker.gg did not find the saved UID or in-game name" },
+                      long: "No matching player identity was returned for the saved UID or in-game name" },
   no_ranked_data: { sym: "?", cls: "muted", text: "Profile found — no ranked data",
                     long: "Tracker.gg found the profile but returned no ranked data" },
   profile_unavailable: { sym: "!", cls: "err", text: "Profile unavailable — cached rank kept",
                          long: "Tracker.gg recognizes this player but cannot expose the profile" },
-  missing_handle: { sym: "?",  cls: "muted", text: "No IGN set — refresh skipped",
-                    long: "No in-game name set — refresh skipped" },
+  missing_handle: { sym: "?",  cls: "muted", text: "No UID or IGN — refresh skipped",
+                    long: "Enter a UID or in-game name to look up this player" },
   missing_identity: { sym: "?", cls: "muted", text: "No UID or IGN — refresh skipped",
                       long: "No in-game name or UID is saved for this account" },
   rate_limited:   { sym: "!", cls: "err", text: "Tracker.gg rate limited — retry later",
@@ -313,6 +332,7 @@ const SYNC_META = {
 // Short human label for the data source field on each account.
 const SOURCE_LABEL = {
   tracker: "Tracker.gg",
+  netease: "NetEase",
 };
 
 // How long (ms) the server enforces between refreshes of the same account.
@@ -324,7 +344,8 @@ const PER_ACCOUNT_COOLDOWN_MS = 20 * 1000;
 function refreshCooldownLeft(acct) {
   const ts = toMs(acct.last_refresh_ts);
   if (ts == null) return 0;
-  const left = PER_ACCOUNT_COOLDOWN_MS - (Date.now() - ts);
+  const cooldown = acct.stats_provider === "netease" ? 30000 : PER_ACCOUNT_COOLDOWN_MS;
+  const left = cooldown - (Date.now() - ts);
   return left > 0 ? Math.ceil(left / 1000) : 0;
 }
 
@@ -345,7 +366,7 @@ function RefreshBtn({ acct, refreshing, onRefresh,
   } else if (meta) {
     title = acct.last_refresh_error || meta.text;
   } else {
-    title = "Refresh rank from Tracker.gg";
+    title = acct.stats_provider === "netease" ? "Refresh rank and stats directly from NetEase" : "Refresh rank from Tracker.gg";
   }
   const blocked = refreshing || cooldownLeft > 0;
   return (
@@ -391,7 +412,8 @@ function SyncChip({ acct }) {
     return (
       <div className="sync-chip sync-chip-muted" data-state="none">
         <span className="sync-chip-i" aria-hidden="true">○</span>
-        <span className="sync-chip-t">Not synced yet — hit ↻ to pull the live rank</span>
+        <span className="sync-chip-t">{acct.stats_provider === "netease" && !acct.netease_connected
+          ? "Enter a UID or IGN to look up" : "Not synced yet — hit ↻ to refresh"}</span>
       </div>
     );
   }
@@ -426,6 +448,10 @@ function SyncChip({ acct }) {
     text = `Latest ranks · match history private${srcSuffix}`;
     longText = HISTORY_PRIVATE_NOTE;
   }
+  if (acct.last_refresh_source === "netease" && (state === "current" || state === "fresh")) {
+    text = `NetEase synced ${fmtRelative(synced)}`;
+    longText = "Authenticated NetEase read; displayed rank may be an estimate until placements finish. The profile's own update time is separate from this fetch time.";
+  }
 
   return (
     <div className={"sync-chip sync-chip-" + cls} data-state={state}
@@ -439,6 +465,26 @@ function SyncChip({ acct }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // B. CARDS  (refined trading-card)
 // ─────────────────────────────────────────────────────────────────────────────
+function NetEaseCardDetails({ acct, compact = false }) {
+  const stats = acct.netease_profile;
+  const rank = acct.netease_rank;
+  if (!stats && !rank && !acct.netease_profile_note) return null;
+  return <div className={"netease-card-details" + (compact ? " is-compact" : "")}
+      title={rank?.upstream_updated_at ? `NetEase rank last changed ${fmtAbsolute(rank.upstream_updated_at)}` : undefined}>
+    {rank && <span>Rank season {rank.season}{rank.qualification === "estimated"
+      ? ` · Estimated · Placements ${rank.placements_completed ?? "?"}/10`
+      : rank.qualification === "ranked" ? " · Placed" : " · Placement status unknown"}</span>}
+    {rank?.record && <span>Ranked record · {rank.record.matches} matches · {rank.record.wins} wins</span>}
+    {stats && <span>Stats season {stats.season} · {stats.matches} matches · {stats.wins} wins
+      {!compact && ` · K/D/A ${stats.kills}/${stats.deaths}/${stats.assists}`}</span>}
+    {acct.netease_profile_note && <span title={acct.netease_profile_note}>
+      {acct.netease_visibility === "restricted" || acct.netease_visibility === "unknown"
+        ? "Career overview restricted" : `Detailed stats ${stats ? "not refreshed" : "not connected"}`}
+    </span>}
+    {rank?.higher_saved_peak_kept && <span>Higher saved peak retained</span>}
+  </div>;
+}
+
 function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, activeSteam, localRivalsUids }) {
   const cur = themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
@@ -488,7 +534,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
 
       <div className="rcard-name-row">
         <h3 className={"rcard-ign" + (acct.in_game_name ? "" : " rcard-ign-empty")}>
-          {acct.in_game_name || "No IGN set"}
+          {acct.in_game_name || (acct.rivals_uid ? `UID ${acct.rivals_uid}` : "No IGN set")}
         </h3>
         <TagPill acct={acct} />
       </div>
@@ -503,7 +549,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
       <div className="rcard-ranks">
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: cur?.fg }} />
-          <span className="rcard-rlbl">CURRENT</span>
+          <span className="rcard-rlbl" title={acct.netease_rank?.qualification === "estimated" ? "Estimated rank; placements unfinished" : undefined}>{acct.netease_rank?.qualification === "estimated" ? "EST." : "CURRENT"}</span>
           <span className="rcard-rval" style={rankInk(cur)}
                 title={rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}>
             {rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}
@@ -519,6 +565,7 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
         </div>
       </div>
 
+      <NetEaseCardDetails acct={acct} />
       <SyncChip acct={acct} />
 
       {!opts.hideCopy && (
@@ -605,21 +652,22 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ac
 
         <div className="tbl-ign-cell">
           <span className={"tbl-ign" + (acct.in_game_name ? "" : " tbl-ign-empty")}>
-            {acct.in_game_name || "No IGN set"}
+            {acct.in_game_name || (acct.rivals_uid ? `UID ${acct.rivals_uid}` : "No IGN set")}
           </span>
           {lab.kind === "main" && <span className="tbl-tag">main</span>}
           {lab.kind === "oaa"  && <span className="tbl-tag tbl-tag-oaa">peak oaa</span>}
           <TagPill acct={acct} />
         </div>
 
-        <div className="tbl-rank-cell">
+        <div className="tbl-rank-cell tbl-rank-current">
           <span className="tbl-rdot" style={{ background: cur?.fg }} />
-          <span style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}</span>
+          <span className="tbl-rank-value" style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}</span>
+          {acct.netease_rank?.qualification === "estimated" && <small title="Estimated rank; placements unfinished">est.</small>}
         </div>
 
-        <div className="tbl-rank-cell">
+        <div className="tbl-rank-cell tbl-rank-peak">
           <span className="tbl-rdot" style={{ background: peak?.fg }} />
-          <span style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}</span>
+          <span className="tbl-rank-value" style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}</span>
         </div>
 
         <div className="tbl-time" title={updatedTitle(acct)}>{fmtRelative(acct.updated_at)}</div>
@@ -639,6 +687,7 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ac
 
       {open && (
         <div className="tbl-row-detail">
+          <NetEaseCardDetails acct={acct} />
           <SyncChip acct={acct} />
           {!opts.hideDetails && (
             <div className="tbl-detail-meta">
@@ -712,7 +761,7 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
     for (const t of TIER_ORDER) m.set(t, []);
     m.set("Unranked", []);
     for (const a of accounts) {
-      const t = tierOf(a[field]) || "Unranked";
+      const t = tierOf(a[field]) || (a.stats_provider === "netease" ? "No verified rank" : "Unranked");
       if (!m.has(t)) m.set(t, []);
       m.get(t).push(a);
     }
@@ -788,7 +837,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, activeSt
     >
       <div className="lad-line">
         <span className={"lad-ign" + (acct.in_game_name ? "" : " lad-ign-empty")}>
-          {acct.in_game_name || "No IGN set"}
+          {acct.in_game_name || (acct.rivals_uid ? `UID ${acct.rivals_uid}` : "No IGN set")}
         </span>
         <div className="lad-line-r">
           <TagPill acct={acct} />
@@ -809,6 +858,7 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, activeSt
           {rankDisplay(secRank, secPoints, { tierRelative: opts.srTierRelative })}
         </span>
       </div>
+      <NetEaseCardDetails acct={acct} compact />
     </article>
   );
 }

@@ -1,0 +1,10 @@
+# Optional analysis tools plus dependencies bundled by build-career.py for
+# the experimental direct-NetEase desktop build (not the legacy Tracker build).
+dpkt==1.9.8
+msgpack==1.2.2
+pefile==2024.8.26
+capstone==5.0.9
+xdis==6.3.0
+lz4==4.4.5
+blake3==1.0.9
+pyooz==0.0.8

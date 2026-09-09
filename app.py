@@ -42,6 +42,9 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from career_provider import CapturedCareerProvider, CareerUnavailable
+
+_career_provider = None  # Explicit startup opt-in; no token or path is stored in the vault.
 
 from match_index import (
     ImportBatch as MatchImportBatch,
@@ -129,6 +132,10 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
                                    # last-played/last-login signal. Suppresses the misleading
                                    # "dormant — Xd ago" framing. Never feeds last_refresh_status.
     "rivals_synced_at": None,      # epoch — upstream profile timestamp when available
+    "netease_profile": None,      # projected UID-bound aggregate stats, never raw replies
+    "netease_rank": None,         # explicit season/placement/source metadata for displayed ranks
+    "netease_profile_note": None, # explicit missing/stale detailed Career stats, separate from rank success
+    "netease_visibility": None,
 }
 
 # Keep refresh-all deliberately slow so a local vault never hammers the
@@ -188,8 +195,13 @@ def _load_build_info() -> dict[str, Any]:
 
 
 _BUILD_INFO = _load_build_info()
+_netease_only = _BUILD_INFO.get("stats_provider") == "netease"
 APP_COMMIT = (_BUILD_INFO.get("commit") or "").strip() or "dev"
 APP_BUILT_AT = _BUILD_INFO.get("built_at")  # ISO 8601 string or None
+
+
+def _using_netease() -> bool:
+    return _netease_only or _career_provider is not None
 
 
 def _data_dir() -> Path:
@@ -1864,8 +1876,10 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
         elif last_failure_status in (401, 403):
             code = "provider_blocked"
             message = (
-                f"Tracker.gg refused the profile request (HTTP "
-                f"{last_failure_status}). Try again later; any saved rank was kept."
+                f"Tracker.gg blocked this app's API request (HTTP "
+                f"{last_failure_status}). This does not mean your UID is invalid. "
+                "The profile may still load in a browser, which uses a different "
+                "session. Any saved rank was kept."
             )
         elif last_failure_status >= 500:
             code = "provider_unavailable"
@@ -1907,7 +1921,7 @@ def _try_tracker(acct: dict[str, Any]) -> dict[str, Any]:
 
 
 def _refresh_account_stats(acct: dict[str, Any]) -> dict[str, Any]:
-    """Refresh one account's public rank data without credentials."""
+    """Career-enabled builds use NetEase only; legacy launches retain Tracker."""
     now = int(time.time())
     base: dict[str, Any] = {
         "last_refresh_ts": now,
@@ -1919,7 +1933,68 @@ def _refresh_account_stats(acct: dict[str, Any]) -> dict[str, Any]:
         # the profile's match history private (see _parse_tracker_payload).
         "tracker_history_private": False,
     }
+    if _using_netease():
+        return {**base, **_try_netease(acct)}
     return {**base, **_try_tracker(acct)}
+
+
+def _try_netease(acct: dict[str, Any]) -> dict[str, Any]:
+    result = {"last_refresh_source": "netease", "last_refresh_status": "error"}
+    if _career_provider is None:
+        return {**result, "last_refresh_code": "career_not_configured",
+                "last_refresh_error": "No shared NetEase session is connected. Open the configured NetEase desktop shortcut. No third-party lookup was made."}
+    try:
+        snapshot = _career_provider.refresh_account(acct)
+    except CareerUnavailable as error:
+        result.update(last_refresh_code=error.code, last_refresh_error=error.message)
+        if error.code == "missing_identity":
+            result["last_refresh_status"] = "missing_handle"
+        elif error.code == "player_not_found":
+            result["last_refresh_status"] = "not_found"
+        if error.status == 429:
+            result["_retry_after_s"] = 30
+        return result
+    # Bind results to the identity used for the request, and check it again
+    # inside the vault-write lock. Editing a UID during a read cannot misapply
+    # one account's ranks/statistics to another account.
+    original_uid = str(acct.get("rivals_uid") or "")
+    if original_uid and snapshot["uid"] != original_uid or \
+            not original_uid and RIVALS_UID_RE.fullmatch(snapshot["uid"]) is None:
+        return {**result, "last_refresh_code": "career_identity_unavailable",
+                "last_refresh_error": "NetEase did not verify the requested player identity. Saved values were kept."}
+    result["_netease_identity"] = (original_uid, acct.get("rivals_platform") or "unknown", acct.get("in_game_name") or "")
+    if not original_uid:
+        result["rivals_uid"] = snapshot["uid"]
+    if snapshot.get("in_game_name"):
+        result["in_game_name"] = snapshot["in_game_name"]
+    if acct.get("rivals_platform") in {None, "", "unknown"}:
+        result["rivals_platform"] = snapshot["platform"]
+    result["netease_profile_note"] = snapshot.get("profile_error")
+    result["netease_visibility"] = snapshot.get("visibility")
+    if isinstance(snapshot.get("profile"), dict):
+        result["netease_profile"] = {"season": snapshot["season"], "fetched_at": snapshot["fetched_at"],
+                                     **snapshot["profile"]}
+    ranks = snapshot.get("ranks")
+    if not ranks:
+        result.update(last_refresh_code=snapshot.get("lookup_code") or "career_rank_unavailable",
+            last_refresh_error=snapshot.get("rank_error") or "Stats refreshed, but rank data was unavailable. Saved ranks were kept.")
+        return result
+    current, peak = ranks.get("current"), ranks.get("peak")
+    if current is not None and current.get("rank"):
+        result.update(current_rank=current["rank"], current_points=current["points"])
+        result["netease_rank"] = {"season": current["season"], "qualification": current["qualification"],
+            "placements_completed": current["placements_completed"], "upstream_updated_at": current["updated_at"],
+            "fetched_at": snapshot["fetched_at"], "peak_season": peak["season"] if peak else None,
+            "record": current.get("record")}
+    if peak is not None and peak.get("peak_rank"):
+        result.update(peak_rank=peak["peak_rank"], peak_points=peak["peak_points"])
+    if current is None or not current.get("rank"):
+        result.update(last_refresh_code="career_current_rank_unavailable",
+            last_refresh_error="The selected season has no usable current rank. Available peak data was checked; saved current rank was kept.")
+    else:
+        result.update(last_refresh_status="ok", last_refresh_code=None, last_refresh_error=None,
+                      tracker_history_private=False, rivals_synced_at=None)
+    return result
 
 
 def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | None = None) -> dict[str, Any]:
@@ -1958,6 +2033,22 @@ def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | 
     if "rivals_platform" in payload:
         platform = str(payload.get("rivals_platform") or "unknown").strip().lower()
         acct["rivals_platform"] = platform if platform in RIVALS_PLATFORMS else "unknown"
+    if existing:
+        identity_changed = any(acct.get(field) != existing.get(field) for field in ("rivals_uid", "rivals_platform"))
+        lookup_changed = identity_changed or acct.get("in_game_name") != existing.get("in_game_name")
+        if lookup_changed:
+            acct["last_refresh_ts"] = None
+            acct["last_refresh_status"] = None
+            acct["last_refresh_code"] = None
+            acct["last_refresh_error"] = None
+        ranks_edited = any(acct.get(field) != existing.get(field) for field in
+                           ("current_rank", "current_points", "peak_rank", "peak_points"))
+        if identity_changed:
+            acct["netease_profile"] = None
+            acct["netease_profile_note"] = None
+            acct["netease_visibility"] = None
+        if identity_changed or ranks_edited:
+            acct["netease_rank"] = None
     if "password" in payload:
         pw = payload.get("password") or ""
         acct["password_enc"] = _encrypt(key, pw) if pw else None
@@ -2394,6 +2485,45 @@ def _match_status_payload(account: dict[str, Any], status=None) -> dict[str, Any
 
 # ---------- routes ----------
 
+@app.route("/api/career/status", methods=["GET"])
+def career_status():
+    _, err = _require_key()
+    if err:
+        return err
+    if _career_provider is None:
+        if _using_netease():
+            return jsonify({"configured": True, "connected": False, "error": "career_not_configured",
+                "message": "NetEase-only mode has no connected session. Open the configured NetEase desktop shortcut to connect your existing local capture."})
+        return jsonify({"configured": False})
+    try:
+        result = _career_provider.status()
+    except CareerUnavailable as exc:
+        return jsonify({"configured": True, "error": exc.code, "message": exc.message}), exc.status
+    _, err = _require_key()
+    return err if err else jsonify(result)
+
+
+@app.route("/api/career/refresh", methods=["POST"])
+def refresh_career():
+    _, err = _require_key()
+    if err:
+        return err
+    if _career_provider is None:
+        return jsonify({"error": "career_not_configured", "message": "Start the experimental build with an approved own-game capture."}), 409
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or any(name != "season" for name in body):
+        return jsonify({"error": "career_invalid_request", "message": "Only the season can be selected; the account is bound to the local capture."}), 400
+    try:
+        result = _career_provider.refresh(season=body.get("season"))
+    except CareerUnavailable as exc:
+        response = jsonify({"error": exc.code, "message": exc.message})
+        response.status_code = exc.status
+        if exc.status == 429:
+            response.headers["Retry-After"] = "30"
+        return response
+    _, err = _require_key()
+    return err if err else jsonify(result)
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -2429,6 +2559,7 @@ def status():
         "remember_supported": remember_supported(),
         "has_remembered_session": _remember_path().exists() if remember_supported() else False,
         "ui_options": (vault.get("config", {}) or {}).get("ui_options") or {},
+        "stats_provider": "netease" if _using_netease() else "tracker",
     })
 
 
@@ -2553,18 +2684,7 @@ def list_accounts():
     if err:
         return err
     vault = _read_vault()
-    out = []
-    for acct in vault.get("accounts", []):
-        item = {k: v for k, v in acct.items() if k != "password_enc"}
-        # Forward-fill new fields for any record the migration somehow missed.
-        for field, default in ACCOUNT_FIELD_DEFAULTS.items():
-            item.setdefault(field, default)
-        try:
-            item["password"] = _decrypt(key, acct["password_enc"]) if acct.get("password_enc") else ""
-        except Exception:
-            item["password"] = ""
-            item["password_error"] = True
-        out.append(item)
+    out = [_public_account(acct, key) for acct in vault.get("accounts", [])]
     return jsonify({"accounts": out})
 
 
@@ -2582,11 +2702,24 @@ def create_account():
             "message": exc.message,
             "path": exc.path,
         }), 422
+    # One user action: Add creates the card and fetches its public identity and
+    # ranks. Credentials/local game folders are not part of target lookup.
+    # Legacy clients remain opt-in; a failed lookup still saves a useful card
+    # with an explicit error rather than losing the user's entered details.
+    if payload.get("refresh_stats") is True and _using_netease() and (acct.get("rivals_uid") or acct.get("in_game_name")):
+        updates = _refresh_account_stats(acct)
+        updates.pop("_retry_after_s", None)
+        _apply_refresh_updates({"accounts": [acct]}, acct["id"], updates)
     with _vault_write_lock:  # RMW under the shared lock so a concurrent refresh-all isn't clobbered
+        current_key, err = _require_key()
+        if err:
+            return err
+        if current_key != key:
+            return jsonify({"error": "locked"}), 401
         vault = _read_vault()
         vault.setdefault("accounts", []).append(acct)
         _write_vault(vault)
-    return jsonify({"ok": True, "id": acct["id"]})
+    return jsonify({"ok": True, "id": acct["id"], "account": _public_account(acct, key)})
 
 
 @app.route("/api/accounts/<acct_id>", methods=["PUT"])
@@ -2689,6 +2822,21 @@ def _apply_refresh_updates(vault: dict[str, Any], acct_id: str, updates: dict[st
     for acct in vault.get("accounts", []):
         if acct["id"] == acct_id:
             safe_updates = dict(updates)
+            bound_identity = safe_updates.pop("_netease_identity", None)
+            if bound_identity is not None:
+                if (str(acct.get("rivals_uid") or ""), acct.get("rivals_platform") or "unknown",
+                        acct.get("in_game_name") or "") != tuple(bound_identity):
+                    return acct
+                # A sparse new response or concurrent update must never lower
+                # a saved lifetime peak. Compare here, against the latest vault.
+                old_rank, new_rank = acct.get("peak_rank"), safe_updates.get("peak_rank")
+                if new_rank and (_RANK_INDEX.get(old_rank, -1) > _RANK_INDEX.get(new_rank, -1) or
+                        old_rank == new_rank and (acct.get("peak_points") or 0) > (safe_updates.get("peak_points") or 0)):
+                    safe_updates.pop("peak_rank", None)
+                    safe_updates.pop("peak_points", None)
+                    if safe_updates.get("netease_rank"):
+                        safe_updates["netease_rank"] = {**safe_updates["netease_rank"], "peak_season": None,
+                                                        "higher_saved_peak_kept": True}
             # Tracker may auto-fill a UID only for the blank-UID snapshot used
             # for that request. A manual UID can land while the network call is
             # in flight and may immediately become match-history-bound. Never
@@ -2721,6 +2869,8 @@ def _public_account(acct: dict[str, Any], key: bytes) -> dict[str, Any]:
     item = {k: v for k, v in acct.items() if k != "password_enc"}
     for field, default in ACCOUNT_FIELD_DEFAULTS.items():
         item.setdefault(field, default)
+    item["stats_provider"] = "netease" if _using_netease() else "tracker"
+    item["netease_connected"] = _career_provider.can_refresh_account(acct) if _career_provider is not None else False
     try:
         item["password"] = _decrypt(key, acct["password_enc"]) if acct.get("password_enc") else ""
     except Exception:
@@ -2747,6 +2897,12 @@ def refresh_account_stats(acct_id: str):
         return jsonify({"error": "cooldown", "retry_after_s": wait,
                         "message": f"Just refreshed — wait {wait}s before another pull."}), 429
     updates = _refresh_account_stats(target)
+    if _career_provider is not None:
+        current_key, err = _require_key()
+        if err:
+            return err
+        if current_key != key:
+            return jsonify({"error": "locked"}), 401
     retry_after = updates.pop("_retry_after_s", None)
     if retry_after:
         response = jsonify({
@@ -2787,6 +2943,11 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes):
     done = 0
 
     for i, acct_id in enumerate(ids):
+        if _career_provider is not None:
+            current_key, err = _require_key()
+            if err or current_key != key:
+                yield {"type": "locked"}
+                return
         target = targets.get(acct_id)
         if target is None:
             done += 1
@@ -2805,6 +2966,11 @@ def _refresh_all_steps(vault: dict[str, Any], key: bytes):
                    "status": "cooldown", "account": None}
             continue
         updates = _refresh_account_stats(target)
+        if _career_provider is not None:
+            current_key, err = _require_key()
+            if err or current_key != key:
+                yield {"type": "locked"}
+                return
         retry_after = updates.pop("_retry_after_s", None)
         if retry_after:
             # Stop the sweep immediately. Retrying another identifier or
@@ -3713,6 +3879,9 @@ def main() -> None:
                         help="serve on a fixed port instead of a random one")
     parser.add_argument("--keep-alive", action="store_true",
                         help="open the browser but don't quit when it closes")
+    parser.add_argument("--career-capture", help="experimental: approved local Netsh ETL with own Career startup")
+    parser.add_argument("--career-archive", help="experimental: matching locally installed script.uep")
+    parser.add_argument("--career-own-uid", help="experimental: your confirmed game UID")
     parser.add_argument("--await-pid", type=int, default=0, metavar="PID",
                         help=argparse.SUPPRESS)  # internal: set on self-restart
     parser.add_argument("--selftest-spawn", metavar="FILE", default=None,
@@ -3722,6 +3891,9 @@ def main() -> None:
     parser.add_argument("--selftest-restart", metavar="FILE", default=None,
                         help=argparse.SUPPRESS)  # internal: update-hop test
     args = parser.parse_args()
+    career_args = (args.career_capture, args.career_archive, args.career_own_uid)
+    if any(career_args) and not all(career_args):
+        parser.error("Career mode needs --career-capture, --career-archive and --career-own-uid together.")
 
     # Hidden update-restart regression harness (see _run_update_selftest).
     if args.selftest_spawn:
@@ -3756,6 +3928,12 @@ def main() -> None:
             print("  Marvel Rivals Account Tracker is already running.")
             _focus_existing_window()
             sys.exit(0)
+
+    global _career_provider
+    if all(career_args):
+        from game_career_client import GameCareerClient
+        _career_provider = CapturedCareerProvider(*career_args,
+            game_reader=GameCareerClient(own_uid=int(args.career_own_uid), archive=Path(args.career_archive)))
 
     # This can delete facts for identities no longer eligible in the vault, so
     # it must run only after a packaged process owns the single-instance lock

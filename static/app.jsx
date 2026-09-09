@@ -400,7 +400,7 @@ function Header({ count, lockIn, lockoutMinutes, onLock, onSettings, theme, onTo
 const Toolbar = React.forwardRef(function Toolbar(
 { query, onQuery, sort, onSort, view, onView, onNew,
   ladderSort, onLadderSort,
-  onRefreshAll, refreshingAll, accountsCount }, searchRef)
+  onRefreshAll, refreshingAll, accountsCount, statsProvider }, searchRef)
 {
   return (
     <div className="app-toolbar">
@@ -450,9 +450,9 @@ const Toolbar = React.forwardRef(function Toolbar(
           className={"app-btn-ghost app-btn-refresh-all" + (refreshingAll ? " is-busy" : "")}
           onClick={onRefreshAll}
           disabled={refreshingAll}
-          title="Pull current ranks from Tracker.gg">
+          title={statsProvider === "netease" ? "Refresh saved players directly from NetEase using the shared connection" : "Pull current ranks from Tracker.gg"}>
           <RefreshIcon spinning={refreshingAll} />
-          <span>{refreshingAll ? "Refreshing…" : "Refresh ranks"}</span>
+          <span>{refreshingAll ? "Refreshing…" : statsProvider === "netease" ? "Refresh rank & stats" : "Refresh ranks"}</span>
         </button>
       )}
 
@@ -579,7 +579,7 @@ function UidSuggester({ currentUid, unclaimedUids, onPick }) {
 
 function Drawer({ open, acct, view, onClose, onSave, onDelete,
                   unclaimedUids, activeSteam, localRivalsUids,
-                  request, showToast }) {
+                  request, showToast, statsProvider }) {
   const isNew = !acct?.id;
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [form, setForm] = React.useState(() => baseFormFor(null));
@@ -779,13 +779,13 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
               <span className="dr-field-lbl">Platform</span>
               <select value={form.rivals_platform}
                       onChange={(e) => set("rivals_platform", e.target.value)}>
-                <option value="unknown">Unknown</option>
+                <option value="unknown">{statsProvider === "netease" ? "Auto-detect" : "Unknown"}</option>
                 <option value="pc">PC</option>
                 <option value="playstation">PlayStation</option>
                 <option value="xbox">Xbox</option>
               </select>
               <span className="dr-field-hint">
-                Required for exact UID matching in the local match index.
+                {statsProvider === "netease" ? "Auto-detect uses NetEase’s returned login platform. Select one to view a different platform’s rank." : "Required for exact UID matching in the local match index."}
               </span>
             </label>
             {isNew && (
@@ -797,11 +797,13 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
                 }} />
             )}
             <p className="dr-field-note">
+              {statsProvider === "netease" ? <>Enter a UID or exact in-game name, then save. NetEase fills the canonical name, UID, platform, available ranks and public PC Career stats automatically. The player does not need to have logged in on this PC. Private or unavailable stats are labeled separately.</> : <>
               <strong>A UID is the preferred way to link an account.</strong> It's
               stable across renames and enables a direct RivalsData profile link.
               A successful public stats refresh can also fill the exact in-game
               name, including special characters that are awkward to type. Leave
               it blank and rank lookups fall back to the typed in-game name.
+              </>}
             </p>
             {form.rivals_uid && (
               <div className="rivalsdata-card">
@@ -1191,7 +1193,13 @@ const SYNC_LEGEND = [
 // Collapsible left-side rail carrying the status key. Sits beside the account
 // grid so the chip icons on the cards are documented in view, not buried in
 // Options. Collapsed state persists via the `infoRailOpen` tweak.
-function InfoRail({ open, onToggle }) {
+function InfoRail({ open, onToggle, statsProvider }) {
+  const legend = statsProvider === "netease" ? [
+    { icon: "✓", tone: "ok", name: "Rank synced", desc: "Direct NetEase identity/rank read; public PC Career stats use the shared connection too. Missing detailed stats are labeled separately. Sync time is our fetch time, not last played." },
+    { icon: "~", tone: "muted", name: "Estimated", desc: "The API marks placements unfinished. The displayed tier and points are a prediction, not a final placement." },
+    { icon: "○", tone: "muted", name: "Session needed", desc: "The app needs one shared NetEase connection, not a local login for every target player. No third-party fallback is used." },
+    { icon: "!", tone: "err", name: "Unavailable", desc: "Expired session, failed read or unfamiliar data. Previously saved ranks are kept." },
+  ] : SYNC_LEGEND;
   return (
     <aside className={"info-rail" + (open ? "" : " is-closed")}>
       <button type="button" className="info-rail-tab" onClick={onToggle}
@@ -1203,7 +1211,7 @@ function InfoRail({ open, onToggle }) {
         <div className="info-rail-body">
           <div className="info-rail-title">Status key</div>
           <ul className="sync-legend-list">
-            {SYNC_LEGEND.map((row) => (
+            {legend.map((row) => (
               <li className="sync-legend-row" key={row.name}>
                 <span className={"sync-legend-i sync-legend-i-" + row.tone}
                       aria-hidden="true">{row.icon}</span>
@@ -1213,8 +1221,9 @@ function InfoRail({ open, onToggle }) {
             ))}
           </ul>
           <p className="sync-legend-foot">
-            Rank refresh uses Tracker.gg. RivalsData profiles are opened only
-            when you click their link in an account drawer.
+            {statsProvider === "netease"
+              ? "Add a UID or exact IGN and save. Identity, available ranks and public PC Career stats load using the shared NetEase connection. Restricted profiles stay restricted; no Tracker fallback."
+              : "Rank refresh uses Tracker.gg. RivalsData profiles are opened only when you click their link in an account drawer."}
           </p>
         </div>
       )}
@@ -1273,6 +1282,7 @@ function App() {
   // { version, commit, built_at, repo } captured from /api/status on boot.
   // Surfaced in the footer so the user can confirm which build is running.
   const [buildInfo, setBuildInfo] = React.useState(null);
+  const [statsProvider, setStatsProvider] = React.useState("tracker");
   const searchRef = React.useRef(null);
   const ready = phase === "ready";
 
@@ -1343,6 +1353,7 @@ function App() {
         const s = await fetch("/api/status").then((r) => r.json());
         if (cancelled) return;
         setAccountCount(s.account_count || 0);
+        setStatsProvider(s.stats_provider || "tracker");
         syncLockout(s.lockout_minutes);
         syncUiOptions(s.ui_options);
         setBuildInfo({
@@ -1668,16 +1679,31 @@ function App() {
       neon: !!next.neon,
       current_points: next.current_points,
       peak_points: next.peak_points,
+      refresh_stats: statsProvider === "netease" && !next.id,
     };
     try {
+      let saved;
+      let refreshNote = "";
       if (next.id) {
         await api(`/api/accounts/${next.id}`, { method: "PUT", body: JSON.stringify(payload) });
+        const original = accounts.find((row) => row.id === next.id);
+        const changed = ["rivals_uid", "in_game_name", "rivals_platform"].some((key) => (original?.[key] || "") !== (next[key] || ""));
+        if (statsProvider === "netease" && changed && (payload.rivals_uid || payload.in_game_name)) {
+          try {
+            saved = await api(`/api/accounts/${next.id}/refresh-stats`, { method: "POST" });
+            refreshNote = saved?.account?.last_refresh_error || "Identity and ranks refreshed";
+          } catch (e) {
+            if (e.locked) throw e;
+            refreshNote = e.data?.message || "Details saved; rank refresh is unavailable";
+          }
+        }
       } else {
-        await api("/api/accounts", { method: "POST", body: JSON.stringify(payload) });
+        saved = await api("/api/accounts", { method: "POST", body: JSON.stringify(payload) });
       }
       await loadAccounts();
       setDrawer({ open: false, acct: null });
-      showToast(next.id ? "Saved" : "Account created");
+      showToast(next.id ? (refreshNote ? `Saved · ${refreshNote}` : "Saved") : saved?.account?.last_refresh_status === "ok" ? "Account added · ranks loaded"
+        : saved?.account?.last_refresh_error ? `Account added · ${saved.account.last_refresh_error}` : "Account created");
       return true;
     } catch (e) {
       if (!e.locked) {
@@ -1771,7 +1797,7 @@ function App() {
     rate_limited: "Tracker.gg is rate limiting requests — retry later",
     network_error: "Could not connect to Tracker.gg — cached rank kept",
     invalid_response: "Tracker.gg returned an unreadable response — cached rank kept",
-    provider_blocked: "Tracker.gg refused the profile request — retry later",
+    provider_blocked: "Tracker.gg blocked the app's API request — this does not mean your UID is invalid",
     provider_unavailable: "Tracker.gg is temporarily unavailable — retry later",
     provider_error: "Tracker.gg returned an unexpected response — retry later",
   };
@@ -1794,7 +1820,7 @@ function App() {
       if (e.status === 429 && e.data?.error === "cooldown") {
         showToast(`Just refreshed — wait ${e.data.retry_after_s}s`);
       } else if (e.status === 429 && e.data?.error === "rate_limited") {
-        showToast(`Tracker.gg limited requests — retry in ${e.data.retry_after_s || 60}s`);
+        showToast(e.data.message || `Wait ${e.data.retry_after_s || 30}s before another refresh`);
       } else {
         showToast("Refresh failed — try again");
       }
@@ -1827,6 +1853,8 @@ function App() {
           if (ev.account) mergeRefreshed(ev.account);
         } else if (ev.type === "summary") {
           summaryEv = ev;
+        } else if (ev.type === "locked") {
+          onLocked();
         }
       };
       for (;;) {
@@ -1869,10 +1897,17 @@ function App() {
           + (byCode.provider_unavailable || 0)
           + (byCode.provider_error || 0);
         const detailedFailures = unavailable + notFound + noRank + missing + providerErrors;
-        const otherFailures = Math.max(0, failed - detailedFailures);
+        const connections = (byCode.career_not_connected || 0) + (byCode.career_not_configured || 0)
+          + (byCode.career_session_expired || 0) + (byCode.career_session_unavailable || 0);
+        const restricted = byCode.career_profile_restricted || 0;
+        const platforms = byCode.career_platform_required || 0;
+        const otherFailures = Math.max(0, failed - detailedFailures - connections - restricted - platforms);
         const parts = [];
         if (ok) parts.push(`${ok} refreshed`);
-        if (limited) parts.push(`Tracker.gg limited requests — retry in ${sum.retry_after_s || 60}s`);
+        if (limited) parts.push(`Refresh paused — retry in ${sum.retry_after_s || 30}s`);
+        if (connections) parts.push(`${connections} need the shared NetEase connection`);
+        if (restricted) parts.push(`${restricted} Career overview${restricted === 1 ? "" : "s"} restricted`);
+        if (platforms) parts.push(`${platforms} need a platform selection`);
         if (unavailable) parts.push(`${unavailable} profile${unavailable === 1 ? "" : "s"} unavailable`);
         if (notFound) parts.push(`${notFound} player${notFound === 1 ? "" : "s"} not found`);
         if (noRank) parts.push(`${noRank} without ranked data`);
@@ -1981,11 +2016,14 @@ function App() {
             onNew={onNew}
             onRefreshAll={onRefreshAll}
             refreshingAll={refreshingAll}
+            statsProvider={statsProvider}
             accountsCount={accounts.length} />
 
+          <window.NetEaseCareerPanel request={api} />
 
           <div className="app-body">
             <InfoRail open={t.infoRailOpen}
+                      statsProvider={statsProvider}
                       onToggle={() => setTweak("infoRailOpen", !t.infoRailOpen)} />
             <div className="app-content">
               {visible.length === 0 ?
@@ -2065,7 +2103,7 @@ function App() {
           activeSteam={activeSteam}
           localRivalsUids={localRivalsUids}
           request={api}
-          showToast={showToast} />
+          showToast={showToast} statsProvider={statsProvider} />
 
       </div>
 
@@ -2108,7 +2146,7 @@ function App() {
 
         <TweakSection label="Marvel Rivals stats">
           <div className="stats-source-card">
-            <p><b>Rank refresh:</b> Tracker.gg.</p>
+            <p><b>Rank refresh:</b> {statsProvider === "netease" ? "NetEase only — enter a UID or exact IGN. One shared connection loads identity, available ranks and public PC Career stats for other players; targets need no local login. Private or unavailable stats are labeled separately." : "Tracker.gg."}</p>
             <p><b>Detailed profiles:</b> a RivalsData link appears when an account has a UID. RivalsData receives nothing until you open that link.</p>
           </div>
         </TweakSection>
