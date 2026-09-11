@@ -3,6 +3,36 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
+## Active goal and recovery update — September 11, 2026
+
+The user explicitly activated a goal for the standalone NetEase-only hosted
+profile integration and added investigation of UID-linked punishment history
+(cheating, voice/text restrictions, etc.). See STANDALONE_WEB_GOAL.md for the
+acceptance criteria. Do not claim that the web stats connection is finished.
+
+The one-time recovery check completed at07:16–07:17 Eastern: direct NetEase
+HTTP200/application0000 and hosted HTTP200 for UID1370598422 (ゆいᶻᶻᶻ, level32)
+and1822797559 (KovaaksKid2008, level63). This supersedes the store0500 outage and
+pending-recheck wording below. No request-path fix was needed; maintenance's
+causal role remains unknown. Do not restart the completed one-time monitor.
+
+Punishments must be tied to an exact UID by an authoritative, authorized source.
+Masked official ban-announcement UIDs and own-account restriction fields are
+not a verified other-player punishment feed. Static research found a concrete
+xyq-namecard/GetData read using tagpunishment and zone_UID_login/chat/rank record
+IDs, called by normal report feedback. It is CURRENT restriction status, not
+history or verified cause; no live lookup or report was sent. See
+PUNISHMENT_RESEARCH.md for request/response caveats and exact source evidence.
+
+portable_game_runtime.py now parses an explicit, independently hash-pinned public
+runtime manifest into the existing configuration/method types, and projects
+supplied server-list bytes. No installed-file reads or network are used. No
+production manifest, current-patch compatibility, authentication or renewal is
+claimed. This is preparation for the existing provider callbacks, not a deployed
+standalone backend. Final focused verification:20 new portable-runtime tests and
+123 existing game regression tests passed. No website source/deployment changed
+in this goal-activation and punishment-research turn.
+
 ## September 11, 2026: hosted profile views and transport preparation
 
 Current user request: NetEase-only UID profile website with available player
