@@ -79,6 +79,23 @@ evidenced browser-compatible game request. Merely passing a web token through
 the finalizer would not establish compatibility. No universal need for native
 platform credentials is inferred from this bounded inspection.
 
+The final bounded native exchange check verified the existing DLL hash and
+traced export `__NtSdkMgr_ntLogin` at RVA `0xdcd0` through the SDK singleton to
+the base login routine at `0x34ab0`. That routine manages normal state including
+`NT_UNISDK_SAUTH_STATUS` and `NT_UNISDK_SAUTH_ERROR_JSON`; it did not establish
+an HTTP interface accepting browser SAUTH or a reusable independent renewal
+contract. Steam imports confirm the ordinary client/callback lifecycle, not a
+server-only renewal path. [Valve's authentication documentation](https://partner.steamgames.com/doc/features/auth)
+separates browser OpenID identity from client-generated authentication tickets;
+one must not be substituted for the other.
+
+The official tab still showed Account Login / Log in during the continuation.
+No owner sign-in or credential exchange was available to inspect. Further
+request implementation is pending that normal account flow; repeating this
+unchanged static check, the public SDK fetches or the transport handshake will
+not resolve token audience or renewal. No credentials, logs, captures, game
+processes, reports or authentication requests were used in this check.
+
 ## September 11, 2026: static hero, match-history and rank-change contracts
 
 Evidence boundary: the September 8 other-player PC read below live-verified

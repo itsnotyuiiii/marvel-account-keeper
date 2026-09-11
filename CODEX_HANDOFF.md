@@ -66,6 +66,15 @@ bounded conclusions. The official store tab is open on Account Login; owner
 normal sign-in was requested asynchronously and is still pending. No account
 credentials or authentication requests were used during this follow-up.
 
+The next continuation rechecked the official Account Login UI: it still shows
+Log in, with no owner account session. One final bounded native ntLogin check
+found SDK state dispatch, not a reusable browser-to-game exchange or renewal
+contract (API_RESEARCH.md records exact RVAs). There are no live tests/jobs left
+to wait on. Do not repeat the unchanged SDK/static/handshake checks or create
+speculative authentication code; the next evidence requires the owner's normal
+official sign-in. Keep the full goal incomplete. This continuation did not
+produce a working authentication path or change the live website.
+
 No website source/deployment, Desktop executable, Wi-Fi, game process, reports
 or punishment queries were changed by this goal research/preparation work.
 
