@@ -1,0 +1,18 @@
+{
+  "career_methods": {
+    "reply": 1993623137,
+    "request": 113612951
+  },
+  "game_id": "x20naxx2gb",
+  "login_list_url": "https://x20na.update.easebar.com/server_pc_prod_serverB",
+  "provenance": {
+    "archive_sha256": "4dbe9d3246a05d4a402373cc11c03a938692db9bc16aaaf939ddff4e8682d22e",
+    "client_version": "3825464",
+    "image_sha256": "54154e879731f3f6fad32371bff78d62629c3d87ad5443dc9466871312a76714"
+  },
+  "schema_version": 1,
+  "transport": {
+    "handshake_parameter_base64": "YUIzeFI5cEwyelE4dlk3dE40",
+    "public_key_der_base64": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDv/uBBDg1KmvRglr4sH9RVNVbo9XU+NvOBlyK+AhSmOwxnAysR6THkVMNpJhej4xLovy5pa7G1S0rjVoulcNkPUh6nWHnqKXn8CKcBr31jGq0LplVMQHxtI5S10c3JmkYC0KMW0pEIVCQzSIR8Gj3zIy1JYP75S8tgTlQsE6LyOwIDAQAB"
+  }
+}

@@ -1,5 +1,84 @@
 # Live API research checkpoints
 
+## September 11, 2026: official web login and renewal contract
+
+Read-only retrieval of the current official store HTML and its public scripts
+still identifies `module.894e7ca6.js` and Mpay H5 SDK v1.4.2. This research did
+not read browser credentials, submit authentication, or contact the game. The
+official store tab was in User ID Login mode, not an authenticated account
+session. Account Login was opened; the owner was asked to complete normal
+sign-in. A successful UID/IGN lookup is not evidence of an SDK account session.
+
+The wrapper's `__createSauthJson` produces `gameid`, `login_channel`,
+`app_channel`, `platform`, `sdkuid` from `userId`, `sessionid` from `accessToken`,
+`deviceid`, `sdk_version`, `udid`, and `client_login_sn`. It does not add
+`gas_token`, `ip`, or `aim_info`. Browser platform and channel must not be
+relabelled as native PC values to satisfy the existing game validator.
+
+Two distinct normal SDK paths are now documented:
+
+1. Wrapper `__getAccessToken` posts `game_id`, `user_id`, and `refresh_token`
+   to `/api/users/login/v2/oauth/refresh_token`. On code 0, the returned
+   `access_token` replaces browser SAUTH `sessionid`. Failure clears the SDK's
+   saved state and opens normal interactive login; it is not a retry loop.
+2. Mpay `loginWithHistory` posts `user_id`, `token` (its stored refresh token),
+   `cp`, and `platform` to `/api/users/login/v2/sdk_token`. Steam and passport
+   methods add `scene: "login"`. Success maps `response.user.login_token` to
+   `accessToken`, then wrapper `sessionid`, and `response.user.token` to the
+   renewal token. This is an additional legitimate exchange lead, NOT proof
+   that its output is accepted by the game LOGIN service.
+
+Mpay requests also include normal `game_id`, `cp`, `cv`, `gv`, `ci`,
+`app_channel`, `lang`, `device_id`, `debug_mode`, and `package_name` metadata.
+The store uses SDK defaults `cp="w"`, `cv="3.1.5"`; no native-platform override
+was found in its wrapper. Refresh-token possession, browser success, and a
+similarly named `login_token` are not sufficient compatibility evidence.
+
+Store account login uses GET `/gameclub/marvelrivals/login-account`, with
+browser SAUTH query fields and ordinary request metadata. The inspected
+success handler consumes account identity (`aid`, `username`, `universal_info`)
+and account metadata, not a replacement native auth bundle. None of the 13
+current store scripts contained the literal `uni_sauth`; this bounded negative
+finding does not rule out an internal server exchange.
+
+Primary sources and offsets in the inspected minified versions:
+
+- [Official store](https://pay.neteasegames.com/marvelrivals/topup).
+- [Store SDK wrapper](https://pay.neteasegames.com/static/js/module.894e7ca6.js):
+  constructor 158237, OAuth refresh 155527, history adapter 147658.
+- [Mpay H5 SDK v1.4.2](https://sdk-os.mpsdk.easebar.com/gzip_static/h5/v1.4.2/js/mpay-h5-sdk-oversea.umd.js):
+  `loginWithHistory` 809728–810752.
+- [Store main bundle](https://pay.neteasegames.com/static/js/main.cfbf45bf.js):
+  account request/handler 1104, 25855–32200, 166211–168200.
+
+Remaining acceptance test: use the owner's normal authorized sign-in and the
+actual observed contract, preserving identities/platforms, to establish
+whether any returned credentials can authenticate the expected existing game
+role. Do not manufacture missing native fields or assume browser OAuth is a
+gas token. Server-side acquisition, renewal, SocialMatrix access, current
+patch compatibility, and hosted full-stat integration remain unverified.
+
+Pinned native-path follow-up (reviewed archive hash in the next section,
+entries 4653 and 7800 only):
+`userLogin` calls `unisdk.ntLogin`; `on_login_channel_sdk_finish` copies
+`getPropStr("SAUTH_JSON")` at offsets 1464–1516. The subsequent nonempty-SAUTH
+branch of `gen_auth_info` directly indexes `ip` (1380–1398) and `aim_info`
+(1534–1552). It does not use optional `.get` calls for these fields. The actual
+browser object therefore cannot pass through this normal native constructor
+unchanged. No intermediate browser conversion was found in these Python
+methods. This is NOT proof that the server rejects all web-issued tokens.
+`gas_token` is forwarded within the whole JSON rather than indexed separately
+here, so this method alone does not prove its server-side necessity.
+
+`finalize_sdk_bundle` is only a successful native response finalizer. It does
+not perform the `uni_sauth` exchange, obtain platform credentials, supply the
+missing metadata, or prove that browser SAUTH can initiate that transaction.
+After owner sign-in, first identify the actual token/account/game/channel
+contract; then establish an observed compatible exchange or a separately
+evidenced browser-compatible game request. Merely passing a web token through
+the finalizer would not establish compatibility. No universal need for native
+platform credentials is inferred from this bounded inspection.
+
 ## September 11, 2026: static hero, match-history and rank-change contracts
 
 Evidence boundary: the September 8 other-player PC read below live-verified

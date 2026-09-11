@@ -1,0 +1,2 @@
+# Exact-byte public runtime pins must survive Windows and Linux checkouts.
+runtime-inputs/*.json text eol=lf

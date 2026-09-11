@@ -62,8 +62,22 @@ is verified, document that limit rather than creating an apparently live feed.
   not live-verified or connected to the website.
 - Server-side authentication/renewal and the additional live data remain open.
 - Portable public runtime manifest parsing and server-list projection are now
-  implemented without installed-game or network reads. Only synthetic inputs
-  have been tested; no production manifest or current-patch validation exists.
+  implemented without installed-game or network reads. A reviewed public-only
+  774-byte build3825464 artifact is packaged with an independent digest and LF
+  preservation;35 runtime/export/artifact tests pass, including a real-artifact
+  load with desktop sources disabled. This is not current-patch validation or
+  a live provider switch. See runtime-inputs/README.md.
+  Final complete Python verification passed517 tests in67.094s.
+- One credential-free live check using only that packaged artifact and the
+  verified official server list received a decrypted LOGIN prepare record.
+  Normal transport works without installed files; no account/version acceptance
+  or profile access was tested, and no live provider was enabled.
+- Current public official SDK scripts expose OAuth refresh and sdk_token
+  history-login flows. Neither is proven to yield accepted game authentication.
+  Native gen_auth_info directly requires metadata absent from browser SAUTH;
+  the inspected paths do not establish a normal browser-to-game conversion.
+  Owner normal Account Login on the official store was requested and is pending.
+  No fabricated metadata, account token reads or game-auth attempts were used.
 - A native UID-keyed current restriction getter was found. It checks login/chat/
   rank categories, not an established event history or adjudicated cause. See
   PUNISHMENT_RESEARCH.md. No reports or punishment queries have been submitted.

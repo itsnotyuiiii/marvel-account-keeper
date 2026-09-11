@@ -5,7 +5,9 @@ The caller must supply an independently reviewed SHA256 of the exact manifest
 bytes AND the expected source provenance; copying either from an untrusted
 manifest is not a trust decision. These pins provide content integrity, not a
 publisher signature, permission to authenticate, or proof of current server
-compatibility. No production manifest is bundled.
+compatibility. The reviewed public-only build 3825464 artifact is bundled under
+runtime-inputs; its independently reviewed digest is recorded below. Callers
+still supply the explicit artifact path, expected digest and provenance.
 
 The supported provenance is the previously reviewed build, not an assertion
 that a later patch is compatible. A new build needs separate revalidation.
@@ -54,6 +56,10 @@ class RuntimeProvenance:
 
 
 SUPPORTED_PROVENANCE = RuntimeProvenance(ARCHIVE_SHA256, IMAGE_SHA256, CLIENT_VERSION)
+# Reviewed against the hash-gated source loaders and exact selected public
+# fields on September 11, 2026. Not learned from the manifest at runtime.
+# LF is pinned by .gitattributes. This does not approve a later server patch.
+REVIEWED_MANIFEST_SHA256 = "63d536706d9cb055770129ca413950861d2553cb6c977bdee4f113fa66ccbc28"
 
 
 @dataclass(frozen=True)

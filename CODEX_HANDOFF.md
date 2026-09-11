@@ -26,12 +26,48 @@ PUNISHMENT_RESEARCH.md for request/response caveats and exact source evidence.
 
 portable_game_runtime.py now parses an explicit, independently hash-pinned public
 runtime manifest into the existing configuration/method types, and projects
-supplied server-list bytes. No installed-file reads or network are used. No
-production manifest, current-patch compatibility, authentication or renewal is
-claimed. This is preparation for the existing provider callbacks, not a deployed
-standalone backend. Final focused verification:20 new portable-runtime tests and
-123 existing game regression tests passed. No website source/deployment changed
-in this goal-activation and punishment-research turn.
+supplied server-list bytes. Runtime loading reads only the explicit manifest;
+there are no installed-file reads or network calls. The follow-up packaged
+runtime-inputs/3825464.json (774 bytes, SHA256
+63d536706d9cb055770129ca413950861d2553cb6c977bdee4f113fa66ccbc28) from the reviewed
+public build pins. Its independent digest is in portable_game_runtime.py and
+.gitattributes preserves LF. See runtime-inputs/README.md. Source config/version
+and key/parameter/method provenance passed; current-patch compatibility,
+authentication and renewal remain unverified. The app/site was NOT switched to
+this artifact. All35 runtime/export/artifact tests pass. The prior123 game
+regressions also passed before this follow-up. Final full follow-up verification:
+517 tests passed in67.094s, including the two real-artifact tests. The independent
+bounded correctness review found no issues. Existing synthetic error logs and
+temporary-file ResourceWarnings were observed; unrelated code was not changed.
+
+A bounded live follow-up loaded ONLY the packaged manifest, fetched its exact
+official HTTPS server list once without redirects/cookies/environment auth,
+validated it and connected to its first advertised port once. Normal transport
+sent286 handshake bytes and received54 bytes, including a decrypted main1/sub101
+LOGIN prepare record with a19-byte body. No credentials, application message,
+heartbeat, gateway enter or Career query were sent. The socket closed. This
+verifies portable transport, not account/version acceptance or stats access;
+no installed files were consulted and no port scan/retry was performed.
+
+scripts/export-public-runtime.py requires four explicit distribution paths,
+emits only a deterministic public candidate to stdout plus digest metadata to
+stderr, and never reads credentials, launches the game or contacts a server.
+The first real export exposed an overly small version-file bound: the public
+version.json contains a108231-byte asset inventory. A256KiB bound and synthetic
+large-inventory regression corrected this; the inventory is never exported.
+
+Official web-auth source research identified both oauth/refresh_token and
+sdk_token normal SDK paths, but neither is verified game authentication. The
+actual browser SAUTH lacks ip/aim_info that native gen_auth_info directly
+indexes; no inspected conversion path supplies them. Do not fill invented
+metadata, relabel web as PC or treat the response finalizer as an exchange.
+See the new API_RESEARCH.md opening section for exact primary assets and
+bounded conclusions. The official store tab is open on Account Login; owner
+normal sign-in was requested asynchronously and is still pending. No account
+credentials or authentication requests were used during this follow-up.
+
+No website source/deployment, Desktop executable, Wi-Fi, game process, reports
+or punishment queries were changed by this goal research/preparation work.
 
 ## September 11, 2026: hosted profile views and transport preparation
 
