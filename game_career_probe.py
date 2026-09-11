@@ -4,6 +4,11 @@ Preview by default; --read makes one LOGIN + gateway session and one Career
 query for an explicit UID. No role creation, relogin, third-party provider,
 remote-code execution, credential exports, vault or Desktop writes. The game
 server decides availability/privacy; errors never become fabricated stats.
+
+The library also supports the first other-player match-summary page. Its caller
+must separately verify the global BattleHistoryIsVisibleToOther permission;
+public Career overview visibility is insufficient. No match-summary CLI or
+automatic live lookup is enabled here.
 """
 import argparse
 from dataclasses import dataclass
@@ -138,11 +143,93 @@ def verify_career_args(args, requested, nonce):
             "season": requested.get("match_season", 0)}
 
 
+def make_match_summary_request(methods, uid, zone_id, nonce, *, own_uid=login.EXPECTED_OWN_UID):
+    """Build only page zero of the normal other-player match-summary RPC.
+
+    The statically inspected match-history handler supplies player_uid, zone_id,
+    page and page_size. Optional mode/season/device filters are omitted. This
+    builder does not establish BattleHistoryIsVisibleToOther permission.
+    """
+    if (type(own_uid) is not int or not 0 < own_uid < 2**63
+            or type(uid) is not int or not 0 < uid < 2**63 or uid == own_uid
+            or type(zone_id) is not int or zone_id <= 0
+            or not isinstance(nonce, str) or not 1 <= len(nonce) <= 64):
+        raise CareerError("match_summary_target_shape")
+    data = {"player_uid": uid, "zone_id": zone_id, "page": 0, "page_size": 50}
+    context = {"is_career": True, "career_req": dict(data), "mak_request_id": nonce}
+    packed = msgpack.packb(["query_match_summary", data, context], use_bin_type=True)
+    body = b"\x61" + struct.pack("<I", methods.request) + b"\xe2" + struct.pack("<I", len(packed)) + packed
+    return struct.pack("<IHB", len(body) + 7, 3, 1) + body, data
+
+
+def verify_match_summary_args(args, requested, nonce):
+    """Bind the whole first-page reply, including empty results, to its request.
+
+    Each returned match_player must identify the requested other player, not
+    the shared login owner. This validates transport correlation, not privacy
+    permission, individual stat fields, pagination or history completeness.
+    """
+    if (not isinstance(requested, dict)
+            or set(requested) != {"player_uid", "zone_id", "page", "page_size"}
+            or type(requested["player_uid"]) is not int or not 0 < requested["player_uid"] < 2**63
+            or type(requested["zone_id"]) is not int or requested["zone_id"] <= 0
+            or type(requested["page"]) is not int or requested["page"] != 0
+            or type(requested["page_size"]) is not int or requested["page_size"] != 50
+            or not isinstance(nonce, str) or not 1 <= len(nonce) <= 64):
+        raise CareerError("match_summary_request_shape")
+    if not isinstance(args, list) or len(args) != 5 or args[0] != "query_match_summary":
+        raise CareerError("match_summary_reply_shape")
+    context, code, _, data = args[1:]
+    echoed = context.get("career_req") if isinstance(context, dict) else None
+    if (not isinstance(context, dict) or context.get("is_career") is not True
+            or context.get("mak_request_id") != nonce or not isinstance(echoed, dict)
+            or echoed != requested or any(type(echoed[key]) is not int for key in requested)):
+        raise CareerError("match_summary_request_context_mismatch")
+    if type(code) is not int:
+        raise CareerError("match_summary_result_code_missing")
+    if code != 0:
+        return {"outcome": "match_summary_server_error", "server_error_code": code,
+                "match_summary_verified": False}
+    rows = data.get("match_info") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or len(rows) > 50:
+        raise CareerError("match_summary_rows_shape")
+    for row in rows:
+        player = row.get("match_player") if isinstance(row, dict) else None
+        if (not isinstance(player, dict) or type(player.get("player_uid")) is not int
+                or player["player_uid"] != requested["player_uid"]):
+            raise CareerError("match_summary_uid_mismatch")
+    return {"outcome": "other_player_match_summary_verified", "match_summary_verified": True,
+            "target_uid": requested["player_uid"], "match_count": len(rows),
+            "page": 0, "page_size": 50, "has_more": None}
+
+
 def read_one_career(connection, transport, zone, methods, uid, season, *, on_verified=None,
                     own_uid=login.EXPECTED_OWN_UID):
     nonce = secrets.token_hex(16)
     request, requested = make_request(methods, uid, zone.get("zone_id"), season, nonce, own_uid=own_uid)
-    report = {"outcome": "career_not_sent", "career_verified": False, "bytes_received": 0,
+    return _read_one_reply(connection, transport, methods, request, requested, nonce,
+                           verify_career_args, "career", on_verified)
+
+
+def read_one_match_summary(connection, transport, zone, methods, uid, *, on_verified=None,
+                          own_uid=login.EXPECTED_OWN_UID):
+    """Read one bounded first page after normal login and match-history permission.
+
+    The caller must have independently verified global
+    BattleHistoryIsVisibleToOther. A public Career overview is not sufficient.
+    No authentication, permission default, retry or next-page fetch is performed.
+    Only the trusted callback receives transient, request/UID-bound raw rows;
+    individual statistic fields still require the caller's normal projection.
+    """
+    nonce = secrets.token_hex(16)
+    request, requested = make_match_summary_request(methods, uid, zone.get("zone_id"), nonce, own_uid=own_uid)
+    return _read_one_reply(connection, transport, methods, request, requested, nonce,
+                           verify_match_summary_args, "match_summary", on_verified)
+
+
+def _read_one_reply(connection, transport, methods, request, requested, nonce, verify, kind, on_verified):
+    verified_key = kind + "_verified"
+    report = {"outcome": kind + "_not_sent", verified_key: False, "bytes_received": 0,
               "application_bytes_sent": 0, "records_received": 0, "other_rpc_count": 0,
               "startup_record_count": 0, "own_entity_created": False,
               "remote_code_executed": False, "secrets_saved": False}
@@ -154,33 +241,34 @@ def read_one_career(connection, transport, zone, methods, uid, season, *, on_ver
             record = login.receive_record(connection, transport, deadline, report, max_size=4 * 1024 * 1024)
             report["records_received"] += 1
             if report["bytes_received"] > 4 * 1024 * 1024:
-                raise CareerError("career_receive_bound")
+                raise CareerError(kind + "_receive_bound")
             if consume_startup_record(record, report):
                 continue
             if (record.main_cmd, record.sub_cmd) != (3, 101):
                 report.update(unexpected_main=record.main_cmd, unexpected_sub=record.sub_cmd)
-                raise CareerError("unrecognized_career_startup_command")
+                raise CareerError("unrecognized_" + kind + "_startup_command")
             rpc = decode_avatar_rpc(record, direction="in")
             if rpc.index != methods.reply:
                 report["other_rpc_count"] += 1
                 continue  # Do not execute unrelated own-avatar initialization RPCs.
-            report.update(verify_career_args(rpc.args, requested, nonce))
-            if report["career_verified"] and on_verified is not None:
+            report.update(verify(rpc.args, requested, nonce))
+            if report[verified_key] and on_verified is not None:
                 # Raw replies stay transient; only this trusted local projector
                 # receives the UID/context-verified payload. CLI remains redacted.
                 on_verified(rpc.args[4])
             return report
-        raise CareerError("career_record_bound")
+        raise CareerError(kind + "_record_bound")
     except (CareerError, login.LoginError) as exc:
         report["outcome"] = str(exc)
     except TimeoutError:
-        report["outcome"] = "career_reply_timeout"
+        report["outcome"] = kind + "_reply_timeout"
     except EOFError:
-        report["outcome"] = "career_connection_closed"
+        report["outcome"] = kind + "_connection_closed"
     except OSError:
-        report["outcome"] = "career_network_error"
+        report["outcome"] = kind + "_network_error"
     except ValueError:
-        report["outcome"] = "career_reply_unvalidated"
+        report["outcome"] = kind + "_reply_unvalidated"
+    report[verified_key] = False
     return report
 
 

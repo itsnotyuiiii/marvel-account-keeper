@@ -1,10 +1,11 @@
 """App-owned, bounded other-player Career connection.
 
 One daemon worker owns normal LOGIN and its gateway while servicing sequential
-requests. Idle connections close instead of inventing heartbeat traffic. The
-installed-build helpers currently use their default game image/config/SDK-log
-locations; only the script archive is configurable here. Existing SDK login
-inputs are reloaded for each new connection, not renewed by this client.
+requests. Idle connections close instead of inventing heartbeat traffic.
+Desktop defaults use the installed game image/config/SDK-log locations and the
+selected script archive. Explicit providers can supply the same validated
+inputs without installed files. Inputs are loaded for each new connection;
+this client does not acquire credentials or implement session renewal.
 """
 from collections import deque
 from dataclasses import dataclass, field
@@ -111,11 +112,31 @@ class GameCareerClient:
     MAX_PENDING = 8
     FAILURE_COOLDOWN_SECONDS = 30.0
 
-    def __init__(self, own_uid, archive):
+    def __init__(self, own_uid, archive=None, *, configuration_provider=None,
+                 career_methods_provider=None, own_credentials_provider=None,
+                 server_provider=None):
+        """Providers are zero-argument callables, invoked lazily per connection.
+
+        They return PublicConfiguration, CareerMethods, LoginInputs and
+        LoginServer respectively. Providers own input provenance/freshness
+        validation; normal login, exact own-role and Career checks still run.
+        Omit archive only when all four providers are supplied, preventing an
+        unintended fallback to desktop files in a fully injected client.
+        """
         if type(own_uid) is not int or not 0 < own_uid < 2**63:
             raise GameCareerUnavailable("game_career_invalid_target")
+        providers = (configuration_provider, career_methods_provider,
+                     own_credentials_provider, server_provider)
+        if any(provider is not None and not callable(provider) for provider in providers):
+            raise ValueError("Career providers must be callable")
+        if archive is None and any(provider is None for provider in providers):
+            raise ValueError("An archive or all four Career providers are required")
         self.own_uid = own_uid
-        self.archive = Path(archive)
+        self.archive = None if archive is None else Path(archive)
+        self._configuration_provider = configuration_provider
+        self._career_methods_provider = career_methods_provider
+        self._own_credentials_provider = own_credentials_provider
+        self._server_provider = server_provider
         self._condition = threading.Condition()
         self._pending = deque()
         self._worker = None
@@ -277,20 +298,23 @@ class GameCareerClient:
             with self._condition:
                 if self._stop:
                     return
-            self._set_stage("installed_configuration")
-            configuration = load_public_configuration(archive=self.archive)
+            self._set_stage("installed_configuration" if self._configuration_provider is None else "configuration")
+            configuration = (load_public_configuration(archive=self.archive)
+                             if self._configuration_provider is None else self._configuration_provider())
             self._set_stage("career_methods")
-            methods = career.load_career_methods(self.archive)
+            methods = (career.load_career_methods(self.archive)
+                       if self._career_methods_provider is None else self._career_methods_provider())
             with self._condition:
                 if self._stop:
                     return
-            self._set_stage("own_sdk_login")
-            inputs = login.load_own_login_inputs()
+            self._set_stage("own_sdk_login" if self._own_credentials_provider is None else "own_credentials")
+            inputs = (login.load_own_login_inputs()
+                      if self._own_credentials_provider is None else self._own_credentials_provider())
             with self._condition:
                 if self._stop:
                     return
             self._set_stage("advertised_server")
-            server = login.advertised_server()
+            server = login.advertised_server() if self._server_provider is None else self._server_provider()
             with self._condition:
                 if self._stop:
                     return

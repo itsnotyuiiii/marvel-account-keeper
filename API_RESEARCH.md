@@ -1,5 +1,95 @@
 # Live API research checkpoints
 
+## September 11, 2026: static hero, match-history and rank-change contracts
+
+Evidence boundary: the September 8 other-player PC read below live-verified
+only five projected aggregate totals: matches, wins, kills, deaths and assists.
+The raw Career object had 41 fields, but its complete key list was not saved.
+The additional fields and operations here are STATIC evidence, not verified
+other-player responses, a public HTTP API, or a working hosted integration.
+Do not synthesize a 41-field schema or silently zero unavailable metrics.
+
+Offline inspection used the existing hash-pinned `script.uep` decoder; archive
+SHA256 `4dbe9d3246a05d4a402373cc11c03a938692db9bc16aaaf939ddff4e8682d22e`
+passed. No game process, network request, credentials, raw capture or recovered
+code execution was used. No extracted game code/assets were saved. Source
+lines below refer to embedded game scripts, not this Markdown file.
+
+### Other-player operations and history scope
+
+Entry1833, `Scripts/mos_client/MosClient_Career.py`:
+
+- `c_get_history_matches` (line414) constructs `player_uid`, `zone_id`, `page:0`
+  and `page_size:50`; the other-player branch selects `query_match_summary`
+  via `c_query_match_summary_other_player` (line660).
+- Single/multiple match-detail callers (lines432/451) use `player_uid`,
+  `zone_id`, `match_uids`; the other-player operation is `uid_query_match`
+  (line664), with `is_multiple_match` in its extra context.
+- Hero callers (lines360/391) select `query_hero_career` for other players
+  (line676). One-hero input has `player_uid`, `zone_id`, `hero_id`; all-hero
+  input also has `hero_id:0` and the game's converted `hero_id_list`. The
+  normal mode/season/platform filters use `filter`, `game_mode_id`,
+  `play_mode_id`, `match_season`, `device_type` with the existing omission rules.
+- These operations go through `c_query_career` (line656) and native
+  `Career.C_QUERY_CAREER`, not the own-player SocialMatrix `query_my_*` route.
+  The live-verified standalone reader supports `query_player_career`. New
+  first-page `query_match_summary` helpers are implemented and synthetic-tested
+  in `game_career_probe.py`, but are not enabled in the CLI/provider or live-tested.
+- Summary handler (line893) reads `data.match_info`, including `match_uid`,
+  `match_map_id`, `game_mode_id`, `play_mode_id`, `match_player`, `mvp_uid`,
+  `dynamic_fields`, `epic_moments`, `replay_version`; it sorts by
+  `match_time_stamp`. Detail handler (line992) reads `data.matches`, each with
+  `match_uid` and `match_players`. Hero handlers (lines838/862) read
+  `data.careers` or `data.career` respectively.
+
+Only the normal first-page request (0,50) is established here. No other-player
+history/hero request was sent; successful later-page pagination, completeness,
+and additional response identity binding remain unverified. Existing app
+match projection is still own-account/page0 only and drops match IDs/details.
+
+### Independent visibility settings
+
+Entry5465, `Scripts/share/const/const_career.py`, defines overview
+`CareerOverviewIsVisibleToOther`, hero `CareerHeroDataIsVisibleToOther`, history
+`BattleHistoryIsVisibleToOther`, and timeline `TimelineIsVisibleToOther`.
+Its permission-list builder (line58) suffixes overview/heroes for a positive
+login OS, but keeps history/timeline unsuffixed. Entry1684,
+`PyWidget_CareerPersonalRecord.check_permission` (line287), checks the history
+permission without an OS argument; entry1683's hero permission check (line240)
+does pass the selected OS. Therefore public overview is NOT sufficient for
+history/heroes, and `BattleHistoryIsVisibleToOther_1` is not the normal history
+setting. Preserve the existing public/restricted/unknown interpretation and
+server denial handling; do not implement relationship or privileged bypasses.
+
+### Additional hero metrics and per-match rank changes
+
+Entry1683, `PyWidget_CareerHeroDataPanel.update_high_light_data` (line526) and
+`update_detail_data` (line569), consume these HERO Career fields:
+
+- `total_play_time`: seconds. Entry4617, `ui/utils_ui/career_utils.py`,
+  `format_time` (line86) divides by60/3600; per-ten-minute helpers
+  (lines471/483) use `stat / total_play_time * 600`.
+- `total_match_count`, `total_match_win_count`: hero matches/wins. The latter
+  differs from the live-verified aggregate `total_win_count`.
+- `total_hero_damage`, `total_hero_heal`, `total_damage_taken`: numerically
+  displayed totals; additional server numeric types/scaling are not live-tested.
+- `k`, `d`, `a`, `last_kill`, `solo_kill`, `head_kill`: distinct counters.
+- Maximum fields include `session_max_K`, `session_max_A`,
+  `session_max_last_kill`, `session_max_solo_kill`, `session_max_head_kill`,
+  `session_max_hero_damage`, `session_max_heal`, `session_max_damage_token`
+  (the last spelling is literal). These are not proven keys of every aggregate
+  Career response. No tests currently validate new hero-field projections.
+
+Entry1707, `PyWidget_CareerPersonalRecord_BaseItem.refresh_rank_dan_level`
+(line488), reads the selected player's `dynamic_fields.new_level`, `level`,
+`new_score`, `add_score`, and `rankscore_info.fixed_battle_count`. It displays
+rank changes only in ranked mode with `new_level > 0`; its displayed delta is
+`floor(new_score) - floor(new_score - add_score)`, NOT `floor(add_score)`.
+Placement counts affect the qualifying label. This is a concrete static lead
+for match-linked rank history, separate from the already implemented namecard
+per-season current/peak summaries. Other-player availability and strict
+match/player response validation must be verified before labeling it working.
+
 ## September 8: full other-player Career reply verified
 
 Normal NetEase AUTH + gateway login followed by query_player_career now

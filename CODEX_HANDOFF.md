@@ -3,7 +3,66 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest delivered checkpoint: one-step NetEase stats and Desktop verified
+## September 11, 2026: hosted profile views and transport preparation
+
+Current user request: NetEase-only UID profile website with available player
+stats, matches and rank history; no laptop/game/capture-file runtime dependency
+and no third-party stats provider. This goal is NOT complete. Nothing here
+claims a working independent full-stat backend or complete lifetime history.
+
+Website checkout: C:\CodexRepos\marvel-stats-web, separate Sites source repository.
+Private owner-only site: https://yui-rivals-stats.kbj311.chatgpt.site . Published
+version3 from source30d34b613f012c1c4374882a24af955bcea2dc9b on September11.
+Overview, Rank history and Matches tabs accept validated sections; unavailable,
+restricted and unknown are distinct from available-empty or zero. Season rank
+summaries are separate from an unimplemented per-match rank timeline. Match
+summaries bind every row to the requested UID, maximum50, scope recent with
+explicit unknown completeness. Synthetic fixtures never enter production.
+29 web contract/service/projector tests, TypeScript check and production build
+passed. Deployed source has NO new live full-stat source; default is still the
+anonymous official-store IGN/level lookup.
+
+That store lookup currently returns HTTP200/application0500 for previously
+working UIDs, also reproduced in its own normal browser UI with user-approved
+terms and UID1370598422. It does NOT establish invalid UID. The error preceded
+the announced September11 09:00UTC maintenance window; causation is unproven.
+Ignored website outputs/netease-lookup-diagnostic-2026-09-11.md records evidence.
+User approved a one-time September11 07:15 America/New_York recovery comparison,
+scheduled as heartbeat recheck-netease-after-maintenance in this task. Do not
+duplicate that schedule or change Wi-Fi/network settings.
+
+Root source improvements (not a new Desktop executable):
+
+- GameCareerClient now accepts four explicit zero-argument providers for public
+  configuration, Career RPC methods, owner credentials and advertised server.
+  With all supplied, archive may be omitted and no desktop loaders run. Partial
+  injection retains desktop defaults. Failure never silently falls back. This
+  is an injection seam, NOT credential acquisition/renewal.
+- game_career_probe adds make_match_summary_request, verify_match_summary_args
+  and read_one_match_summary for the observed native query_match_summary call,
+  target UID/zone, first page0/size50 only. Whole request+nonce/method+every row's
+  target UID must match. Shared reader keeps15s/128-record/4MiB bounds. Separate
+  global BattleHistoryIsVisibleToOther permission is a caller prerequisite;
+  public overview alone is insufficient. No CLI/provider live path was enabled.
+- 123 game regression tests pass, including27 shared-client and30 Career/probe
+  tests. New match-summary behavior is synthetic-tested, NOT live-verified.
+  Final complete Python suite:482 tests passed in69.094s. Existing synthetic
+  injected-error logs and temporary-file ResourceWarnings were observed; no
+  unrelated cleanup or match-index changes were made.
+- API_RESEARCH.md now records static hero, other-player match/detail and rank
+  delta contracts with pinned archive source evidence. Only five aggregate
+  Career fields were previously live-projected; do not reconstruct the unsaved
+  41-field list or conflate hero total_match_win_count with total_win_count.
+
+Remaining: a verified independent platform/UniSDK login and renewal flow,
+SocialMatrix acquisition/renewal without captures, versioned portable public
+configuration, authenticated server hosting (Sites Worker cannot run the native
+TCP client), and live verification of history/hero fields with correct privacy.
+Normal store browser login has not been established as game authentication;
+OAuth access tokens must not be substituted for gas_token. No game/account
+credentials were read, exported or deployed during this interim implementation.
+
+## Earlier delivered checkpoint: one-step NetEase stats and Desktop verified
 
 The requested one-step workflow is implemented and delivered for verified
 available data. UID or exact IGN Add, normal card Refresh, and streaming bulk

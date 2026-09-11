@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import game_career_client as client
 
@@ -64,6 +64,107 @@ class GameCareerClientTest(unittest.TestCase):
         self.assertEqual(kwargs["own_uid"], OWN)
         kwargs["on_verified"](profile(uid))
         return {"career_verified": True, "unrelated": "fixture-never-export"}
+
+    def injected_client(self):
+        providers = {name: Mock(return_value=object()) for name in
+                     ("configuration_provider", "career_methods_provider",
+                      "own_credentials_provider", "server_provider")}
+        value = client.GameCareerClient(OWN, **providers)
+        value.IDLE_SECONDS = 0.05
+        value.REQUEST_WAIT_SECONDS = 2.0
+        self.addCleanup(value.close)
+        return value, providers
+
+    def test_injected_providers_are_lazy_and_invalid_requests_do_not_load_them(self):
+        value, providers = self.injected_client()
+        self.assertIsNone(value.archive)
+        self.assertFalse(value.status()["connected"])
+        self.assertFalse(value.status()["automatic_renewal"])
+        for args in ((OWN, 19), (TARGET, -1), (TARGET, 19, "xbox")):
+            with self.subTest(args=args), self.assertRaises(client.GameCareerUnavailable):
+                value.read_profile(*args)
+        for provider in providers.values():
+            provider.assert_not_called()
+        for default in (self.config, self.methods, self.inputs, self.server, self.check):
+            default.assert_not_called()
+        self.assertIsNone(value._worker)
+
+    def test_fully_injected_client_uses_no_desktop_loader_and_preserves_verified_flow(self):
+        value, providers = self.injected_client()
+        for default in (self.config, self.methods, self.inputs, self.server):
+            default.side_effect = AssertionError("Desktop loader must not run")
+        self.assertEqual(value.read_profile(TARGET, 19), EXPECTED)
+        self.assertEqual(value.read_profile(OTHER, 19), EXPECTED)
+        for provider in providers.values():
+            provider.assert_called_once_with()
+        for default in (self.config, self.methods, self.inputs, self.server):
+            default.assert_not_called()
+        self.assertEqual(self.check.call_count, 1)
+        call = self.check.call_args
+        self.assertIs(call.args[0], providers["configuration_provider"].return_value)
+        self.assertIs(call.args[1], providers["server_provider"].return_value)
+        self.assertIs(call.kwargs["inputs"], providers["own_credentials_provider"].return_value)
+        for call in self.read.call_args_list:
+            self.assertIs(call.args[3], providers["career_methods_provider"].return_value)
+        self.assertNotIn("fixture-never-export", json.dumps(value.status()))
+
+    def test_injected_providers_reload_for_each_new_connection(self):
+        value, providers = self.injected_client()
+        first_inputs, next_inputs = object(), object()
+        providers["own_credentials_provider"].side_effect = [first_inputs, next_inputs]
+        self.assertEqual(value.read_profile(TARGET, 19), EXPECTED)
+        value._worker.join(timeout=1.0)
+        self.assertFalse(value._worker.is_alive())
+        self.assertTrue(self.connections[0].closed)
+        self.assertEqual(value.read_profile(OTHER, 19), EXPECTED)
+        for provider in providers.values():
+            self.assertEqual(provider.call_count, 2)
+        self.assertIs(self.check.call_args_list[0].kwargs["inputs"], first_inputs)
+        self.assertIs(self.check.call_args_list[1].kwargs["inputs"], next_inputs)
+
+    def test_injected_provider_failure_is_redacted_and_never_falls_back(self):
+        stages = {"configuration_provider": "configuration", "career_methods_provider": "career_methods",
+                  "own_credentials_provider": "own_credentials", "server_provider": "advertised_server"}
+        for name, stage in stages.items():
+            with self.subTest(provider=name):
+                value, providers = self.injected_client()
+                providers[name].side_effect = ValueError("fixture-never-export")
+                with self.assertRaises(client.GameCareerUnavailable) as failure:
+                    value.read_profile(TARGET, 19)
+                self.assertEqual(failure.exception.code, "game_career_session_unavailable")
+                self.assertEqual(value.status()["stage"], stage)
+                self.assertEqual(value.status()["failure_kind"], "validation_failed")
+                self.assertNotIn("fixture-never-export", str(failure.exception) + json.dumps(value.status()))
+                with self.assertRaises(client.GameCareerUnavailable) as cooldown:
+                    value.read_profile(OTHER, 19)
+                self.assertEqual(cooldown.exception.code, "game_career_cooldown")
+                providers[name].assert_called_once_with()
+                for default in (self.config, self.methods, self.inputs, self.server, self.check, self.read):
+                    default.assert_not_called()
+                value.close()
+
+    def test_partial_injection_preserves_unspecified_desktop_defaults(self):
+        supplied_inputs = Mock(return_value=object())
+        value = client.GameCareerClient(OWN, Path("fixture-other.uep"), own_credentials_provider=supplied_inputs)
+        self.addCleanup(value.close)
+        self.assertEqual(value.read_profile(TARGET, 19), EXPECTED)
+        supplied_inputs.assert_called_once_with()
+        self.inputs.assert_not_called()
+        self.config.assert_called_once_with(archive=Path("fixture-other.uep"))
+        self.methods.assert_called_once_with(Path("fixture-other.uep"))
+        self.server.assert_called_once_with()
+
+    def test_missing_archive_or_invalid_provider_is_rejected_without_loading(self):
+        names = ("configuration_provider", "career_methods_provider", "own_credentials_provider", "server_provider")
+        providers = {name: Mock() for name in names}
+        for name in names:
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                client.GameCareerClient(OWN, **{key: value for key, value in providers.items() if key != name})
+            with self.subTest(invalid=name), self.assertRaises(ValueError) as failure:
+                client.GameCareerClient(OWN, Path("fixture"), **{name: "fixture-never-export"})
+            self.assertNotIn("fixture-never-export", str(failure.exception))
+        for provider in providers.values():
+            provider.assert_not_called()
 
     def test_two_other_players_share_one_login_and_only_projected_data_leaves(self):
         first = self.value.read_profile(TARGET, 19)
