@@ -56,24 +56,67 @@ The first real export exposed an overly small version-file bound: the public
 version.json contains a108231-byte asset inventory. A256KiB bound and synthetic
 large-inventory regression corrected this; the inventory is never exported.
 
-Official web-auth source research identified both oauth/refresh_token and
-sdk_token normal SDK paths, but neither is verified game authentication. The
-actual browser SAUTH lacks ip/aim_info that native gen_auth_info directly
-indexes; no inspected conversion path supplies them. Do not fill invented
-metadata, relabel web as PC or treat the response finalizer as an exchange.
-See the new API_RESEARCH.md opening section for exact primary assets and
-bounded conclusions. The official store tab is open on Account Login; owner
-normal sign-in was requested asynchronously and is still pending. No account
-credentials or authentication requests were used during this follow-up.
+Owner sign-in is NO LONGER pending: normal Steam-linked store login and character
+selection verified1370598422 / ゆいᶻᶻᶻ / level32. Important correction: the actual
+issued SDK object is platformpc, SDK1.0.0, not an assumed web/1.0.8 bundle. It
+has sessionid and refresh_token but lacks gas_token/ip/aim_info. See the opening
+API_RESEARCH.md section for observed fields and corrected source offsets.
 
-The next continuation rechecked the official Account Login UI: it still shows
-Log in, with no owner account session. One final bounded native ntLogin check
-found SDK state dispatch, not a reusable browser-to-game exchange or renewal
-contract (API_RESEARCH.md records exact RVAs). There are no live tests/jobs left
-to wait on. Do not repeat the unchanged SDK/static/handshake checks or create
-speculative authentication code; the next evidence requires the owner's normal
-official sign-in. Keep the full goal incomplete. This continuation did not
-produce a working authentication path or change the live website.
+The separate research-only web_sdk_auth_probe.py and one-use loopback helper
+scripts/probe-web-sdk-login.py made one minimal AUTH attempt preserving that
+SDK contract and omitting unknown native fields. The existing native builder is
+unchanged. After a first handoff expired WITHOUT credentials or game AUTH, a
+dummy-only handoff passed; the fresh real handoff then completed. No browser
+permission, firewall, Wi-Fi or network setting was changed. Initial timeout
+cause remains unknown. Both helper processes are terminal, not pending jobs.
+
+Live result: prepare verified; one connection,286 handshake+593 application
+bytes sent,128 received; AUTH rejected with server_error_code1911. Credentials
+were sent only to the normal advertised NetEase LOGIN service, never printed
+or saved. Refresh tokens stayed in the browser. No gateway enter, role creation,
+Career query, punishment query or automatic retry followed. Do not call this an
+invalid UID, successful game login, or proof that every browser token fails.
+The official store remains signed in; do not ask for the same login again.
+
+Normal oauth/refresh_token and sdk_token paths are source-verified, not proven
+independent game authentication/renewal. Missing native fields must not be
+invented. Next work requires explaining1911 and an evidence-backed change before
+another AUTH attempt. Pinned errcode entry875 maps1911 to
+BATTLE_DS_VERSION_NOT_FOUND, not253 LOGIN_ERR_AUTH_FAIL; which absent version
+field caused it and token acceptance remain unproven. The full Python suite
+passed538 tests in116.645s, including21 new synthetic AUTH/handoff tests.
+Existing non-failing injected-error/ResourceWarning outputs remain unchanged.
+The standalone integration and full goal remain incomplete.
+
+Follow-up: pinned gen_auth_info maps client_version and engine_ver to the public
+build changelist. An explicit --with-reviewed-version variant adds only those
+two fields using packaged provenance3825464, not an invented current version.
+One changed-envelope AUTH test also returned1911 (286 handshake+618 application
+bytes sent,128 received). It closed without gateway/profile queries. Then pinned
+native SDK source independently established outer os_namepc; the separately
+selected --with-reviewed-pc-envelope variant adds only that field to the versioned
+envelope. Its final comparison also returned1911 (625 application bytes sent).
+There were THREE real AUTH attempts, each separately evidence-selected, not an
+automatic retry loop. The first failed handoff sent none. All helpers are closed.
+Do not retry these envelopes unchanged or infer a credential/UID failure.
+
+Concrete next prerequisite: Steam appmanifest2767030 records installed
+buildid25098044 versus TargetBuildID25249397 and a20656586254-byte download with
+0 bytes downloaded. The installed version.json is still1.1.3825464/changelist
+3825464, last updatedSeptember5 00:04:37UTC. Steam buildIDs are NOT the game
+changelist. No staged version file or known public updater-manifest URL was
+found. Obtain the official update and independently review its public version,
+transport/method/schema inputs before another AUTH test; do not just repin
+hashes or substitute the Steam targetID. No update/download/launch was started.
+This supports the stale-build hypothesis but does not prove the complete cause
+of1911. The official web login step is complete; no repeat sign-in is requested.
+
+Final verification:29 focused AUTH/handoff tests,18 existing LOGIN regressions,
+and full546 tests in101.007s passed. The independent correctness review's one
+expiry-report defect was fixed: if body reading began but handoff validation
+failed, expiration reports credentials_read:null rather than false. The final
+deltas had no further review findings. No production app/site or desktop build
+changed. All test/helper processes are terminal; there is nothing left to poll.
 
 No website source/deployment, Desktop executable, Wi-Fi, game process, reports
 or punishment queries were changed by this goal research/preparation work.

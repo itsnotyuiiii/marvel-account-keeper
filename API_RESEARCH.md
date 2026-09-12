@@ -2,6 +2,141 @@
 
 ## September 11, 2026: official web login and renewal contract
 
+### Owner sign-in and one AUTH-only experiment
+
+The owner completed normal Steam-linked Account Login. Selecting the official
+store character returned HTTP200/application0000 from
+`/gameclub/marvelrivals/11001/login-role`; both `roleid` and `show_roleid` matched
+1370598422, with IGN ゆいᶻᶻᶻ and level32. The internal account ID is distinct
+from the game UID. No raw account IDs or credentials were exported to notes.
+
+Important correction to the earlier platform inference: this actual login's
+game-specific SDK object has `platform="pc"`, `sdk_version="1.0.0"`,
+`gameid="x20naxx2gb"`, `login_channel="netease_global"`, and
+`app_channel="netease.allysdk_global"`. Those are issued values, not a web-to-PC
+relabel. Its other fields are sdkuid, sessionid, deviceid, udid, client_login_sn,
+and refresh_token. gas_token, ip and aim_info are absent. Only shape, constants
+and presence metadata were inspected; token values were not printed or saved.
+
+The concrete wrapper constructor is at module offset148974 (SDK_VERSION1.0.0);
+`__createSauthJson` at158247 copies the login result's platform. Mpay's
+`formatPlatform` at427447 maps p to pc; normal method selection at568900 uses
+the method's allowed platform. Thus generic web defaults do not establish the
+actual returned platform. The wrapper's SDK instance is private, not a verified
+window.sdk/window.unisdk global. Normal refresh behavior is source-verified
+below, but successful independent renewal is still NOT live-verified.
+
+`web_sdk_auth_probe.py` and `scripts/probe-web-sdk-login.py` implement a separate,
+research-only AUTH experiment. The SDK JSON is preserved without refresh_token;
+seven directly corresponding SDK envelope values are copied. Unknown native
+fields are omitted, not fabricated. The existing native build_auth validator
+is unchanged. Encoding an absent field is supported by the serializer; this
+does not prove that the server considers that field optional.
+
+The first one-use localhost handoff expired before receiving credentials; no
+game AUTH was sent. Read-only browser permission checks reported granted, and
+a later dummy-only preflight/POST succeeded without changing permissions,
+network settings or code. The initial timeout's cause was not established.
+
+The subsequent in-memory handoff succeeded. It loaded only the hash-pinned
+packaged public manifest, fetched its exact official server-list URL once,
+and made one AUTH-only connection. The terminal report was:
+
+```json
+{"outcome":"server_rejected_authentication","connections_attempted":1,
+ "handshake_bytes_sent":286,"application_bytes_sent":593,"bytes_received":128,
+ "prepare_verified":true,"credentials_sent":true,"server_error_code":1911,
+ "auth_service_accepted":false,"own_role_verified":false,
+ "game_login_verified":false,"career_verified":false,"secrets_saved":false}
+```
+
+No gateway entry, role creation, retry, Career query, punishment query or
+refresh request followed. Refresh tokens stayed in the browser. The helper
+closed and network observation stopped. This is a real rejection of this
+minimal envelope, not evidence of an invalid UID or proof that all browser-issued
+tokens are incompatible. The hosted site and production provider are unchanged.
+
+The pinned archive's share/errcode.py entry875 maps1911 to
+`BATTLE_DS_VERSION_NOT_FOUND` (LOAD_CONST243 at976, STORE_NAME243 at978).
+This is distinct from253 `LOGIN_ERR_AUTH_FAIL`. The label points to a version
+condition, but does not by itself identify which omitted field is required or
+whether the SDK session was validated. No version strings should be guessed.
+
+All21 new synthetic AUTH/handoff tests passed. The full Python suite passed
+538 tests in116.645s, exit0. Existing injected-error warnings, temporary-file
+ResourceWarnings and the already-running message were non-failing outputs.
+
+### Evidence-backed versioned variant
+
+Further pinned source inspection identified the normal version contract:
+entry7800 gen_auth_info line223 assigns `client_version` from
+`utils.get_build_change_list()` at472-510 and `engine_ver` from the same value
+at776-802, inserted through key tuple40 at902-904. `client_full_version` defaults
+to an empty string at512-516; only Development/Test builds replace it. No full
+version string was invented. Entry4891 get_build_change_list line1373 derives
+the fourth build-version component. s_login_auth line959 explicitly compares1911
+at272-302, then invokes show_check_changlist_panel at304-416.
+
+A separately selected `--with-reviewed-version` variant adds ONLY the genuine
+packaged provenance value3825464 as client_version and engine_ver. The pure
+builder rejects any other supplied version before I/O; it leaves the SDK JSON
+unchanged. This is an experiment with a reviewed public version, not a claim
+that this build is current after the patch.
+
+One versioned AUTH-only attempt sent286 handshake+618 application bytes and
+received128 bytes. Prepare verified, but it returned the SAME1911. No gateway
+entry, profile query or further unchanged retry followed, and the helper exited.
+Thus those two fields alone do not resolve version selection. Stale public
+version versus other absent platform/envelope inputs remains unresolved; neither
+attempt establishes a verdict on token validity. The26 focused synthetic
+AUTH/handoff tests passed after adding the explicit variant (full538-suite result
+above predates these five additional tests).
+
+### Reviewed outer PC selector and pending distributor update
+
+The native source separately sets outer `os_name` from
+`get_sdk_prop_str("SDC_LOG_OS_NAME")` (entry7800,360-382). The hash-pinned native
+SDK property getter maps that property to literal pc: string RVA0x4b07a8,
+matching branch0x1fff9-0x20016, pc stringRVA0x4b07b8, return0x206cd-0x206d9.
+This is separate from `platform` inside SDK JSON. The explicit
+`--with-reviewed-pc-envelope` variant therefore adds only that reviewed pc
+selector to the versioned envelope, without altering credentials or inventing
+other metadata. Unsupported os_name values fail before AUTH dispatch.
+
+The third and final AUTH comparison sent286 handshake+625 application bytes,
+received128, and again returned1911 after verified prepare. No role was verified,
+no gateway entered, and all three helper sessions closed. Stop AUTH testing
+with this build rather than trying more unsupported values. The code now also
+tracks whether handoff body reading began: an expired handoff after a rejected
+or partial body reports credentials_read:null, not a false claim of no read.
+
+Read-only inspection then found a concrete pending update in Steam's public
+appmanifest2767030 metadata: installed buildid25098044, TargetBuildID25249397,
+BytesToDownload20656586254, BytesDownloaded0. The installed game's version.json
+still reports version1.1.3825464/changelist3825464. Its recorded install update
+time is September5 00:04:37UTC. Steam's build IDs are NOT the native game
+changelist; do not substitute25249397 into AUTH. No download, update, game
+launch or Steam credential read was performed. A known downloading directory
+for that app was absent, so there is no verified staged version.json to inspect.
+
+The other three reviewed public game configs expose no current-version manifest
+URL; DefaultGame has HTTP chunk installation disabled and its directory/version
+values empty. An official Steam UpToDateCheck documentation lookup exposed a
+public method but its attempted web retrieval did not yield version data; it
+does not establish a replacement native changelist. Do not invent one from
+patch dates or unrelated version numbers. Next: obtain the current official
+distribution update, review its actual public game changelist/material/schema,
+then revalidate compatibility before any further AUTH test. The pending update
+supports a stale-build hypothesis but does not prove1911's full server cause.
+
+Final verification after all variants and the expiry-report correction:
+29 focused AUTH/handoff tests passed;18 existing LOGIN regressions passed;
+the complete Python suite passed546 tests in101.007s, exit0. Independent bounded
+correctness review found the expiry-report issue, which was fixed and retested,
+and no additional issues in the final deltas. No production app or site change.
+
+### Earlier static research and remaining contract limits
+
 Read-only retrieval of the current official store HTML and its public scripts
 still identifies `module.894e7ca6.js` and Mpay H5 SDK v1.4.2. This research did
 not read browser credentials, submit authentication, or contact the game. The
@@ -30,8 +165,8 @@ Two distinct normal SDK paths are now documented:
 
 Mpay requests also include normal `game_id`, `cp`, `cv`, `gv`, `ci`,
 `app_channel`, `lang`, `device_id`, `debug_mode`, and `package_name` metadata.
-The store uses SDK defaults `cp="w"`, `cv="3.1.5"`; no native-platform override
-was found in its wrapper. Refresh-token possession, browser success, and a
+The store has SDK defaults `cp="w"`, `cv="3.1.5"`, but the concrete login result
+above independently returned pc. Refresh-token possession, browser success, and a
 similarly named `login_token` are not sufficient compatibility evidence.
 
 Store account login uses GET `/gameclub/marvelrivals/login-account`, with
@@ -51,10 +186,9 @@ Primary sources and offsets in the inspected minified versions:
 - [Store main bundle](https://pay.neteasegames.com/static/js/main.cfbf45bf.js):
   account request/handler 1104, 25855–32200, 166211–168200.
 
-Remaining acceptance test: use the owner's normal authorized sign-in and the
-actual observed contract, preserving identities/platforms, to establish
-whether any returned credentials can authenticate the expected existing game
-role. Do not manufacture missing native fields or assume browser OAuth is a
+Remaining acceptance test: establish why the real minimal AUTH envelope above
+was rejected, and whether an evidenced compatible request can authenticate the
+expected existing game role. Do not manufacture missing native fields or assume browser OAuth is a
 gas token. Server-side acquisition, renewal, SocialMatrix access, current
 patch compatibility, and hosted full-stat integration remain unverified.
 
@@ -89,12 +223,10 @@ server-only renewal path. [Valve's authentication documentation](https://partner
 separates browser OpenID identity from client-generated authentication tickets;
 one must not be substituted for the other.
 
-The official tab still showed Account Login / Log in during the continuation.
-No owner sign-in or credential exchange was available to inspect. Further
-request implementation is pending that normal account flow; repeating this
-unchanged static check, the public SDK fetches or the transport handshake will
-not resolve token audience or renewal. No credentials, logs, captures, game
-processes, reports or authentication requests were used in this check.
+During that earlier static continuation, Account Login still showed Log in.
+The successful owner sign-in and AUTH-only result at the top of this section
+supersede that prerequisite. Repeating an unchanged rejected request, the public
+SDK fetches or the transport handshake will not resolve token audience or renewal.
 
 ## September 11, 2026: static hero, match-history and rank-change contracts
 

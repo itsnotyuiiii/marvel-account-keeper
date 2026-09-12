@@ -76,8 +76,26 @@ is verified, document that limit rather than creating an apparently live feed.
   history-login flows. Neither is proven to yield accepted game authentication.
   Native gen_auth_info directly requires metadata absent from browser SAUTH;
   the inspected paths do not establish a normal browser-to-game conversion.
-  Owner normal Account Login on the official store was requested and is pending.
-  No fabricated metadata, account token reads or game-auth attempts were used.
+  Owner Steam-linked Account Login now verifies1370598422 / ゆいᶻᶻᶻ. Actual
+  issued SDK values are platformpc and SDK1.0.0. One research-only minimal AUTH
+  request preserved that contract and omitted absent native fields; the game
+  service rejected it with code1911 after successful prepare. No gateway entry
+  or stats query followed. Tokens were not printed or saved, refresh stayed in
+  the browser, and the production provider/site remain unchanged. This is not
+  proof of an invalid UID or a general incompatibility of browser-issued tokens.
+  Pinned errcode definitions map1911 to BATTLE_DS_VERSION_NOT_FOUND; the minimal
+  envelope omitted public version fields. Their necessity and current-version
+  acceptance remain unverified. Full Python suite:538 tests passed in116.645s.
+  A separately selected variant adding only reviewed client_version/engine_ver
+  also returned1911. Those fields alone do not resolve the version condition;
+  current build versus missing platform inputs remains unresolved.26 focused
+  tests pass after this variant; the full538 result preceded five added tests.
+  A third source-verified comparison also added outer os_namepc and still1911;
+  no further AUTH was sent. Steam now records a pending20.7GB update (installed
+  Steam build25098044, target25249397); installed native changelist remains3825464.
+  Obtain/review current official public distribution inputs next. Steam buildID
+  must not be used as native changelist, and the update is not a proven fix yet.
+  Final full verification after all research variants:546 tests passed in101.007s.
 - A native UID-keyed current restriction getter was found. It checks login/chat/
   rank categories, not an established event history or adjudicated cause. See
   PUNISHMENT_RESEARCH.md. No reports or punishment queries have been submitted.
