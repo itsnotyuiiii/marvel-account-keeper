@@ -127,6 +127,17 @@ primary links are recorded in API_RESEARCH.md. No binaries, installations,
 account requests or AUTH retries were used. The pending official game update
 remains the next prerequisite; don't repeat these closed metadata leads.
 
+Blocked audit: the same missing updated public game build has persisted across
+the owner-sign-in turn and two goal continuations. The prior continuation made
+progress by closing the specific official distributor metadata alternative; it
+was not a live download wait. Fresh Steam metadata still shows0 downloaded/staged
+bytes, installed native changelist3825464 and target Steam build25249397. Both
+research agents are complete; all helper/test sessions are terminal. The goal
+is BLOCKED, not complete, until the official update/current public artifacts
+are available. Keep the full objective intact. After that state changes, review
+the new artifacts and resume compatibility/authentication work; do not repeat
+the three rejected old-build requests or silently claim current-build support.
+
 No website source/deployment, Desktop executable, Wi-Fi, game process, reports
 or punishment queries were changed by this goal research/preparation work.
 
