@@ -5,11 +5,11 @@ The caller must supply an independently reviewed SHA256 of the exact manifest
 bytes AND the expected source provenance; copying either from an untrusted
 manifest is not a trust decision. These pins provide content integrity, not a
 publisher signature, permission to authenticate, or proof of current server
-compatibility. The reviewed public-only build 3825464 artifact is bundled under
-runtime-inputs; its independently reviewed digest is recorded below. Callers
+compatibility. Reviewed public-only build 3825464 and 3848703 artifacts are
+bundled under runtime-inputs; their independent digests are recorded below. Callers
 still supply the explicit artifact path, expected digest and provenance.
 
-The supported provenance is the previously reviewed build, not an assertion
+Each supported provenance records a separately reviewed build, not an assertion
 that a later patch is compatible. A new build needs separate revalidation.
 Returned inputs fit GameCareerClient's existing explicit provider callbacks;
 credentials, normal login, renewal and HTTP hosting remain separate work.
@@ -60,6 +60,25 @@ SUPPORTED_PROVENANCE = RuntimeProvenance(ARCHIVE_SHA256, IMAGE_SHA256, CLIENT_VE
 # fields on September 11, 2026. Not learned from the manifest at runtime.
 # LF is pinned by .gitattributes. This does not approve a later server patch.
 REVIEWED_MANIFEST_SHA256 = "63d536706d9cb055770129ca413950861d2553cb6c977bdee4f113fa66ccbc28"
+# September 12 review: new archive entries/native RVAs were inspected, not
+# blindly repinned. Transport values and selected LOGIN/Career schemas match.
+# Preserve the legacy constants and artifact for reproducible older evidence.
+CURRENT_PROVENANCE = RuntimeProvenance(
+    "07a3dcf20d539b9a613246047f5f91e4c7b44de62e96e24c47acea1cef5d1f9f",
+    "f9b9afda45adbb8db8162c12906d79d82fe627afecab5c0c3bbf0b5edcea2612",
+    "3848703",
+)
+CURRENT_MANIFEST_SHA256 = "0111accea3a87a8ed6f45190f41cf5e517b400944c6342bdf689afa34bbb1d81"
+
+
+def reviewed_runtime_pin(version):
+    """Select known public metadata only; no file/network lookup or fallback."""
+    if type(version) is str:
+        if version == SUPPORTED_PROVENANCE.client_version:
+            return SUPPORTED_PROVENANCE, REVIEWED_MANIFEST_SHA256
+        if version == CURRENT_PROVENANCE.client_version:
+            return CURRENT_PROVENANCE, CURRENT_MANIFEST_SHA256
+    raise RuntimeManifestError("runtime_provenance_unsupported")
 
 
 @dataclass(frozen=True)
@@ -80,7 +99,7 @@ def _validate_pin(expected_sha256, expected_provenance):
             or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
         raise RuntimeManifestError("runtime_manifest_pin_required")
     if (type(expected_provenance) is not RuntimeProvenance
-            or expected_provenance != SUPPORTED_PROVENANCE):
+            or expected_provenance not in (SUPPORTED_PROVENANCE, CURRENT_PROVENANCE)):
         raise RuntimeManifestError("runtime_provenance_unsupported")
 
 

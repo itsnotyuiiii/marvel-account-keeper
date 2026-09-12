@@ -3,7 +3,91 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Active goal and recovery update — September 11, 2026
+## Current checkpoint — September 12, 2026: current-build gateway login verified
+
+The old missing-update blocker below is RESOLVED. Steam now records installed
+and target build 25249397, StateFlags 4, downloaded 20657438464 of 20657438464 bytes
+and staged 76055569736 of 76055569736 bytes. The official installed version is
+1.1.3848703 / changelist 3848703. Steam build IDs are not native changelists.
+The goal is active and INCOMPLETE, not blocked on the old 3825464 distribution.
+
+Independent static review of the updated public archive, native image, SDK,
+version metadata and shipping config established the current inputs. All five
+relevant typed LOGIN schema descriptors match the implementation exactly;
+Career request/reply IDs remain 113612951 / 1993623137. The RSA key, handshake
+parameter and official server-list URL are unchanged, but their updated source
+locations and hashes were reviewed rather than repinned blindly. See the new
+API_RESEARCH.md checkpoint and runtime-inputs/README.md for exact provenance.
+Current send_login_enter and gateway HOTFIX/avatar message contracts also match
+the implementation. A separate gateway experiment is now verified below; the
+initial AUTH-only result did not itself establish gateway entry.
+
+The separate public-only runtime-inputs/3848703.json is 774 bytes, SHA256
+0111accea3a87a8ed6f45190f41cf5e517b400944c6342bdf689afa34bbb1d81. Its independent
+pin and exact source provenance are supported by portable_game_runtime.py.
+The old 3825464 artifact and all existing defaults remain unchanged. Select the
+reviewed current build explicitly with `--runtime-version 3848703`; no
+application/site provider was switched.
+
+ONE current-build AUTH-only experiment used the owner's still-signed-in official
+store session, the reviewed current client_version/engine_ver and outer os_name=pc.
+It returned own_existing_role_verified for expected UID 1370598422: prepare,
+AUTH-service acceptance and own-role verification were true. One connection
+sent 286 handshake + 625 application bytes and received 2399 bytes, then closed.
+No gateway entry, completed game login, Career/punishment query, refresh request,
+role creation, or saved credentials followed. Refresh stayed in the browser.
+An initial helper expired before payload reading and was terminal before the
+fresh successful helper; that expiry sent no AUTH. All helpers are now terminal.
+
+Gateway follow-up: explicitly adding `--enter` with the same reviewed current
+build and PC envelope returned own_gateway_login_verified. Prepare, AUTH-service,
+own-role and game-login verification were true. The LOGIN service used one
+connection (286 handshake + 625 application bytes sent, 2397 received); the
+separate gateway used one connection (286 handshake + 71 application bytes sent,
+39295 received). Its LOGIN result matched UID 1370598422, with login_key presence
+verified but never exported, and reply_relogin=0. Four HOTFIX data records
+contained 37886 content bytes; none were executed. Both sockets and the helper
+are terminal. No after_login callback, Career/SocialMatrix/punishment query,
+refresh request or credential saving followed. career_verified, secrets_saved
+and remote_code_executed remain false.
+
+The separate research-only run_gateway_once path requires explicit current-build
+and reviewed-PC selection and validates nested result contracts. It does not
+switch the native builder, production provider or website. Normal initial
+SocialMatrix token acquisition is next; the S_REFRESH_SOCIAL_TOKEN source was
+found, but a live token has not yet been received or verified. Its numeric RPC
+index remains unverified because the registration prefix depends on an unresolved
+inherited VAR_NAME. Do not guess the index or repeat gateway login until the
+passive collector is ready; see API_RESEARCH.md for the exact source lead and
+fresh-route/setup requirements.
+
+This verifies acceptance of this owner-issued SDK session and this reviewed
+current-build envelope. The earlier 1911 responses do not establish an invalid
+UID. Updating the reviewed version resolved rejection in this tested envelope;
+it does not prove the server's full causal chain or acceptance of other variants.
+Do not repeat the completed store login or the rejected old-build experiments.
+
+Verification so far: 50 combined web-SDK tests passed in 0.097s and 40 runtime
+tests passed in 0.129s. This includes 15 new gateway and three helper tests;
+the earlier AUTH-only checkpoint had 32 web-SDK tests. The complete Python suite
+after all current source edits passed 572 tests in 69.995s. Existing non-failing
+synthetic warnings, injected vault-write failure output and ResourceWarnings
+remain; the earlier 546-test result below is historical. Installed files were
+used only for static public-input review; the live helper loaded the packaged
+artifact, not installed game files, logs or
+captures. No game launch, memory/log inspection or Wi-Fi change occurred. A
+read-only process-name check found no running Marvel Rivals game before the
+gateway experiment; it did not read process memory.
+
+Next: verify independent authentication/renewal, the separate SocialMatrix
+session and exact-UID/visibility-bound live sections; then integrate and verify
+the hosted contract. Appropriate server hosting is
+still required because Sites cannot run the native TCP client; paid provider
+choices need approval. The website still has only its live identity source.
+Punishment history remains unverified; do not query report-feedback paths by
+submitting reports or imply that unavailable records mean a clean account.
+
+## Earlier checkpoint — September 11, 2026 (update blocker superseded above)
 
 The user explicitly activated a goal for the standalone NetEase-only hosted
 profile integration and added investigation of UID-linked punishment history

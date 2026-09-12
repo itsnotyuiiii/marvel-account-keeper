@@ -222,6 +222,15 @@ class WebSdkAuthProbeTest(unittest.TestCase):
         self.assertEqual(report["server_error_code"], 1911)
         self.assertFalse(report["auth_service_accepted"])
         self.assertFalse(report["own_role_verified"])
+
+    def test_current_reviewed_version_preserves_wire_and_owner_binding(self):
+        sock, report = self._run_wire(auth_reply(), client_version="3848703")
+        wire_auth = login.decode_body(login.AUTH_REQUEST, sock.sent[1][7:])
+        self.assertEqual(wire_auth["client_version"], "3848703")
+        self.assertEqual(wire_auth["engine_ver"], "3848703")
+        self.assertEqual(json.loads(wire_auth["sauth_json"]), fixture())
+        self.assertEqual(report["outcome"], "own_existing_role_verified")
+        self.assertTrue(report["own_role_verified"])
         self.assertEqual(report["connections_attempted"], 1)
         self.assertEqual(len(sock.sent), 2)
 

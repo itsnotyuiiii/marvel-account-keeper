@@ -1,5 +1,5 @@
 """Synthetic loopback handler tests; no listeners, accounts or network."""
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from http.client import HTTPMessage
 import importlib.util
 import io
@@ -64,13 +64,31 @@ class WebSDKHandoffTest(unittest.TestCase):
         listener.assert_not_called()
         loaded.assert_not_called()
 
+    def test_current_runtime_preview_is_explicit_and_offline(self):
+        with patch.object(handoff, "HTTPServer") as listener, \
+                patch.object(handoff.runtime, "load_runtime_manifest") as loaded:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                handoff.main(["--runtime-version", "3848703", "--with-reviewed-pc-envelope"])
+        report = json.loads(out.getvalue())
+        self.assertEqual(report["runtime_version"], "3848703")
+        self.assertTrue(report["with_reviewed_version"])
+        self.assertTrue(report["with_reviewed_pc_envelope"])
+        self.assertFalse(report["files_read"])
+        self.assertFalse(report["network_attempted"])
+        listener.assert_not_called()
+        loaded.assert_not_called()
+
     def test_versioned_attempt_uses_only_explicit_packaged_provenance(self):
-        public = SimpleNamespace(
-            configuration=object(), login_list_url=handoff.runtime.LOGIN_LIST_URL,
-            provenance=handoff.runtime.SUPPORTED_PROVENANCE)
         server = object()
-        for enabled, pc in ((False, False), (True, False), (False, True)):
-            with self.subTest(enabled=enabled, pc=pc):
+        cases = [(version, enabled, pc) for version in ("3825464", "3848703")
+                 for enabled, pc in ((False, False), (True, False), (False, True))]
+        for version, enabled, pc in cases:
+            with self.subTest(version=version, enabled=enabled, pc=pc):
+                provenance, pin = handoff.runtime.reviewed_runtime_pin(version)
+                public = SimpleNamespace(
+                    configuration=object(), login_list_url=handoff.runtime.LOGIN_LIST_URL,
+                    provenance=provenance)
                 session_factory = MagicMock()
                 session = session_factory.return_value.__enter__.return_value
                 response = session.get.return_value.__enter__.return_value
@@ -81,20 +99,86 @@ class WebSDKHandoffTest(unittest.TestCase):
                         patch.object(handoff.probe, "run_auth_once", return_value={"outcome": "fixture"}) as run, \
                         patch("requests.Session", session_factory):
                     handoff.attempt_auth(self.payload()["sauth"], with_reviewed_version=enabled,
-                                        with_reviewed_pc_envelope=pc)
+                                        with_reviewed_pc_envelope=pc, runtime_version=version)
                 run.assert_called_once_with(
                     self.payload()["sauth"], public.configuration, server,
                     client_version=public.provenance.client_version if enabled or pc else None,
                     os_name="pc" if pc else None)
                 loaded.assert_called_once_with(
-                    SCRIPT.parents[1] / "runtime-inputs" / "3825464.json",
-                    expected_sha256=handoff.runtime.REVIEWED_MANIFEST_SHA256,
-                    expected_provenance=handoff.runtime.SUPPORTED_PROVENANCE)
+                    SCRIPT.parents[1] / "runtime-inputs" / (version + ".json"),
+                    expected_sha256=pin, expected_provenance=provenance)
                 self.assertFalse(session.trust_env)
                 session.get.assert_called_once_with(
                     handoff.runtime.LOGIN_LIST_URL, timeout=10, allow_redirects=False, stream=True)
                 response.raw.read.assert_called_once_with(4097, decode_content=True)
                 project.assert_called_once_with(b"synthetic-server-list")
+
+    def test_unknown_runtime_version_cannot_read_files_or_fall_back(self):
+        with patch.object(handoff.runtime, "load_runtime_manifest") as loaded, \
+                patch("requests.Session") as session:
+            with self.assertRaises(handoff.runtime.RuntimeManifestError):
+                handoff.attempt_auth(self.payload()["sauth"], runtime_version="../../unreviewed")
+        loaded.assert_not_called()
+        session.assert_not_called()
+
+    def test_gateway_preview_is_explicit_current_and_offline(self):
+        with patch.object(handoff, "HTTPServer") as listener, \
+                patch.object(handoff.runtime, "load_runtime_manifest") as loaded:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                handoff.main(["--enter", "--runtime-version", "3848703",
+                              "--with-reviewed-pc-envelope"])
+            report = json.loads(out.getvalue())
+            self.assertTrue(report["enter_gateway"])
+            self.assertFalse(report["network_attempted"])
+            self.assertFalse(report["files_read"])
+            self.assertFalse(report["credentials_read"])
+        listener.assert_not_called()
+        loaded.assert_not_called()
+
+    def test_gateway_requires_explicit_current_pc_before_any_io(self):
+        with patch.object(handoff, "HTTPServer") as listener, \
+                patch.object(handoff.runtime, "load_runtime_manifest") as loaded, \
+                patch("requests.Session") as session:
+            for args in (["--enter"], ["--enter", "--runtime-version", "3848703"],
+                         ["--enter", "--with-reviewed-pc-envelope"]):
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    handoff.main(args)
+            for version, pc in (("3825464", True), ("3848703", False)):
+                with self.assertRaisesRegex(ValueError, "gateway_requires_current_reviewed_pc_envelope"):
+                    handoff.attempt_auth(self.payload()["sauth"], enter_gateway=True,
+                                         runtime_version=version, with_reviewed_pc_envelope=pc)
+        listener.assert_not_called()
+        loaded.assert_not_called()
+        session.assert_not_called()
+
+    def test_gateway_dispatch_uses_only_current_packaged_runtime(self):
+        provenance, pin = handoff.runtime.reviewed_runtime_pin("3848703")
+        public = SimpleNamespace(configuration=object(), login_list_url=handoff.runtime.LOGIN_LIST_URL,
+                                 provenance=provenance)
+        server = object()
+        session_factory = MagicMock()
+        session = session_factory.return_value.__enter__.return_value
+        response = session.get.return_value.__enter__.return_value
+        response.status_code, response.url = 200, handoff.runtime.LOGIN_LIST_URL
+        response.raw.read.return_value = b"synthetic-server-list"
+        with patch.object(handoff.runtime, "load_runtime_manifest", return_value=public) as loaded, \
+                patch.object(handoff.runtime, "project_login_server", return_value=server), \
+                patch.object(handoff.probe, "run_gateway_once", return_value={"outcome": "fixture"}) as run, \
+                patch.object(handoff.probe, "run_auth_once") as auth, \
+                patch("requests.Session", session_factory):
+            result = handoff.attempt_auth(self.payload()["sauth"], runtime_version="3848703",
+                                         with_reviewed_pc_envelope=True, enter_gateway=True)
+        self.assertEqual(result, {"outcome": "fixture"})
+        run.assert_called_once_with(self.payload()["sauth"], public.configuration, server,
+                                    client_version="3848703", os_name="pc")
+        auth.assert_not_called()
+        loaded.assert_called_once_with(SCRIPT.parents[1] / "runtime-inputs" / "3848703.json",
+                                       expected_sha256=pin, expected_provenance=provenance)
+        self.assertFalse(session.trust_env)
+        session.get.assert_called_once_with(handoff.runtime.LOGIN_LIST_URL, timeout=10,
+                                           allow_redirects=False, stream=True)
+        response.raw.read.assert_called_once_with(4097, decode_content=True)
 
     def test_exact_origin_host_capability_and_loopback_required(self):
         for field, change in (("origin", "https://other.invalid"), ("host", "example.invalid:12345"),

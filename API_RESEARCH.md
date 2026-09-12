@@ -1,5 +1,212 @@
 # Live API research checkpoints
 
+## September 12, 2026: current public build and owner gateway login verified
+
+### Updated distribution and independently reviewed public inputs
+
+The owner-completed Steam update resolves the prior missing-current-build
+prerequisite. App 2767030 metadata now records installed/target build 25249397,
+StateFlags 4, downloaded 20657438464 / 20657438464 bytes and staged 76055569736 /
+76055569736 bytes. The installed version.json reports 1.1.3848703 and native
+changelist 3848703. No Steam build ID or marketing version was substituted into
+AUTH, and this research did not start a download or launch the game.
+
+Updated source provenance:
+
+| Public input | SHA256 |
+| --- | --- |
+| Archive, 49,919,366 bytes | `07a3dcf20d539b9a613246047f5f91e4c7b44de62e96e24c47acea1cef5d1f9f` |
+| Native image, 301,384,192 bytes | `f9b9afda45adbb8db8162c12906d79d82fe627afecab5c0c3bbf0b5edcea2612` |
+| version.json, 104,595 bytes | `a83bba27b4c37f885561662ebae0e2cd197f400defb0eb6dfa4aa39ff73eb951` |
+| NtUniSdkBase.dll, 6,317,568 bytes, version 3.9.9.0 | `d44c9c2558e48c231ee9dd044c6cc065a4eda065a8410862b15aa5676cf8dc00` |
+| Packaged runtime-inputs/3848703.json, 774 bytes | `0111accea3a87a8ed6f45190f41cf5e517b400944c6342bdf689afa34bbb1d81` |
+
+The archive has 9,796 entries and payload offset 172504. The archive-decoding
+bootstrap redirect.py is entry 4764; the public core/bootstrap.py containing
+the RSA assignment is a different entry, 3188. RPC index is 5781, LOGIN protocol
+5112, login manager 7843, utils 4957,
+Career 1838, Career manager 1822, Career component 5371 and const_career 5529.
+The public RSA assignment and default RPC salt validators passed at their new
+locations. Career request/reply method IDs remain 113612951 / 1993623137.
+Only static metadata/data were decoded; recovered game code was not executed.
+
+The typed field descriptors below match the existing Python LOGIN schemas
+exactly, including nested fields. Reconstruction uses field number (LE16),
+type (8-bit), name length (LE16), name bytes, nested count (BE16) and recursive
+children.
+
+| Descriptor | Bytes | SHA256 |
+| --- | ---: | --- |
+| PREPARE | 99 | `160e3de9bed71c809e0cad25eb05c9365669a285315cb34759c1a8dcbe30a0d4` |
+| AUTH reply | 407 | `2fdc5c0f892c759e81f1342850fe6489d5745188ea4dc015e355bb03e643a73d` |
+| LOGIN reply | 112 | `3dd6d26c9c0f5945ead6a0791cc8f08e8d9ed4b533cb923850297bf5b3c5e89a` |
+| AUTH request | 509 | `ba052bc837ff6ea734f2572cc8e9deec92cd67a9edb8338134472a034e644aba` |
+| ENTER | 65 | `37901d9bd15700502f2c04e839afd9bc10558cd012d31f78743918fb63a539d4` |
+
+AUTH still has 30 fields, including os_name (2), client_version (7), engine_ver
+(27), info (28), client_full_version (29) and is_gfn (30). Main command 1 and
+server PREPARE (101), AUTH (102), RES (103) and client AUTH (1) / ENTER (3) are
+unchanged. This establishes the reviewed schema contract, not successful
+gateway entry or Career access.
+
+Gateway prerequisites also match the existing implementation: current login
+manager entry 7843, send_login_enter line 1261, retains the same AUTH bindings,
+empty device_basic and selected existing-role contract. proto/oper_pto entry
+5111 has the unchanged main 4 / sub 102 HOTFIX message; its complete 45-byte
+descriptor SHA256 is
+`d2f8c48cf896c05c0cb25e061f372ca27721bdeb6c96a21dbed8c293d27f1bb7`.
+avatar_pto entry 5113 still receives main 3 / sub 101 with rpcindex uint32 and
+args blob. These are static prerequisites for a separately selected gateway
+experiment, not a live gateway result or permission to execute HOTFIX content.
+
+The native image's UTF16 full build is 1.1.3848703.3848703 at RVA 0xa371070.
+The same 18-byte handshake parameter has SHA256
+`e0f8b1c2e1e906a1d4cf345c554852a844cc8bc1411c0b7ba2385885cd4a9c49`, now at
+RVA 0xb616098 / file offset 0xb615298. Constructor references at 0x558ecb8–0x558eccc
+use length 0x12 and assign manager+0x300. Old RVA 0xb41fb78 is no longer valid.
+The public RSA DER is unchanged, SHA256
+`d37c1ab339cfd920f261b8457f9e5dadac6c076684ba93c51987d2299464401c`.
+
+The updated native SDK still maps SDC_LOG_OS_NAME to literal pc. Its property
+and value string RVAs are now 0x4b0648 and 0x4b0658; the matching branch remains
+0x1fff9–0x20016 and return 0x206cd–0x206d9. Old string RVAs 0x4b07a8/0x4b07b8
+are not valid for this updated DLL. NtUniSdkSteam.dll remains unchanged, SHA256
+`e888fa845eb3f67fe17aa9c48dc48a3c72700b3931ad51d55e7c495d4911aa4b`.
+
+The shipping config plaintext remains SHA256
+`0609b5302a6cc11e5398a2d58eecd99bc0913d90bc8a46c5717d9ab4046080fc`; its exact
+official server-list URL remains
+`https://x20na.update.easebar.com/server_pc_prod_serverB`.
+
+The new artifact is separately packaged and independently hash-pinned. The old
+3825464 artifact/defaults are preserved. Pure reviewed_runtime_pin selection
+accepts only the two reviewed versions/provenance tuples; unknown versions fail
+before path/network access. The research helper's explicit selector is
+`--runtime-version 3848703`. It does not read an installed game at runtime or
+automatically learn trusted hashes from candidate input. No production provider
+or hosted site was switched to the new artifact.
+
+### One accepted current-build AUTH-only experiment
+
+The existing official-store session remained signed in to the owner profile;
+no repeat login was needed. Its issued SDK platform/channel values were kept
+unchanged, refresh_token remained in the browser, and unknown native fields
+were not fabricated. The current-build test used these explicit options:
+
+```text
+--serve-once --with-reviewed-pc-envelope --runtime-version 3848703
+```
+
+An initial 75-second helper expired before payload reading and was confirmed
+terminal, with no AUTH sent. A fresh one-use in-memory handoff then completed
+one connection using only the packaged public inputs and one bounded read of
+their exact official server list. Selected terminal report fields were:
+
+```json
+{"outcome":"own_existing_role_verified","connections_attempted":1,
+ "handshake_bytes_sent":286,"application_bytes_sent":625,"bytes_received":2399,
+ "prepare_verified":true,"credentials_sent":true,
+ "auth_service_accepted":true,"own_role_verified":true,
+ "game_login_verified":false,"career_verified":false,"secrets_saved":false}
+```
+
+The accepted existing role matched expected owner UID 1370598422. This is actual
+AUTH-service acceptance of this owner-issued SDK session with the reviewed
+current client_version/engine_ver and outer os_name=pc. The helper closed without
+gateway entry, role creation, Career/punishment queries, automatic retry, token
+renewal or saved credentials. No game launch, memory/SDK-log inspection,
+packet capture or Wi-Fi change occurred. Static public-source review was a
+preparation step, not a runtime dependency of this connection.
+A later read-only process-name check found no running Marvel Rivals game before
+the gateway experiment; it did not read process memory.
+
+The old 1911 results are not evidence of an invalid UID. The current version
+resolved rejection for this tested envelope; this does not establish every
+server-side cause or acceptance of the earlier minimal/version-only variants.
+Do not repeat completed sign-in or the unchanged rejected old-build requests.
+
+At the AUTH-only checkpoint, focused verification passed 32 web-SDK tests and
+40 runtime tests. The historical 546-test full-suite result below predates these
+changes. At that point gateway login was still unverified; the separate follow-up
+below now verifies it. Independent acquisition/renewal of the owner-authorized
+server session, separate SocialMatrix authentication, live
+exact-UID/visibility checks, stats integration and approved hosting remain open.
+The standalone website goal is NOT complete; production still has only its
+existing live identity source. Punishment-history availability is unchanged
+and no punishment query or report was sent.
+
+### Separately selected own-role gateway login
+
+After the current ENTER/HOTFIX/avatar source checks, the research-only helper
+added an explicit `--enter` option. The actual follow-up selected:
+
+```text
+--serve-once --enter --with-reviewed-pc-envelope --runtime-version 3848703
+```
+
+The new run_gateway_once path requires the reviewed current build and PC
+envelope, validates the nested report contract, and uses the existing normal
+owner-role ENTER flow. It does not enable an after_login callback or profile
+queries, and it does not change production provider/default selection.
+
+Live outcome: `own_gateway_login_verified`. Prepare, AUTH-service acceptance,
+own-role and game-login verification were all true. This was a new bounded
+experiment, not an extension or reclassification of the earlier AUTH-only
+connection; their byte counts are deliberately recorded separately:
+
+| Leg | Connections | Handshake bytes sent | Application bytes sent | Bytes received |
+| --- | ---: | ---: | ---: | ---: |
+| LOGIN service | 1 | 286 | 625 | 2397 |
+| Separate gateway | 1 | 286 | 71 | 39295 |
+
+The gateway LOGIN result matched expected UID 1370598422. login_key presence
+was verified without exporting its value; reply_relogin was 0. The gateway
+delivered four HOTFIX data records with 37886 content bytes. They were treated
+as data and never executed. Both sockets and the one-use helper closed.
+
+`career_verified`, `secrets_saved` and `remote_code_executed` were false. No
+after_login callback, Career request, SocialMatrix request, punishment query,
+report or token refresh was performed. No production/site provider or deployment
+changed. Thus normal own-role gateway login is now verified for this reviewed
+current-build owner-session flow, but independent renewal and a standalone
+full-stat backend are not established.
+
+The next source-backed step is passive acquisition of the normal initial
+SocialMatrix token. S_REFRESH_SOCIAL_TOKEN was found in the source, but a live
+token has not yet been received, owner-bound or verified. Do not substitute the
+LOGIN gateway key for that separate session or infer that a successful gateway
+login proves SocialMatrix or Career access.
+
+The concrete current archive lead is entity/player_avatar.py, entry 3781:
+S_REFRESH_SOCIAL_TOKEN at source line 128 is a CLIENT_STUB with one Str argument.
+It forwards through PyMarvelSocialClientHandle.py, entry 103, on_refresh_token
+at line 1266, to social_client.setup(token, cb_setup). Chat.C_REFRESH_SOCIAL_TOKEN
+is an error-recovery path, not a verified initial token request. Token base
+entry 699 and socket base entry 701 derive routes from fresh token claims at
+tcp.addr, not the old fixed captured PEER. const_social entry 5512 contains the
+reviewed public 17-byte parameter, SHA256
+`e7a322fd20ed8591c366213d4d4d9ca579a5c2d4e0ca11c8e7f63367c7aa5209`.
+
+The numeric RPC index remains unverified. register_all_rpc, entry 5784, has
+default prefix None; register_rpc_class, entry 5782, uses inherited VAR_NAME.
+PlayerAvatar declares PROPOBJ_NAME rather than VAR_NAME, and the relevant
+ActorEntity ancestry was not located in the bounded inspection. Do not guess
+the hash/index or repeat gateway login until the passive collector is ready.
+The existing capture_socket helper still requires fresh hello/setup/route
+refactoring; its captured-peer assumptions are not a standalone implementation.
+No SocialMatrix token was received or queried in this follow-up.
+
+Focused follow-up verification: 50 combined web-SDK tests passed in 0.097s,
+including 15 new gateway and three additional helper tests; 40 runtime tests
+passed in 0.129s. The complete Python suite after all current source edits passed
+572 tests in 69.995s. Existing non-failing synthetic warnings, injected vault-write
+failure output and ResourceWarnings remain. The prior 546-test result is
+historical, not the current-change verification result.
+
+The following September 11 checkpoints are historical. Their pending-update,
+1911-only and unverified-current-build conclusions are superseded by this
+checkpoint, not silently erased.
+
 ## September 11, 2026: official web login and renewal contract
 
 ### Owner sign-in and one AUTH-only experiment

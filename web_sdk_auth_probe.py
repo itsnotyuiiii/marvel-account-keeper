@@ -3,14 +3,17 @@
 This is not a production credential provider or a browser-to-native conversion.
 Missing native metadata stays absent. Whether the LOGIN service accepts this
 owner-authorized SDK session and minimal envelope is the experiment, not an
-assumption. There are no file reads, credential exports, retries, gateway entry,
-game/SDK-log fallbacks, session renewal, or profile queries in this module.
+assumption. AUTH-only remains the default function. An explicit gateway-only
+follow-up can enter the verified owner's existing role, then immediately close.
+There are no file reads, credential exports, retries, game/SDK-log fallbacks,
+session renewal, profile queries, or remote-code execution in this module.
 """
 from __future__ import annotations
 
 import json
 
 import game_login_probe as login
+import portable_game_runtime as runtime
 
 
 EXPECTED_OWNER_UID = 1370598422
@@ -78,9 +81,11 @@ def build_web_login_inputs(sauth, *, client_version=None, os_name=None):
     Optional os_name uses only the pinned native SDC_LOG_OS_NAME getter's pc
     value. It is a separate outer field, not a relabel of browser SAUTH.
     """
-    if client_version is not None and (
-            type(client_version) is not str or client_version != login.CLIENT_VERSION):
-        raise login.LoginError("web_sdk_version_unreviewed")
+    if client_version is not None:
+        try:
+            runtime.reviewed_runtime_pin(client_version)
+        except runtime.RuntimeManifestError:
+            raise login.LoginError("web_sdk_version_unreviewed") from None
     if os_name is not None and (type(os_name) is not str or os_name != "pc"):
         raise login.LoginError("web_sdk_platform_unreviewed")
     if (type(sauth) is not dict or not SDK_FIELDS <= sauth.keys()
@@ -185,3 +190,111 @@ def run_auth_once(sauth, configuration, server, *, client_version=None, os_name=
     except Exception:
         # Never include repr/str/traceback of a credential-bearing exception.
         return _report("web_auth_probe_failed", transmission_unknown=True)
+
+
+GATEWAY_OUTCOMES = LOGIN_OUTCOMES | frozenset({
+    "gateway_not_connected", "own_gateway_login_verified", "gateway_rejected_login",
+    "startup_hotfix_bound", "startup_hotfix_shape", "unexpected_gateway_login_command",
+    "missing_gateway_login_result", "gateway_login_not_successful", "unexpected_relogin_result",
+    "gateway_role_mismatch", "gateway_login_binding_missing", "record_size_bound",
+}) | frozenset(
+    stage + "_" + suffix
+    for stage in ("gateway_connect", "gateway_opening", "gateway_login")
+    for suffix in ("timeout", "closed", "network_error", "unvalidated")
+)
+GATEWAY_BOOL_FIELDS = frozenset({
+    "credentials_sent", "login_result_uid_present", "login_result_uid_matches", "login_key_present",
+})
+
+
+def _project_gateway_report(raw):
+    """Project the existing LOGIN/gateway reports, never their auth bindings.
+
+    Top-level connection/byte counters remain LOGIN-only; nested gateway
+    counters describe its separate connection. Success requires the entire
+    exact-owner chain, not merely an AUTH result or an isolated gateway flag.
+    """
+    if type(raw) is not dict or type(raw.get("outcome")) is not str or raw["outcome"] not in GATEWAY_OUTCOMES:
+        result = _report("web_gateway_report_unrecognized", transmission_unknown=True)
+        result["remote_code_executed"] = False
+        return result
+    # Reuse only AUTH's typed diagnostic projection; its success flags remain
+    # separate from the gateway-specific validation below.
+    result = _project_report(dict(raw, outcome="own_existing_role_verified"))
+    result.update(outcome=raw["outcome"], remote_code_executed=False)
+    nested = raw.get("gateway")
+    if nested is None:
+        if raw["outcome"] == "own_gateway_login_verified" or raw.get("game_login_verified") is True:
+            result["outcome"] = "web_gateway_report_unrecognized"
+        return result
+    if (type(nested) is not dict or type(nested.get("outcome")) is not str
+            or nested["outcome"] not in GATEWAY_OUTCOMES):
+        result["outcome"] = "web_gateway_report_unrecognized"
+        return result
+    gateway = {
+        "outcome": nested["outcome"], "connections_attempted": None,
+        "bytes_received": None, "handshake_bytes_sent": None, "application_bytes_sent": None,
+        "credentials_sent": None, "game_login_verified": False, "career_verified": False,
+        "secrets_saved": False, "remote_code_executed": False,
+    }
+    for name in GATEWAY_BOOL_FIELDS:
+        if type(nested.get(name)) is bool:
+            gateway[name] = nested[name]
+    limits = {
+        **{name: 2**31 - 1 for name in COUNT_FIELDS}, "connections_attempted": 1,
+        "startup_hotfix_records": 16, "startup_hotfix_bytes": 16 * login.MAX_BODY,
+        "reply_relogin": 1,
+        "reply_main": 65535, "reply_sub": 255,
+        "unrecognized_record_flags": 15, "unrecognized_record_size": 2**28 - 1,
+    }
+    for name, maximum in limits.items():
+        value = nested.get(name)
+        if type(value) is int and 0 <= value <= maximum:
+            gateway[name] = value
+    code = nested.get("server_error_code")
+    if type(code) is int and -(2**31) <= code <= 2**31 - 1:
+        gateway["server_error_code"] = code
+    verified = (
+        raw["outcome"] == nested["outcome"] == "own_gateway_login_verified"
+        and raw.get("game_login_verified") is True and nested.get("game_login_verified") is True
+        and all(result.get(name) is True for name in (
+            "prepare_verified", "auth_service_accepted", "own_role_verified", "credentials_sent"))
+        and all(gateway.get(name) is True for name in GATEWAY_BOOL_FIELDS)
+        and result["connections_attempted"] == gateway["connections_attempted"] == 1
+    )
+    if not verified and (raw["outcome"] == "own_gateway_login_verified"
+                         or nested["outcome"] == "own_gateway_login_verified"):
+        result["outcome"] = gateway["outcome"] = "web_gateway_report_unrecognized"
+    result["game_login_verified"] = gateway["game_login_verified"] = verified
+    result["gateway"] = gateway
+    return result
+
+
+def run_gateway_once(sauth, configuration, server, *, client_version, os_name="pc"):
+    """One LOGIN and one owner gateway entry; no callbacks, stats or retries.
+
+    Only the current explicitly reviewed version/PC envelope is eligible for
+    this separate follow-up. The existing AUTH-only function is unchanged.
+    Source provenance remains the caller's responsibility, as for AUTH-only.
+    """
+    try:
+        if type(client_version) is not str or client_version != runtime.CURRENT_PROVENANCE.client_version:
+            raise login.LoginError("web_sdk_version_unreviewed")
+        if type(os_name) is not str or os_name != "pc":
+            raise login.LoginError("web_sdk_platform_unreviewed")
+        inputs = build_web_login_inputs(sauth, client_version=client_version, os_name=os_name)
+    except login.LoginError as exc:
+        outcome = str(exc)
+        return _report(outcome if outcome in INPUT_OUTCOMES else "web_sdk_inputs_invalid")
+    except Exception:
+        return _report("web_sdk_inputs_invalid")
+    try:
+        raw = login.check_login(
+            configuration, server, inputs=inputs, expected_uid=EXPECTED_OWNER_UID,
+            enter=True, after_login=None,
+        )
+        return _project_gateway_report(raw)
+    except Exception:
+        result = _report("web_gateway_probe_failed", transmission_unknown=True)
+        result["remote_code_executed"] = False
+        return result

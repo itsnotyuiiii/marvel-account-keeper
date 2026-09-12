@@ -67,6 +67,53 @@ class PortableGameRuntimeTest(unittest.TestCase):
         self.assertNotIn(self.manifest["transport"]["public_key_der_base64"], repr(value))
         self.assertNotIn("fixture-parameter", repr(value))
 
+    def test_current_provenance_is_explicit_and_legacy_defaults_are_unchanged(self):
+        self.assertEqual(runtime.SUPPORTED_PROVENANCE.client_version, "3825464")
+        self.assertEqual(game_login_probe.CLIENT_VERSION, "3825464")
+        self.assertEqual(runtime.SUPPORTED_PROVENANCE.image_sha256, game_transport_probe.IMAGE_SHA256)
+        self.manifest["provenance"] = asdict(runtime.CURRENT_PROVENANCE)
+        value = self.parse(expected_provenance=runtime.CURRENT_PROVENANCE)
+        self.assertEqual(value.client_version, "3848703")
+        self.assertEqual(value.provenance, runtime.CURRENT_PROVENANCE)
+        self.assertEqual(value.configuration.parameter, self.parameter)
+        with self.assertRaisesRegex(runtime.RuntimeManifestError, "runtime_provenance_mismatch"):
+            self.parse(expected_provenance=runtime.SUPPORTED_PROVENANCE)
+
+    def test_reviewed_version_registry_is_explicit_pure_and_has_no_unknown_fallback(self):
+        targets = ("builtins.open", "pathlib.Path.open", "socket.create_connection", "requests.get",
+                   "requests.post", "game_transport_probe.load_public_configuration",
+                   "game_career_probe.load_career_methods", "game_login_probe.advertised_server",
+                   "game_login_probe.load_own_login_inputs", "game_login_probe.load_config_index")
+        with ExitStack() as stack:
+            guards = [stack.enter_context(patch(target, side_effect=AssertionError("unexpected dependency")))
+                      for target in targets]
+            self.assertEqual(runtime.reviewed_runtime_pin("3825464"),
+                             (runtime.SUPPORTED_PROVENANCE, runtime.REVIEWED_MANIFEST_SHA256))
+            self.assertEqual(runtime.reviewed_runtime_pin("3848703"),
+                             (runtime.CURRENT_PROVENANCE, runtime.CURRENT_MANIFEST_SHA256))
+            for version in (None, "", "latest", "3848704", "03848703", "3848703\n",
+                            3848703, True, [], {}, b"3848703"):
+                with self.subTest(version_type=type(version).__name__), \
+                        self.assertRaisesRegex(runtime.RuntimeManifestError, "runtime_provenance_unsupported"):
+                    runtime.reviewed_runtime_pin(version)
+        for guard in guards:
+            guard.assert_not_called()
+
+    def test_mixed_build_provenance_is_rejected_before_file_io(self):
+        mixed = (
+            replace(runtime.CURRENT_PROVENANCE, image_sha256=runtime.SUPPORTED_PROVENANCE.image_sha256),
+            replace(runtime.CURRENT_PROVENANCE, archive_sha256=runtime.SUPPORTED_PROVENANCE.archive_sha256),
+            replace(runtime.CURRENT_PROVENANCE, client_version=runtime.SUPPORTED_PROVENANCE.client_version),
+            replace(runtime.SUPPORTED_PROVENANCE, client_version=runtime.CURRENT_PROVENANCE.client_version),
+        )
+        with patch.object(Path, "open") as opened:
+            for provenance in mixed:
+                with self.subTest(version=provenance.client_version), \
+                        self.assertRaisesRegex(runtime.RuntimeManifestError, "runtime_provenance_unsupported"):
+                    runtime.load_runtime_manifest("explicit.json", expected_sha256="0" * 64,
+                                                  expected_provenance=provenance)
+            opened.assert_not_called()
+
     def test_pin_and_provenance_are_explicit_required_arguments(self):
         with self.assertRaises(TypeError):
             runtime.parse_runtime_manifest(self.raw())

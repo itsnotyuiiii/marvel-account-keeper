@@ -17,8 +17,9 @@ rank snapshots. No third-party statistics provider is used.
    accepted game authentication and must never be relabelled as a gas token.
 2. Supply reviewed, versioned public runtime configuration without game files.
    Public configuration portability does not itself provide authentication.
-   Revalidate the supported build after the September 11 update; do not simply
-   replace hashes, guess version strings, or claim old pins describe the update.
+   Review each supported update explicitly; do not simply replace hashes, guess
+   version strings, or claim old pins describe a new build. Build 3848703 inputs
+   were independently reviewed on September 12, not assumed from the old pins.
 3. Obtain/renew the separate SocialMatrix session without capture files. Verify
    the owner identity and request binding before using a returned token.
 4. Run the authenticated native client on an appropriate server and expose only
@@ -50,7 +51,67 @@ owner's restriction state are not proof about a queried UID. Missing/unavailable
 data must never become "clean account" or "no punishments". If no suitable source
 is verified, document that limit rather than creating an apparently live feed.
 
-## Current evidence
+## Current evidence — September 12, 2026
+
+- The previous update blocker is resolved. Steam installed/target build 25249397
+  is complete; native version/changelist is 1.1.3848703 / 3848703, not the Steam
+  build ID. The active goal remains incomplete.
+- The current archive/image/SDK/config and all five typed LOGIN descriptors
+  were independently reviewed. Relevant LOGIN schemas and Career RPC IDs match
+  the implementation. Public transport key, parameter and official server-list
+  URL are unchanged. See API_RESEARCH.md for current provenance and offsets.
+- A separate 774-byte public-only 3848703 runtime artifact is independently pinned
+  at SHA256 `0111accea3a87a8ed6f45190f41cf5e517b400944c6342bdf689afa34bbb1d81`.
+  Old 3825464 defaults/artifact remain unchanged; research explicitly selects
+  `--runtime-version 3848703`. Loading the package needs no installed game.
+- ONE current-build AUTH-only test accepted the owner's existing official-store
+  SDK session and verified expected existing role UID 1370598422. Result:
+  own_existing_role_verified; prepare/auth_service/own_role true; one connection,
+  286 handshake + 625 application bytes sent and 2399 received. It closed without
+  gateway entry, completed game login, Career query, refresh or saved credentials.
+  The first helper expired before reading a payload; the fresh successful helper
+  is terminal too. Refresh remained in the browser, not in a saved server session.
+- A separate explicitly selected gateway follow-up now returned
+  own_gateway_login_verified: prepare/auth_service/own_role/game_login true.
+  The LOGIN leg used one connection, 286 handshake + 625 application bytes sent,
+  2397 received. The gateway leg used one connection, 286 handshake + 71
+  application bytes sent, 39295 received. Its LOGIN result matched UID 1370598422,
+  login_key presence was verified without export, and reply_relogin was 0.
+  Four HOTFIX data records contained 37886 content bytes and were never executed.
+  Both sockets/helper closed. No after_login callback, Career/SocialMatrix/
+  punishment query, refresh or credential saving occurred. Career remains
+  unverified in this flow; AUTH and gateway success are not full stats access.
+- Current-version acceptance supersedes the older 1911-only evidence below for
+  this specific reviewed envelope. It does not prove independent renewal, all
+  envelope variants or a standalone full-stat service. The final focused set is
+  50 combined web-SDK tests (0.097s) and 40 runtime tests (0.129s), including 15
+  new gateway and three helper tests. The full suite after all current source
+  edits passed 572 tests in 69.995s, with existing non-failing synthetic warnings,
+  injected vault-write failure output and ResourceWarnings.
+- Required next work remains: independently obtainable and renewable
+  owner-authorized server authentication; separate SocialMatrix session;
+  live exact-UID/visibility-bound Career, season ranks,
+  matches and verified per-match rank changes; approved native-capable hosting;
+  and refresh/expiry/restart integration verification without local-file fallback.
+  Source S_REFRESH_SOCIAL_TOKEN identifies the next passive initial-token path,
+  but its numeric RPC index is unresolved and no live SocialMatrix token has
+  yet been received or verified. Fresh route/hello/setup support is still needed;
+  do not guess the RPC index or repeat gateway login before the collector is ready.
+- The private website still has three prepared views and only a live identity
+  source. No production provider/site switch, game launch, memory/log
+  inspection, capture or Wi-Fi change occurred in this follow-up. Public source
+  inspection was static preparation; the live helper used only packaged inputs.
+  A read-only process-name check found no running Marvel Rivals game before the
+  gateway experiment; process memory was not read.
+- Punishments remain an investigation, not a verified feed. The previously
+  found current-restriction getter is not history or an established read-only
+  other-player source. No punishment query or report was sent, and unavailable
+  data must not imply no punishments. See PUNISHMENT_RESEARCH.md.
+
+## Earlier evidence — September 11, 2026
+
+The update/current-version/authentication limits in this historical record are
+superseded only to the extent stated in the September 12 checkpoint above.
 
 - Private website has the three profile views but only a live identity source.
 - September 11 07:16–07:17 Eastern recovery check verified both direct and hosted

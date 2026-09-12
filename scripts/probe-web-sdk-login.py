@@ -2,7 +2,8 @@
 
 Preview by default. --serve-once accepts one bounded in-memory SDK bundle from
 the official store origin, sends one normal NetEase AUTH request, verifies the
-expected existing own UID, and exits. No gateway enter, role creation, stats,
+expected existing own UID, and exits. Explicit --enter additionally verifies
+one normal gateway login for that same owner and closes. No role creation, stats,
 refresh, game files, SDK logs, captures, credential files or production changes.
 Missing native metadata is omitted, never fabricated. --with-reviewed-version
 adds only client_version and engine_ver from the pinned public manifest. It
@@ -10,6 +11,8 @@ does not claim that this reviewed build remains current. Rejection is ambiguous:
 the token, omitted envelope fields or game version may be incompatible.
 --with-reviewed-pc-envelope additionally supplies the independently reviewed
 native SDC_LOG_OS_NAME getter's pc value, not guessed device metadata.
+--runtime-version explicitly selects an independently reviewed packaged build;
+the legacy default remains unchanged. No installed game is read at runtime.
 """
 import sys
 
@@ -33,13 +36,17 @@ MAX_HANDOFF_BYTES = 16 * 1024
 WAIT_SECONDS = 75
 
 
-def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelope=False):
+def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelope=False,
+                 runtime_version="3825464", enter_gateway=False):
     # Validate before consulting any file or opening a network connection.
     probe.build_web_login_inputs(sauth)
+    provenance, pin = runtime.reviewed_runtime_pin(runtime_version)
+    if type(enter_gateway) is not bool or (enter_gateway and (
+            runtime_version != "3848703" or not with_reviewed_pc_envelope)):
+        raise ValueError("gateway_requires_current_reviewed_pc_envelope")
     public = runtime.load_runtime_manifest(
-        Path(__file__).resolve().parents[1] / "runtime-inputs" / "3825464.json",
-        expected_sha256=runtime.REVIEWED_MANIFEST_SHA256,
-        expected_provenance=runtime.SUPPORTED_PROVENANCE)
+        Path(__file__).resolve().parents[1] / "runtime-inputs" / (runtime_version + ".json"),
+        expected_sha256=pin, expected_provenance=provenance)
     import requests
     with requests.Session() as session:
         # No netrc credentials, proxy credentials, cookies or alternate URL.
@@ -50,6 +57,10 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
                 raise ValueError("official_server_list_unavailable")
             raw = response.raw.read(4097, decode_content=True)
     server = runtime.project_login_server(raw)
+    if enter_gateway:
+        return probe.run_gateway_once(
+            sauth, public.configuration, server,
+            client_version=public.provenance.client_version, os_name="pc")
     return probe.run_auth_once(
         sauth, public.configuration, server,
         client_version=public.provenance.client_version
@@ -135,7 +146,7 @@ def make_handler(path, attempt=attempt_auth):
                 if (type(value) is not dict or set(value) != {"selected_uid", "sauth"}
                         or type(value["selected_uid"]) is not int or value["selected_uid"] != 1370598422):
                     raise ValueError
-                # Refresh tokens stay in the browser for this AUTH-only test.
+                # Refresh tokens stay in the browser for either bounded test.
                 if type(value["sauth"]) is not dict or "refresh_token" in value["sauth"]:
                     raise ValueError
                 probe.build_web_login_inputs(value["sauth"])
@@ -168,17 +179,25 @@ def main(argv=None):
     parser.add_argument("--serve-once", action="store_true")
     parser.add_argument("--with-reviewed-version", action="store_true")
     parser.add_argument("--with-reviewed-pc-envelope", action="store_true")
+    parser.add_argument("--runtime-version", default="3825464", choices=("3825464", "3848703"))
+    parser.add_argument("--enter", action="store_true",
+                        help="Also verify one normal owner gateway login, then close; no stats queries.")
     args = parser.parse_args(argv)
+    if args.enter and (args.runtime_version != "3848703" or not args.with_reviewed_pc_envelope):
+        parser.error("--enter requires --runtime-version 3848703 --with-reviewed-pc-envelope")
     if not args.serve_once:
         print(json.dumps({"outcome": "preview", "network_attempted": False,
                           "credentials_read": False, "files_read": False,
                           "with_reviewed_version": args.with_reviewed_version or args.with_reviewed_pc_envelope,
-                          "with_reviewed_pc_envelope": args.with_reviewed_pc_envelope}))
+                          "with_reviewed_pc_envelope": args.with_reviewed_pc_envelope,
+                          "enter_gateway": args.enter,
+                          "runtime_version": args.runtime_version}))
         return 0
     path = "/auth-once/" + secrets.token_urlsafe(32)
     def attempt(sauth):
         return attempt_auth(sauth, with_reviewed_version=args.with_reviewed_version,
-                            with_reviewed_pc_envelope=args.with_reviewed_pc_envelope)
+                            with_reviewed_pc_envelope=args.with_reviewed_pc_envelope,
+                            runtime_version=args.runtime_version, enter_gateway=args.enter)
 
     with HTTPServer(("127.0.0.1", 0), make_handler(path, attempt=attempt)) as server:
         server.completed, server.report, server.timeout = False, None, 1
@@ -187,6 +206,8 @@ def main(argv=None):
                           "url": "http://127.0.0.1:" + str(server.server_port) + path,
                           "with_reviewed_version": args.with_reviewed_version or args.with_reviewed_pc_envelope,
                           "with_reviewed_pc_envelope": args.with_reviewed_pc_envelope,
+                          "enter_gateway": args.enter,
+                          "runtime_version": args.runtime_version,
                           "expires_in_seconds": WAIT_SECONDS}), flush=True)
         deadline = time.monotonic() + WAIT_SECONDS
         while not server.completed and time.monotonic() < deadline:
