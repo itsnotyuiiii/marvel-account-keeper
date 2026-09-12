@@ -135,6 +135,32 @@ the complete Python suite passed546 tests in101.007s, exit0. Independent bounded
 correctness review found the expiry-report issue, which was fixed and retested,
 and no additional issues in the final deltas. No production app or site change.
 
+### Public distributor alternative checked after the pending update
+
+The next continuation verified Steam still recorded0 downloaded bytes and then
+checked the official publisher download path for smaller public version metadata:
+
+- The [official download page](https://adl.easebar.com/d/g/MarvelRivals/c/lb)
+  links the Loading Bay Windows installer, not a game manifest. No binary was
+  downloaded or installed.
+- [Loading Bay download metadata](https://api.loadingbay.com/app/v1/download_client/windows)
+  reports launcher version1.5.26.11. This is NOT the game's native changelist.
+- [The public recommendation API](https://api.loadingbay.com/app/v1/game_store/recommend/list)
+  identifies Marvel Rivals as app_id31 / goods_unique_name marvel-rivals.
+- [The public game module](https://store.loadingbay.com/assets/game-288fc105.js)
+  names the ordinary package-config read. Its actual
+  [Marvel Rivals response](https://api.loadingbay.com/app/v1/game_package/config?app_id=31)
+  returns HTTP200/code200 and branding/channel/news configuration, but no native
+  game version, manifest or game-package download URL.
+
+This closes those specific public metadata leads, not every possible publisher
+API. No guessed app IDs, authenticated calls, installer/game binaries or new
+AUTH attempts were used. The [official September11 patch notes](https://www.marvelrivals.com/gameupdate/20260909/41548_1313441.html)
+publish a release date/marketing version, not a replacement native changelist.
+Current publisher-delivered version.json and matching public runtime artifacts
+remain the next prerequisite; do not repeat these unchanged metadata checks or
+substitute launcher/Steam/marketing version numbers into the game request.
+
 ### Earlier static research and remaining contract limits
 
 Read-only retrieval of the current official store HTML and its public scripts

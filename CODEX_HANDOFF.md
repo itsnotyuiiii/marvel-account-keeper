@@ -118,6 +118,15 @@ failed, expiration reports credentials_read:null rather than false. The final
 deltas had no further review findings. No production app/site or desktop build
 changed. All test/helper processes are terminal; there is nothing left to poll.
 
+Next goal continuation: Steam update still showed0 bytes downloaded. A bounded
+official Loading Bay alternative was exhausted: Windows download metadata is
+launcher1.5.26.11, not the native game build. Public recommendation/list verifies
+Marvel app_id31; the ordinary game_package/config?app_id=31 response contains
+branding/channel/news metadata but no game version/manifest/download URL. Exact
+primary links are recorded in API_RESEARCH.md. No binaries, installations,
+account requests or AUTH retries were used. The pending official game update
+remains the next prerequisite; don't repeat these closed metadata leads.
+
 No website source/deployment, Desktop executable, Wi-Fi, game process, reports
 or punishment queries were changed by this goal research/preparation work.
 
