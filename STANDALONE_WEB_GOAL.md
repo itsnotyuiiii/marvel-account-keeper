@@ -4,24 +4,28 @@ Activated September 11, 2026 at the user's explicit request. The active Codex
 goal is the execution tracker; this file preserves the technical acceptance
 criteria across machines. It is not a claim that the goal has been completed.
 
-September12 live progress: returned-token chaining now passes two normal
-saved-account exchanges, with exact owner AUTH/gateway on both fresh sessions.
-Normal owner rank panel returns actual current season20 and own numeric level14
-/raw score4350. Separate other-player history supplied19 seasons ending at19;
-never infer current season from that maximum. These results add to already
-verified identity, both Career routes,43 matches and43 per-match rank changes.
-Goal remains incomplete: combine the reads, integrate an honest partial-data
-website contract, implement durable authorized renewal, select approved hosting
-and verify hosted restart/refresh. No production deployment or saved secrets yet.
+September12 checkpoint: combined live owner identity/Career/current rank and
+50 first-page matches/rank changes, plus other-player identity/Career/19 seasons/
+43 matches/rank changes, are verified. Website version4 contains the honest
+partial-data display contract, but production still uses anonymous store
+identity mode because no native backend credentials are configured.
+
+The durable owner manager, encrypted SQLite store, private serialized HTTP API,
+strict web projection and standalone server CLI are now implemented. Synthetic
+restart and shutdown tests verify token persistence/ownership without real
+credential storage or NetEase calls. Previously verified live bundles pass
+both the new Python envelope and the website parser. See NATIVE_API_SERVER.md.
+Goal remains incomplete: approve independent hosting/bootstrap, integrate
+pending-response handling, live-verify hosted restart/refresh and visibility,
+and continue owner season-history research. No real durable secret is saved.
 
 ## Required outcome
 
-Latest implementation checkpoint: one combined UID call now returns the other
-test profile's identity, aggregate,19 season records and43 matches/rank changes,
-with actual current season20. Owner combined identity/Career/current rank also
-passed, but owner history/matches remain unavailable. This library/CLI result
-has NOT yet been connected to the production website or durable server renewal.
-Full hosted acceptance criteria below remain active.
+Current season20 comes from the normal panel, not the maximum historical key.
+The other test profile has no returned season20 row, so its current rank remains
+unknown. Owner matches are now available; owner season history still is not.
+The prepared website/server integration has NOT been live-connected in
+production. Full hosted acceptance criteria below remain active.
 
 A UID lookup on the hosted site returns the player's available NetEase identity,
 Career totals, season ranks and verified recent matches without the user's

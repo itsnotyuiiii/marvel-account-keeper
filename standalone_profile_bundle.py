@@ -303,6 +303,7 @@ def _panel(raw):
 def _empty(target_uid):
     return {"outcome": "profile_bundle_unverified", "uid": str(target_uid), "platform": "pc",
         "owner_authentication_verified": False, "game_login_verified": False,
+        "auth_rejection_code": None,
         "social_session_accepted": False, "identity_verified": False, "identity": None,
         "token_outcome": "social_token_not_received", "social_setup_outcome": "social_setup_not_started",
         "identity_outcome": "uid_lookup_not_completed",
@@ -399,6 +400,15 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
         return report
     if type(auth) is not dict:
         return report
+    # Only a correlated, decoded LOGIN AUTH rejection may guide the internal
+    # session manager. Transport errors and SDK diagnostic codes are unrelated.
+    code = _integer(auth.get("server_error_code"), -(2**31), 2**31 - 1)
+    if (auth.get("outcome") == "server_rejected_authentication"
+            and auth.get("prepare_verified") is True and auth.get("credentials_sent") is True
+            and all(auth.get(key) is False for key in (
+                "auth_service_accepted", "own_role_verified", "game_login_verified"))
+            and code is not None and code != 0):
+        report["auth_rejection_code"] = code
     report["owner_authentication_verified"] = all(auth.get(key) is True for key in ("auth_service_accepted", "own_role_verified"))
     report["game_login_verified"] = report["owner_authentication_verified"] and auth.get("game_login_verified") is True
     token = auth.get("social_token")

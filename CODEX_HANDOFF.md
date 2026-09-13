@@ -3,7 +3,52 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: owner matches live and website contract integrated
+## Latest continuation — September 12: durable native HTTP server implemented
+
+New standalone_session_manager.py owns the normal SDK refresh-on-use lifecycle;
+standalone_session_store.py provides AES-GCM encrypted SQLite/CAS and an OS
+exclusive lock. New standalone_native_runtime.py wires only pinned public
+build3848703 inputs and the official server list into run_profile_bundle.
+standalone_web_contract.py strictly projects the private schemaVersion2 web
+envelope. standalone_http_api.py provides one serialized worker, per-UID
+singleflight, four pending UIDs,100 cached projections/30seconds, bounded HTTP
+handlers and15second pending replies. scripts/serve-native-api.py supplies
+check, explicit stdin bootstrap, serve and exclusive pending recovery modes.
+NATIVE_API_SERVER.md documents deployment prerequisites and remaining limits.
+
+Returned refresh/access tokens are durably saved before AUTH. Fresh-instance
+restart tests use the real encrypted store and fake SDK/query. Unknown rotation
+never retries an old token. Only fully correlated LOGIN AUTH error253 permits
+the next lookup to use the latest saved refresh;1911/unknown failures require
+candidate recovery. Bundle projection now retains this typed internal code;
+the web envelope strips it. No SDK TTL or live expiry claim is made. Normal
+SIGINT/SIGTERM stops admission and drains the worker before releasing ownership.
+
+Independent review found and prompted fixes for missing AUTH-code wiring,
+SIGTERM drain, and optional match-ID display parity. Basic matches without IDs
+now survive, with their public delta omitted. Optional rank update_time0 becomes
+unknown. Both previously live-verified profile bundles passed the new Python
+HTTP projection then the existing website TypeScript parser: owner50matches/
+50deltas and other19seasons/43matches/43deltas. No new live NetEase call was made.
+CLI tests use guarded synthetic subprocesses; portability includes all new
+modules with desktop/research dependencies blocked. Real Linux/server process
+restart and real persisted login renewal remain unverified.
+
+Full regression passed1087 tests in89.315seconds. Existing injected-failure
+warnings and two temporary-file ResourceWarnings appeared; no test failed.
+The server --check also passed with network_attempted=false and
+credentials_read=false. A restart-test import was then normalized to the
+tests package so direct module invocation works as well as discovery. After
+that fix,19 direct restart/CLI tests and53 discovered session tests passed.
+
+No real credentials saved, host purchased/configured, website source changed,
+or Sites redeployment performed in this checkpoint. Production remains the
+private version4 identity-only mode below. Next: approved independent hosting/
+authorized secret bootstrap, pending-response integration in the website,
+hosted live restart/renewal and visibility acceptance, owner season history.
+This is concrete implementation PROGRESS; the goal stays ACTIVE/incomplete.
+
+## Earlier continuation — September 12: owner matches live and website contract integrated
 
 The normal owner first-page Social XYQ operation is now implemented and LIVE
 verified inside the single profile bundle. UID1370598422 returned IGNゆいᶻᶻᶻ,

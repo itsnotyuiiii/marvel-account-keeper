@@ -27,6 +27,11 @@ sys.meta_path.insert(0, NoDesktopOrResearch())
 import portable_game_runtime as game
 import portable_social_runtime as social
 import standalone_profile_bundle
+import standalone_native_runtime
+import standalone_session_manager
+import standalone_session_store
+import standalone_http_api
+import standalone_web_contract
 import web_sdk_history_chain
 import web_sdk_history_login
 import requests
@@ -38,6 +43,7 @@ public = game.load_runtime_manifest(root / 'runtime-inputs' / '3848703.json',
 matrix = social.load_social_runtime(root / 'runtime-inputs' / '3848703-social.json')
 assert public.provenance.client_version == '3848703'
 assert len(matrix.parameter) == 17
+standalone_native_runtime.NativeProfileQuery()
 assert not any(name.split('.')[0] in blocked for name in sys.modules)
 print('portable_imports_and_public_inputs_verified')
 '''

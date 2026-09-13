@@ -183,6 +183,27 @@ class StandaloneProfileBundleTest(unittest.TestCase):
         self.assertEqual(result["token_outcome"], "social_token_claims_validated")
         self.assertEqual(result["social_setup_outcome"], "social_setup_verified")
 
+    def test_only_correlated_login_auth_rejection_code_is_retained(self):
+        rejected = {"outcome": "server_rejected_authentication", "prepare_verified": True,
+            "credentials_sent": True, "auth_service_accepted": False, "own_role_verified": False,
+            "game_login_verified": False, "server_error_code": 253, "sdk_code": 253}
+        for code in (253, 1911, -1):
+            result, _, _ = self.run_case(auth_result={**rejected, "server_error_code": code}, invoke_game=False)
+            self.assertEqual(result["auth_rejection_code"], code)
+            self.assertFalse(result["owner_authentication_verified"])
+        for changes in ({"outcome": "authentication_timeout"}, {"prepare_verified": False},
+                        {"credentials_sent": 1}, {"auth_service_accepted": True},
+                        {"own_role_verified": True}, {"game_login_verified": True},
+                        {"server_error_code": True}, {"server_error_code": "253"},
+                        {"server_error_code": None}, {"server_error_code": 0},
+                        {"server_error_code": 2**31}, {"server_error_code": -(2**31)-1}):
+            result, _, _ = self.run_case(auth_result={**rejected, **changes}, invoke_game=False)
+            self.assertIsNone(result["auth_rejection_code"])
+        for missing in ("prepare_verified", "credentials_sent", "auth_service_accepted", "own_role_verified", "game_login_verified"):
+            value = {key: val for key, val in rejected.items() if key != missing}
+            result, _, _ = self.run_case(auth_result=value, invoke_game=False)
+            self.assertIsNone(result["auth_rejection_code"])
+
     def test_owner_uses_social_career_matches_and_panel_not_other_native_sections(self):
         result, calls, mocks = self.run_case(uid=OWNER)
         self.assertEqual(calls, ["login", "social", "panel"])

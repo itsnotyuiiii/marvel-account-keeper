@@ -4,6 +4,10 @@
 vault*.json
 *.json.tmp
 backups/
+# Optional in-repo development session location; production state belongs on the
+# independent host's private persistent volume, outside the source checkout.
+.native-state/
+native-session.sqlite*
 
 # ── Build output ─────────────────────────────────────────────────────────────
 build/

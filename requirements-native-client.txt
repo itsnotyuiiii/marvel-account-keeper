@@ -1,7 +1,8 @@
 # Direct dependencies exercised by the standalone NetEase client on Windows.
 # This is not the desktop UI or research-tool environment. Linux remains to be
 # verified on the selected host; no game, Steam, capture or Windows DLL required
-# by these portable code paths. HTTP hosting dependencies are a separate step.
+# by these portable code paths. The private HTTP server uses the standard library;
+# the selected host must separately supply its HTTPS reverse proxy and secrets.
 cryptography==50.0.1
 msgpack==1.2.2
 requests==2.34.2
