@@ -1,5 +1,106 @@
 # Live API research checkpoints
 
+## September 12, 2026: returned refresh chain and actual current season
+
+LIVE two-round sdk_token chain passed: first returned refresh token became the
+second saved-account exchange input only after first candidate owner AUTH.
+Both new ten-field SAUTH sessions passed expected owner1370598422 AUTH/gateway.
+Per round: LOGIN2398 received/286+625 sent, gateway39295 received/286+71 sent,
+four HOTFIX records37886 bytes not executed, reply_relogin1. Helper44999 closed.
+Only the browser's initial known-key handoff was read; round two needed no
+browser input. Credentials stayed transient. This proves normal token chaining,
+not expiry handling, restart persistence or autonomous hosted availability.
+
+LIVE owner RankGame panel passed after one fresh SDK exchange and exact owner
+mesh identity. Current1874 c_req_rank_info/on_avatar_created sends C_OPEN_PANEL(1);
+S_OPEN_PANEL(info) exposes cur_game_id, left_time, open, optional start_time and
+cur_data.level/rank_score. Current5781 salt with RankGame VAR_NAME independently
+gives request1543545906/reply1616581796. No target/UID echo/nonce exists in this
+source contract. Unknown response keys are ignored, not assigned guessed meaning.
+
+Actual panel: cur_game_id20, open0, left_time2272326, start_time1789117200,
+cur_data.level14, rank_score4350 (all integers). Sent19 application bytes;
+received100 bytes/one exact-method reply, zero startup/unrelated RPCs. Same owner
+gateway, no second relogin for the query. Helper84773 closed. LOGIN2397/gateway
+39295 received; token851036/24records; owner Social setup/mesh14 handshake+909
+application sent,4859 received. Exact meshUID1370598422/IGNゆいᶻᶻᶻ/level32.
+
+The panel's current season20 differs from other-player history max19. Do not
+promote the highest history row to current rank. Panel score4350 remains raw
+server rank score; English labels/top-rank display baseline are still unverified.
+Current season, optional own numeric rank, labels and history each have separate
+verification flags. Reader does not decode unrelated RPC argument blobs or
+execute startup content. Packaged public build inputs remain unchanged.
+
+## September 12, 2026: live namecard seasons and saved-SDK login
+
+Current3848703 normal other-player xyq-namecard/GetData was live verified for
+UID1822797559 with the exact source body host/tag/id and no fields selector.
+Fresh mesh exact aid/PC overview OPEN0 preceded the query. Standard XYQ service,
+HTTP200, application code200 and same accepted-stream RPC binding passed.
+No normal source requirement for a response UID echo was invented. Output
+identity_basis is mesh_identity_and_rank_request, with echo_verified=false.
+
+The response supplied19 PC/type1 seasons (IDs1..19); rank_game_season is JSON
+text5791 chars, each row JSON text. Latest-key season19: level23, raw points
+5560.617599588569, peak level23/raw points5570.414428329633,28 matches/22 wins,
+10 placements, updated_at1789113602. Numeric rank codes were integers and raw
+scores floats. Missing older placement/record fields remain null. No current
+season/current rank/all-season peak label or history completeness was inferred.
+
+Live byte counts: LOGIN2396 received, gateway39295 received; passive token850846
+bytes/19records. SocialMatrix14 handshake+1439 application sent,10628 received;
+mesh198 bytes then rank530 bytes. Rank envelope payload5080 chars/3808 decoded
+bytes. Both operations bound exact RPC/owner envelope, and all helpers closed.
+No installed files, logs, capture or third-party stats at runtime.
+
+Current display-source follow-up: entry1708 reads MarvelRankLevelTable[level].Name;
+entry4672 reads group label via RankUITable[RankID].RankName and Roman SmallRankID.
+Only IsTopRank rows display points. Formula4672:199 is
+int(raw_score-first_top_row.NormScoreLower+300*int(season_id==1)). Equal peak
+levels compare this normalized score, not raw cross-season points. Current
+English table rows/top-rank baseline remain unverified; three bounded .utoc
+metadata string checks found no exact names, which proves neither encryption
+nor absence. Do not relabel level0's UI fallback as an earned Bronze rank.
+Current5525 qualification threshold is10: a present fixed_battle_count below10
+means qualifying; missing is unknown. No table values were guessed.
+
+The normal saved-Steam login route also passed LIVE. Public Mpay SHA256
+062cb07880c31960f10ef5f5931b0c13e01825b0f426f952d8c56b1e61e4fa35 and wrapper
+SHA2560084da0bb7730900d18a8c3d6fa529570d3ae53bc86d85498417faccd9bfc2d9 ground
+the exchange/session mapping. Exact known-key browser context, not broad
+storage export: one safe-integer saved SDK ID bound to prior SAUTH.sdkuid,
+safe-integer saved device, Mpay UDID/DEVICE_ID, wrapper UNISDK_UDID and language
+persist:gameclub -> JSON appConfig -> lan=en-US (wrapper en_US). IDs/tokens were
+never printed and no storage keys changed. Public constants match current store.
+
+Fresh SDK constructor88196 has no UID/SESSION; _ntInit103291 initializes UDID
+but does not populate those properties from saved SAUTH. _generateClientLoginSn
+91239 concatenates eight Math.round(9*Math.random()) digits, then current clock,
+and hashes wrapperUDID_clockMs_digits__ with UTF8 MD5. __createSauthJson158242
+computes serial BEFORE __setUserInfo154822 later assigns UID=String(sauth.udid).
+Thus the new server-side wrapper context legitimately uses empty suffix fields;
+it does not pretend to know a reused browser object's mutable UID/SESSION.
+Builder accepts explicit samples then clock, performs no I/O and keeps renewal
+token separate from the exact ten-field SAUTH. No SDK singleton global is assumed.
+
+One official sdk_token POST returned a candidate; newly built SAUTH, with no
+old-session fallback, passed expected owner1370598422 AUTH and gateway entry.
+LOGIN2398 received (286 handshake+625 application sent); gateway39295 received
+(286+71 sent), four unexecuted HOTFIX records37886bytes, reply_relogin1.
+sdk_history_login reports candidate_received/sauth_constructed/
+owner_authentication_verified=true; automatic_renewal_verified=false. Helper48040
+was polled to exit0. SDK candidate and auth credentials remained transient.
+This verifies server-side exchange plus fresh-session acceptance, NOT returned
+token chaining, later expiry, secret durability or deployed automatic renewal.
+
+Explicit history handoff mode retains the existing loopback/Origin/one-use
+contract and accepts only selected_uid/sauth/saved_account/mpay_context/
+wrapper_udid. It validates context/auth options before external I/O, disallows
+OAuth-refresh combination, and uses only candidate SAUTH. Unexpected AUTH
+exceptions preserve uncertain transmission rather than falsely claiming none.
+Default handoff still rejects renewal context. No production/site change.
+
 ## September 12, 2026: portable UID and own/other Career results
 
 All source entries below refer to reviewed current3848703 archive SHA256

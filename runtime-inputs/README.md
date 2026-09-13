@@ -1,5 +1,14 @@
 # Reviewed public runtime inputs
 
+September12 continuation: unchanged3848703 inputs now also support LIVE19
+other-player rank seasons, two normal returned-refresh-token exchanges with
+fresh owner AUTH/gateway, and the normal owner current-rank panel. Actual panel
+season20 differs from the other's last historical season19. Numeric owner rank
+level14/raw score4350 is verified; English labels/display normalization are not.
+Renewal chaining is verified, but expiry/restart persistence/hosted operation
+remain incomplete. No runtime artifact, pin, game-file dependency or production
+provider changed. See game_rank_panel_probe.py and web_sdk_history_chain.py.
+
 September12 follow-up: the unchanged current3848703 public artifacts now also
 support LIVE verified mesh identities/visibility for owner1370598422 and other
 1822797559, own XYQ Career and other native Career. Both aggregate responses

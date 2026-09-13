@@ -24,6 +24,33 @@ def wrapped(data=None, *, compressed=False, raw=None, **changes):
 
 
 class StandaloneCareerQueryTest(unittest.TestCase):
+    def test_shared_xyq_decoder_binds_service_and_does_not_claim_uid(self):
+        for service in ("xyq-career", "xyq-namecard"):
+            for compressed in (False, True):
+                response = wrapped({"code": 200, "data": {"rank_game_season": "{}"}},
+                                   service=service, compressed=compressed)
+                data, source = career.decode_xyq_response(response, service)
+                self.assertEqual(data, {"rank_game_season": "{}"})
+                self.assertEqual(source, "code")
+                with self.assertRaises(career.CareerQueryError) as error:
+                    career.decode_xyq_response(response, "xyq-namecard" if service == "xyq-career" else "xyq-career")
+                self.assertEqual(error.exception.code, "xyq_service_mismatch")
+        with self.assertRaises(career.CareerQueryError) as error:
+            career.decode_xyq_response(wrapped(), "unreviewed-service")
+        self.assertEqual(error.exception.code, "xyq_inputs_invalid")
+
+    def test_shared_xyq_decoder_preserves_status_without_server_messages(self):
+        for response, code, status, application in (
+            (wrapped(status_code=403), "xyq_http_rejected", 403, None),
+            (wrapped({"code": 503, "message": "PRIVATE"}), "xyq_application_rejected", 200, 503),
+            (wrapped(raw=b"PRIVATE_INVALID_JSON"), "xyq_response_json", 200, None),
+        ):
+            with self.assertRaises(career.CareerQueryError) as error:
+                career.decode_xyq_response(response, "xyq-career")
+            self.assertEqual((error.exception.code, error.exception.http_status, error.exception.application_code),
+                             (code, status, application))
+            self.assertNotIn("PRIVATE", str(error.exception))
+
     def test_request_matches_current_wrapper_and_uses_supplied_owner_zone(self):
         result = career.make_own_career_request(123, 42)
         self.assertEqual(result, {"service": "xyq-career", "uri": "query_my_player_career",

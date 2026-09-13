@@ -4,6 +4,16 @@ Activated September 11, 2026 at the user's explicit request. The active Codex
 goal is the execution tracker; this file preserves the technical acceptance
 criteria across machines. It is not a claim that the goal has been completed.
 
+September12 live progress: returned-token chaining now passes two normal
+saved-account exchanges, with exact owner AUTH/gateway on both fresh sessions.
+Normal owner rank panel returns actual current season20 and own numeric level14
+/raw score4350. Separate other-player history supplied19 seasons ending at19;
+never infer current season from that maximum. These results add to already
+verified identity, both Career routes,43 matches and43 per-match rank changes.
+Goal remains incomplete: combine the reads, integrate an honest partial-data
+website contract, implement durable authorized renewal, select approved hosting
+and verify hosted restart/refresh. No production deployment or saved secrets yet.
+
 ## Required outcome
 
 A UID lookup on the hosted site returns the player's available NetEase identity,
@@ -52,6 +62,17 @@ data must never become "clean account" or "no punishments". If no suitable sourc
 is verified, document that limit rather than creating an apparently live feed.
 
 ## Current evidence — September 12, 2026
+
+- Current continuation live-verified19 other-player season records (IDs1..19)
+  via normal namecard GetData after exact mesh identity/overview permission.
+  These are source-bound numeric levels/raw points/per-season peaks and optional
+  counts. Current-season labeling, English table labels and normalized display
+  points are not guessed. No production site integration yet.
+- Normal saved-Steam SDK token exchange plus rebuilt fresh-wrapper SAUTH now
+  live-authenticated expected owner1370598422 and entered the game gateway.
+  This supersedes the unverified-exchange limitation below. No browser storage
+  or saved secret changed. Replacement-token chaining, later expiry/restart and
+  durable hosted renewal are still required; the goal stays active/incomplete.
 
 - New live milestone supersedes the setup-only limitations below: current
   capture-free mesh identifies both owner1370598422 (ゆいᶻᶻᶻ,level32) and

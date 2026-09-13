@@ -63,6 +63,13 @@ def career_reply(*, rpcid="3", header=None, body=None, data=None, direct=False):
                  direct=direct)
 
 
+def rank_reply(*, rpcid="3", header=None, body=None, data=None, direct=False):
+    return reply(header={"rpcid": rpcid, **(header or {})}, body=body,
+                 data={"service": "xyq-namecard", "status_code": 200,
+                       "response_body": "PRIVATE_RANK_BODY"} if data is None else data,
+                 direct=direct)
+
+
 class Socket:
     def __init__(self, data, *, fail_send=None, receive_error=None):
         self.data, self.sent, self.closed = data, [], False
@@ -127,6 +134,8 @@ class StandaloneSocialTransportTest(unittest.TestCase):
                     "body": {"cmd": 0, "payload": "e30="}})])
         self.assertEqual(result["application_bytes_sent"], sum(map(len, sock.sent[1:])))
         self.assertIs(result["stats_requested"], False)
+        self.assertIs(result["rank_query_attempted"], False)
+        self.assertIs(result["rank_reply_bound"], False)
         self.assertIs(result["secrets_saved"], False)
         self.assertTrue(sock.closed)
 
@@ -818,6 +827,248 @@ class StandaloneSocialTransportTest(unittest.TestCase):
                 on_setup=lambda context: context.read_own_career())
         self.assertEqual(result["career_error"], "social_career_request_invalid")
         self.assertFalse(result["career_query_sent"])
+        self.assertFalse(result["stats_requested"])
+        self.assertNotIn("PRIVATE_BUILDER", json.dumps(result))
+        self.assertEqual(len(sock.sent), 3)
+
+
+    def test_other_rank_uses_advertised_mesh_route_exact_target_and_normal_wrapper(self):
+        owner, received = session(zone_id=7), []
+        outer = {"service": "xyq-namecard", "status_code": 200, "response_body": "PRIVATE_RANK_BODY"}
+        result, sock, connector = self.run_setup(owner=owner, wire_data=fixture(responses=[
+            (1, 3, career_setup(header={"aid": "7_123"})),
+            (42, 2, rank_reply(header={"aid": "7_123"}, data=outer))]),
+            on_setup=lambda context: received.append(context.read_other_ranks(456)))
+        self.assertEqual(received, [outer])
+        self.assertTrue(result["setup_consumer_completed"])
+        for key in ("rank_query_attempted", "rank_query_sent", "rank_reply_received", "rank_reply_bound",
+                    "stats_requested"):
+            self.assertTrue(result[key])
+        self.assertFalse(result["career_query_attempted"])
+        self.assertFalse(result["career_reply_bound"])
+        self.assertFalse(result["mesh_query_attempted"])
+        self.assertEqual(result["rank_query_count"], 1)
+        request = outgoing(sock)[2]
+        self.assertEqual(request[:2], (42, 2))
+        self.assertEqual(request[2]["header"], {"version": "3.10.1", "rpcid": "3", "aid": "7_123",
+                                              "streamid": "fixture-stream"})
+        self.assertEqual(request[2]["body"]["cmd"], 0)
+        wrapper = json.loads(base64.b64decode(request[2]["body"]["payload"]))
+        post = json.loads(base64.b64decode(wrapper.pop("post_body")))
+        self.assertEqual(post, {"host": 7, "tag": "player", "id": "7_456"})
+        self.assertEqual(wrapper, {"service": "xyq-namecard", "headers": {"Content-Type": "application/json",
+            "Accept-Encoding": "gzip"}, "uri": "GetData", "method": "POST",
+            "querystring": None, "host": None, "protocol": None, "version": None})
+        self.assertEqual(result["rank_application_bytes_sent"], len(sock.sent[3]))
+        self.assertEqual(connector.call_count, 1)
+        self.assertEqual(len(sock.sent), 4)
+        self.assertTrue(sock.closed)
+        self.assertNotIn("ranks_verified", result)
+        for secret in (owner.token, "PRIVATE_RANK_BODY", owner.aid, "xyq-namecard"):
+            self.assertNotIn(secret, json.dumps(result))
+
+    def test_rank_mesh_and_career_have_independent_once_flags_and_shared_rpc_sequence(self):
+        for order in (("mesh", "rank", "career"), ("rank", "career", "mesh")):
+            received, responses = [], [(1, 3, career_setup())]
+            for index, kind in enumerate(order, 3):
+                rpcid = str(index)
+                responses.append((1, 4, mesh_reply(header={"rpcid": rpcid})) if kind == "mesh" else
+                                 (42, 2, rank_reply(rpcid=rpcid) if kind == "rank" else career_reply(rpcid=rpcid)))
+
+            def consume(context):
+                methods = {"mesh": lambda: context.read_mesh_user(456),
+                           "rank": lambda: context.read_other_ranks(456), "career": context.read_own_career}
+                for kind in order:
+                    received.append(methods[kind]())
+
+            result, sock, _ = self.run_setup(wire_data=fixture(responses=responses), on_setup=consume)
+            self.assertTrue(result["setup_consumer_completed"])
+            self.assertEqual(len(received), 3)
+            for kind in order:
+                self.assertEqual(result[kind + "_query_count"], 1)
+            self.assertTrue(result["rank_reply_bound"])
+            self.assertTrue(result["career_reply_bound"])
+            self.assertTrue(result["mesh_request_bound"])
+            self.assertEqual([row[2]["header"]["rpcid"] for row in outgoing(sock)[2:]], ["3", "4", "5"])
+            self.assertEqual(len(sock.sent), 6)
+
+    def test_rank_capability_is_once_and_invalidated_after_callback(self):
+        contexts = []
+
+        def consume(context):
+            contexts.append(context)
+            context.read_other_ranks(456)
+            with self.assertRaisesRegex(transport.SocialTransportError, "social_rank_already_consumed"):
+                context.read_other_ranks(789)
+
+        result, sock, _ = self.run_setup(wire_data=fixture(responses=[
+            (1, 3, career_setup()), (42, 2, rank_reply())]), on_setup=consume)
+        self.assertTrue(result["setup_consumer_completed"])
+        self.assertEqual(result["rank_query_count"], 1)
+        self.assertEqual(len(sock.sent), 4)
+        before = json.dumps(result, sort_keys=True)
+        with self.assertRaisesRegex(transport.SocialTransportError, "social_rank_context_closed"):
+            contexts[0].read_other_ranks(456)
+        self.assertEqual(json.dumps(result, sort_keys=True), before)
+        self.assertIsNone(contexts[0]._session)
+        self.assertIsNone(contexts[0]._wire)
+        self.assertIsNone(contexts[0]._modules)
+
+    def test_rank_rejects_owner_or_invalid_target_before_query_io(self):
+        for uid in (123, 0, -1, True, "456", 1 << 64):
+            with self.subTest(uid=uid):
+                result, sock, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, career_setup())]),
+                    on_setup=lambda context: context.read_other_ranks(uid))
+                self.assertEqual(result["rank_error"], "social_rank_target_invalid")
+                self.assertFalse(result["rank_query_sent"])
+                self.assertFalse(result["rank_reply_bound"])
+                self.assertFalse(result["stats_requested"])
+                self.assertEqual(len(sock.sent), 3)
+
+    def test_rank_accepts_same_unsigned_uid_range_as_mesh_and_request_builder(self):
+        for uid in (1 << 63, (1 << 64) - 1):
+            with self.subTest(uid=uid):
+                result, sock, _ = self.run_setup(wire_data=fixture(responses=[
+                    (1, 3, career_setup()), (42, 2, rank_reply())]),
+                    on_setup=lambda context: context.read_other_ranks(uid))
+                self.assertTrue(result["rank_reply_bound"])
+                query = json.loads(base64.b64decode(outgoing(sock)[2][2]["body"]["payload"]))
+                post = json.loads(base64.b64decode(query["post_body"]))
+                self.assertEqual(post["id"], f"1_{uid}")
+
+    def test_rank_requires_advertised_positive_mesh_and_does_not_reuse_legacy_user_route(self):
+        for setup_body in (reply(), career_setup(command=0)):
+            result, sock, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, setup_body)]),
+                on_setup=lambda context: context.read_other_ranks(456))
+            self.assertEqual(result["rank_error"], "social_rank_module_unavailable")
+            self.assertFalse(result["rank_query_sent"])
+            self.assertFalse(result["stats_requested"])
+            self.assertEqual(len(sock.sent), 3)
+
+    def test_rank_adds_token_only_when_normal_setup_has_no_streamid(self):
+        owner = session()
+        result, sock, _ = self.run_setup(owner=owner, wire_data=fixture(responses=[
+            (1, 3, career_setup(header={"streamid": None})), (42, 2, rank_reply())]),
+            on_setup=lambda context: context.read_other_ranks(456))
+        self.assertTrue(result["rank_reply_bound"])
+        self.assertEqual(outgoing(sock)[2][2]["header"], {
+            "version": "3.10.1", "rpcid": "3", "aid": "1_123", "token": owner.token})
+        self.assertNotIn(owner.token, json.dumps(result))
+
+    def test_rank_reply_has_independent_route_rpc_owner_status_and_payload_checks(self):
+        cases = [
+            (rank_reply(header={"aid": "1_456"}), "social_rank_identity_mismatch", None, None),
+            (rank_reply(header={"errorcode": 403, "errormsg": "PRIVATE"}), "social_rank_rejected", 403, "header"),
+            (rank_reply(body={"errorcode": 429}), "social_rank_rejected", 429, "body"),
+            (rank_reply(body={"cmd": True}), "social_rank_reply_invalid", None, None),
+            (rank_reply(body={"payload": "PRIVATE_BAD_BASE64"}), "social_rank_payload_invalid", None, None),
+        ]
+        for raw, error, status, layer in cases:
+            result, sock, _ = self.run_setup(wire_data=fixture(responses=[
+                (1, 3, career_setup()), (42, 2, raw)]), on_setup=lambda context: context.read_other_ranks(456))
+            self.assertEqual(result["rank_error"], error)
+            self.assertEqual(result["rank_server_error_code"], status)
+            self.assertEqual(result["rank_status_layer"], layer)
+            self.assertFalse(result["rank_reply_bound"])
+            self.assertFalse(result["career_reply_bound"])
+            self.assertIsNone(result["career_error"])
+            self.assertIsNone(result["validation_reason"])
+            self.assertNotIn("PRIVATE", json.dumps(result))
+            self.assertTrue(sock.closed)
+            if error == "social_rank_payload_invalid":
+                self.assertEqual(result["rank_validation_reason"], "payload_base64_invalid")
+        result, _, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, career_setup()),
+            (1, 2, rank_reply()), (42, 2, rank_reply(rpcid="4")), (42, 2, rank_reply())]),
+            on_setup=lambda context: context.read_other_ranks(456))
+        self.assertTrue(result["rank_reply_bound"])
+        self.assertEqual(result["rank_ignored_records"], 2)
+
+    def test_rank_response_is_transient_service_data_not_a_transport_rank_claim(self):
+        for direct in (False, True):
+            received = []
+            outer = {"service": "xyq-namecard", "status_code": 503, "response_body": "PRIVATE_ERROR"}
+            result, sock, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, career_setup()),
+                (42, 2, rank_reply(data=outer, direct=direct, body={"cmd": 0}))]),
+                on_setup=lambda context: received.append(context.read_other_ranks(456)))
+            self.assertEqual(received, [outer])
+            self.assertTrue(result["rank_reply_bound"])
+            self.assertEqual(result["rank_reply_command"], 0)
+            self.assertNotIn("ranks_verified", result)
+            self.assertNotIn("PRIVATE_ERROR", json.dumps(result))
+            self.assertTrue(sock.closed)
+
+    def test_rank_io_failure_blocks_reuse_without_erasing_prior_mesh_identity_reply(self):
+        received = []
+
+        def consume(context):
+            received.append(context.read_mesh_user(456))
+            with self.assertRaises(OSError):
+                context.read_other_ranks(456)
+            with self.assertRaisesRegex(transport.SocialTransportError, "social_query_connection_failed"):
+                context.read_own_career()
+
+        sock = Socket(fixture(responses=[(1, 3, career_setup()), (1, 4, mesh_reply())]), fail_send=5)
+        result, sock, connector = self.run_setup(sock=sock, on_setup=consume)
+        self.assertEqual(len(received), 1)
+        self.assertTrue(result["mesh_request_bound"])
+        self.assertTrue(result["mesh_reply_received"])
+        self.assertIsNone(result["mesh_error"])
+        self.assertEqual(result["rank_error"], "social_transport_network_error")
+        self.assertEqual(result["career_error"], "social_query_connection_failed")
+        self.assertIsNone(result["rank_query_sent"])
+        self.assertIsNone(result["rank_application_bytes_sent"])
+        self.assertIsNone(result["application_bytes_sent"])
+        self.assertFalse(result["rank_reply_bound"])
+        self.assertFalse(result["career_query_sent"])
+        self.assertEqual(len(sock.sent), 5)
+        self.assertEqual(connector.call_count, 1)
+        self.assertTrue(sock.closed)
+
+    def test_rank_read_failure_is_terminal_for_unused_mesh_and_career_capabilities(self):
+        def consume(context):
+            with self.assertRaisesRegex(transport.SocialTransportError, "social_connection_closed"):
+                context.read_other_ranks(456)
+            for operation in (lambda: context.read_mesh_user(456), context.read_own_career):
+                with self.assertRaisesRegex(transport.SocialTransportError, "social_query_connection_failed"):
+                    operation()
+
+        result, sock, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, career_setup())]), on_setup=consume)
+        self.assertTrue(result["rank_query_sent"])
+        self.assertEqual(result["rank_error"], "social_connection_closed")
+        self.assertFalse(result["mesh_query_sent"])
+        self.assertFalse(result["career_query_sent"])
+        self.assertEqual(len(sock.sent), 4)
+
+    def test_rank_rechecks_expiry_deadline_and_builder_before_sending(self):
+        epoch = [NOW]
+
+        def expired(context):
+            epoch[0] = 1100
+            context.read_other_ranks(456)
+
+        with patch.object(social.time, "time", side_effect=lambda: epoch[0]):
+            result, sock, _ = self.run_setup(now=None, wire_data=fixture(responses=[
+                (1, 3, career_setup())]), on_setup=expired)
+        self.assertEqual(result["rank_error"], "social_token_time")
+        self.assertFalse(result["rank_query_sent"])
+        self.assertFalse(result["stats_requested"])
+        self.assertEqual(len(sock.sent), 3)
+        clock = [10]
+
+        def late(context):
+            clock[0] = 31
+            context.read_other_ranks(456)
+
+        result, sock, _ = self.run_setup(monotonic=lambda: clock[0], wire_data=fixture(responses=[
+            (1, 3, career_setup())]), on_setup=late)
+        self.assertEqual(result["rank_error"], "social_transport_timeout")
+        self.assertFalse(result["rank_query_sent"])
+        self.assertEqual(len(sock.sent), 3)
+        with patch.object(transport, "make_other_rank_request", side_effect=ValueError("PRIVATE_BUILDER")):
+            result, sock, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, career_setup())]),
+                on_setup=lambda context: context.read_other_ranks(456))
+        self.assertEqual(result["rank_error"], "social_rank_request_invalid")
+        self.assertFalse(result["rank_query_sent"])
         self.assertFalse(result["stats_requested"])
         self.assertNotIn("PRIVATE_BUILDER", json.dumps(result))
         self.assertEqual(len(sock.sent), 3)

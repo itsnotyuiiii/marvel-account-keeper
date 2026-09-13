@@ -9,7 +9,8 @@ Python variant, not a claim that native overrides use the same hello/version.
 Only a supplied fresh gateway token and supplied hash-pinned public parameter
 are used. A single primary route connection is closed after setup, or after an
 explicit transient callback makes at most one reviewed mesh identity read and
-one authenticated-owner Career read. There are no local files, retries,
+one authenticated-owner Career read and one other-player namecard rank read.
+There are no local files, retries,
 captured templates, HMAC signing, renewal, payload execution or credential
 exports in reports. Career service-body decoding belongs to the caller.
 """
@@ -25,6 +26,7 @@ import time
 
 from socialmatrix_capture_probe import RC4Stream, fold_xor, magic_signature, opening_fields
 from standalone_career_query import make_own_career_request
+from standalone_rank_query import make_other_rank_request
 from standalone_social_session import (
     ERROR_CODES as TOKEN_ERROR_CODES, GatewaySocialToken, SocialSessionError,
     parse_gateway_social_token, social_token_metadata,
@@ -52,6 +54,10 @@ ERROR_CODES = frozenset({
     "social_career_context_closed", "social_career_already_consumed", "social_career_module_unavailable",
     "social_career_request_invalid", "social_career_reply_invalid", "social_career_rejected",
     "social_career_identity_mismatch", "social_career_correlation_missing", "social_career_payload_invalid",
+    "social_rank_context_closed", "social_rank_already_consumed", "social_rank_module_unavailable",
+    "social_rank_target_invalid", "social_rank_request_invalid", "social_rank_reply_invalid",
+    "social_rank_rejected", "social_rank_identity_mismatch", "social_rank_correlation_missing",
+    "social_rank_payload_invalid",
     "social_query_connection_failed",
 })
 SETUP_VALIDATION_REASONS = frozenset({
@@ -88,7 +94,12 @@ def _report():
             "career_application_bytes_sent": 0, "career_reply_bound": False,
             "career_reply_received": False, "career_reply_command": None, "career_ignored_records": 0,
             "career_error": None, "career_server_error_code": None, "career_status_layer": None,
-            "career_validation_reason": None, "career_shape": {}}
+            "career_validation_reason": None, "career_shape": {},
+            "rank_query_attempted": False, "rank_query_sent": False, "rank_query_count": 0,
+            "rank_application_bytes_sent": 0, "rank_reply_bound": False,
+            "rank_reply_received": False, "rank_reply_command": None, "rank_ignored_records": 0,
+            "rank_error": None, "rank_server_error_code": None, "rank_status_layer": None,
+            "rank_validation_reason": None, "rank_shape": {}}
 
 
 def _unique(pairs):
@@ -392,20 +403,21 @@ def _accept_setup(wire, session):
 
 
 class _SocialConnectionContext:
-    """Only the current callback may use these two bounded read capabilities.
+    """Only the current callback may use these three bounded read capabilities.
 
     Decoded data is deliberately returned only to that callback. It still needs
     the caller's exact-target projection; transport correlation is not identity
     verification of a returned player row. The context is invalidated on exit.
     """
     __slots__ = ("_wire", "_session", "_streamid", "_modules", "_now", "_active", "_consumed",
-                 "_career_consumed", "_next_rpc", "_connection_failed")
+                 "_career_consumed", "_rank_consumed", "_next_rpc", "_connection_failed")
 
     def __init__(self, wire, session, streamid, modules, now):
         self._wire, self._session, self._streamid, self._now = wire, session, streamid, now
         self._modules = modules
         self._active, self._consumed = True, False
         self._career_consumed, self._next_rpc, self._connection_failed = False, 3, False
+        self._rank_consumed = False
 
     def __reduce_ex__(self, protocol):
         raise SocialTransportError("social_mesh_context_closed")
@@ -459,7 +471,7 @@ class _SocialConnectionContext:
             # This marks request/reply correlation and owner-envelope checks,
             # not identity or service-status verification inside the payload.
             report[f"{kind}_reply_received"] = True
-            report["mesh_request_bound" if kind == "mesh" else "career_reply_bound"] = True
+            report["mesh_request_bound" if kind == "mesh" else f"{kind}_reply_bound"] = True
             return data
         raise SocialTransportError(f"social_{kind}_correlation_missing")
 
@@ -479,7 +491,7 @@ class _SocialConnectionContext:
                 header["token"] = session.token
             payload = base64.b64encode(_packed(data)).decode("ascii")
             request = {"header": header, "body": {"cmd": 0, "payload": payload}}
-            if kind == "career":
+            if kind in {"career", "rank"}:
                 report["stats_requested"] = True
             self._wire.send(main, sub, _packed(request), carries_token=not self._streamid, query=kind)
             report["stage"] = f"{kind}_reply"
@@ -539,6 +551,35 @@ class _SocialConnectionContext:
             raise SocialTransportError("social_career_request_invalid") from None
         return self._run_query("career", command, 2, data)
 
+    def read_other_ranks(self, target_uid):
+        """One normal other-player namecard request, not an access grant.
+
+        The caller must first bind fresh mesh identity and independent overview
+        access. This method only binds transport; rank projection is separate.
+        """
+        if not self._active:
+            raise SocialTransportError("social_rank_context_closed")
+        report = self._wire.report
+        if self._rank_consumed:
+            report["rank_error"] = "social_rank_already_consumed"
+            raise SocialTransportError("social_rank_already_consumed")
+        self._rank_consumed = True
+        report.update(rank_query_attempted=True, rank_query_count=1, stage="rank_query")
+        if (type(target_uid) is not int or not 0 < target_uid < 2**64
+                or target_uid == self._session.own_uid):
+            report["rank_error"] = "social_rank_target_invalid"
+            raise SocialTransportError("social_rank_target_invalid")
+        command = self._modules.get("mesh")
+        if type(command) is not int or not 1 <= command <= 65535:
+            report["rank_error"] = "social_rank_module_unavailable"
+            raise SocialTransportError("social_rank_module_unavailable")
+        try:
+            data = make_other_rank_request(target_uid, self._session.zone_id, self._session.own_uid)
+        except Exception:
+            report["rank_error"] = "social_rank_request_invalid"
+            raise SocialTransportError("social_rank_request_invalid") from None
+        return self._run_query("rank", command, 2, data)
+
 
 def run_social_setup_once(session, *, parameter, connect=socket.create_connection,
                           now=None, monotonic=time.monotonic, on_setup=None):
@@ -546,8 +587,8 @@ def run_social_setup_once(session, *, parameter, connect=socket.create_connectio
 
     Optional aid/streamid/module echoes are reported separately. Successful
     setup does not imply any query was made or that player stats are available.
-    Explicit on_setup receives a transient one-mesh/one-own-Career context; its return
-    value and decoded player data never enter this report. This function cannot
+    Explicit on_setup receives a transient one-mesh/one-own-Career/one-other-rank
+    context; its return value and decoded player data never enter this report. This function cannot
     establish the original gateway callback provenance.
     """
     report, sock = _report(), None

@@ -18,8 +18,18 @@ verification. It cannot select another player's owner-only Career operation.
 UID's native aggregate, after that UID's fresh mesh overview permission passes.
 --other-matches selects one native first match page instead, independently gated
 by history visibility. It cannot be combined with either Career flag.
+--other-ranks selects the normal namecard season-history read after exact other
+identity and overview visibility; no current-season or response UID echo is invented.
+--rank-panel reads the normal owner's current rank panel on the same verified
+gateway after owner mesh identity. Current season is not inferred from history.
 --refresh-before-auth explicitly uses one normal OAuth refresh first. Only this
 mode accepts a renewal token in the one-use handoff; nothing is saved or retried.
+--history-login-before-auth instead accepts the explicitly selected saved-Steam
+account and Mpay context, makes its normal token exchange, builds fresh-wrapper
+SAUTH, and tests that candidate through normal AUTH. No browser storage changes.
+--verify-history-renewal runs exactly two saved-token exchanges, with the second
+using only the first returned renewal token after exact owner AUTH succeeds.
+This tests chaining, not expiry handling, persistence or hosted automatic renewal.
 Missing native metadata is omitted, never fabricated. --with-reviewed-version
 adds only client_version and engine_ver from the pinned public manifest. It
 does not claim that this reviewed build remains current. Rejection is ambiguous:
@@ -54,15 +64,22 @@ WAIT_SECONDS = 75
 def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelope=False,
                  runtime_version="3825464", enter_gateway=False, collect_social_token=False,
                  refresh_before_auth=False, verify_social_session=False, lookup_uid=None, own_career=False,
-                 other_career=False, other_matches=False):
+                 other_career=False, other_matches=False, other_ranks=False, rank_panel=False):
     # Validate before consulting any file or opening a network connection.
     probe.build_web_login_inputs(sauth)
     provenance, pin = runtime.reviewed_runtime_pin(runtime_version)
-    if any(type(flag) is not bool for flag in (own_career, other_career, other_matches)):
+    if any(type(flag) is not bool for flag in (own_career, other_career, other_matches, other_ranks, rank_panel)):
         raise ValueError("uid_lookup_inputs_invalid")
+    if rank_panel:
+        if (own_career or other_career or other_matches or other_ranks
+                or lookup_uid is not None and (type(lookup_uid) is not int or lookup_uid != 1370598422)):
+            raise ValueError("rank_panel_requires_owner_only")
+        lookup_uid = 1370598422
     if other_matches and (own_career or other_career):
         raise ValueError("select_one_native_section")
-    if (other_career or other_matches) and (own_career or type(lookup_uid) is not int
+    if other_ranks and (own_career or other_career or other_matches):
+        raise ValueError("select_one_profile_section")
+    if (other_career or other_matches or other_ranks) and (own_career or type(lookup_uid) is not int
                          or not 0 < lookup_uid < 2**63 or lookup_uid == 1370598422):
         raise ValueError("other_career_requires_explicit_other_uid")
     if own_career:
@@ -128,6 +145,8 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
             if lookup_uid is not None:
                 from standalone_profile_probe import run_uid_lookup_once
                 career_options = {"own_career": True} if own_career else {}
+                if other_ranks:
+                    career_options["other_ranks"] = True
                 setup_report = run_uid_lookup_once(fresh_session, parameter=social_public.parameter,
                                                    target_uid=lookup_uid, **career_options)
             else:
@@ -135,12 +154,24 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
 
         def on_game_connection(connection, transport, zone):
             nonlocal native_result
+            if rank_panel:
+                identity = setup_report.get("profile_lookup", {}) if type(setup_report) is dict else {}
+                if (type(identity) is not dict or identity.get("identity_verified") is not True
+                        or identity.get("uid") != "1370598422"):
+                    native_result = {"outcome": "rank_panel_owner_identity_unverified",
+                                     "rank_panel_verified": False, "current_season_verified": False,
+                                     "own_rank_verified": False, "secrets_saved": False}
+                    return
+                from game_rank_panel_probe import read_rank_panel_once
+                native_result = read_rank_panel_once(connection, transport, zone,
+                                                     client_version=public.provenance.client_version)
+                return
             from standalone_native_sections import read_other_career_once, read_other_matches_once
             read_section = read_other_matches_once if other_matches else read_other_career_once
             native_result = read_section(connection, transport, zone, public.career_methods,
                                          setup_report=setup_report, target_uid=lookup_uid)
 
-        game_options = {"on_game_connection": on_game_connection} if other_career or other_matches else {}
+        game_options = {"on_game_connection": on_game_connection} if other_career or other_matches or rank_panel else {}
         report = run_social_token_once(sauth, public.configuration, server,
                                        client_version=public.provenance.client_version,
                                        on_token=on_token, **game_options)
@@ -154,6 +185,19 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
                     and career_result.get("identity_verified") is True
                     and career_result.get("uid") == "1370598422"):
                 report["career_verified"] = True
+            rank_result = setup_report.get("rank_lookup", {})
+            if (other_ranks and type(rank_result) is dict and rank_result.get("ranks_verified") is True
+                    and rank_result.get("identity_verified") is True and rank_result.get("request_bound") is True
+                    and rank_result.get("uid") == str(lookup_uid)):
+                report["ranks_verified"] = True
+            if (rank_panel and token_report.get("on_game_connection_completed") is True
+                    and type(native_result) is dict):
+                report["rank_panel"] = native_result
+                if (native_result.get("owner_context_valid") is True
+                        and native_result.get("uid") == "1370598422"
+                        and native_result.get("rank_panel_verified") is True):
+                    report["current_season_verified"] = native_result.get("current_season_verified") is True
+                    report["own_rank_verified"] = native_result.get("own_rank_verified") is True
             if ((other_career or other_matches) and token_report.get("on_game_connection_completed") is True
                     and type(native_result) is dict):
                 report["other_matches" if other_matches else "other_career"] = native_result
@@ -193,7 +237,103 @@ def unique_object(pairs):
     return result
 
 
-def make_handler(path, attempt=attempt_auth, *, allow_refresh=False):
+def validate_history_auth_options(auth_options):
+    """Reject unsupported research operations before a saved-token exchange."""
+    if (auth_options.get("runtime_version") != "3848703"
+            or auth_options.get("with_reviewed_pc_envelope") is not True
+            or auth_options.get("refresh_before_auth", False) is not False):
+        raise ValueError("history_requires_current_reviewed_pc_envelope")
+    flags = {"with_reviewed_version", "with_reviewed_pc_envelope", "enter_gateway", "collect_social_token",
+             "refresh_before_auth", "verify_social_session", "own_career", "other_career", "other_matches", "other_ranks", "rank_panel"}
+    if (set(auth_options) - (flags | {"runtime_version", "lookup_uid"})
+            or any(type(auth_options[name]) is not bool for name in flags if name in auth_options)):
+        raise ValueError("history_auth_options_invalid")
+    uid = auth_options.get("lookup_uid")
+    if uid is not None and (type(uid) is not int or not 0 < uid < 2**64):
+        raise ValueError("uid_lookup_inputs_invalid")
+    selected = [name for name in ("own_career", "other_career", "other_matches", "other_ranks", "rank_panel")
+                if auth_options.get(name) is True]
+    owner_only = selected in (["own_career"], ["rank_panel"])
+    if len(selected) > 1 or (owner_only and uid not in (None, 1370598422)):
+        raise ValueError("select_one_profile_section")
+    if selected and not owner_only and (uid is None or uid == 1370598422 or uid >= 2**63):
+        raise ValueError("other_section_requires_explicit_other_uid")
+
+
+def attempt_history_auth(bundle, **auth_options):
+    """One sourced saved-token exchange followed only by its candidate's AUTH."""
+    import web_sdk_history_login as history
+    validate_history_auth_options(auth_options)
+    expected_fields = {"selected_uid", "sauth", "saved_account", "mpay_context", "wrapper_udid"}
+    if (type(bundle) is not dict or set(bundle) != expected_fields
+            or type(bundle["selected_uid"]) is not int or bundle["selected_uid"] != 1370598422
+            or type(bundle["sauth"]) is not dict
+            or type(bundle["wrapper_udid"]) is not str or not bundle["wrapper_udid"]
+            or bundle["wrapper_udid"] != bundle["sauth"].get("udid")):
+        raise ValueError("history_context_invalid")
+    inputs = history.build_history_login_inputs(bundle["sauth"], bundle["saved_account"], bundle["mpay_context"])
+    metadata = {"request_attempted": False, "candidate_received": False, "sauth_constructed": False,
+                "owner_authentication_verified": False, "automatic_renewal_verified": False,
+                "secrets_saved": False, "browser_storage_changed": False}
+    try:
+        candidate = history.login_history_once(inputs)
+        metadata.update(request_attempted=True, candidate_received=True)
+        samples = tuple(secrets.randbits(53) / (1 << 53) for _ in range(8))
+        renewed = history.build_fresh_wrapper_sauth(candidate, wrapper_udid=bundle["wrapper_udid"],
+            clock_ms=time.time_ns() // 1_000_000,
+            random_samples=samples)
+        metadata.update(sauth_constructed=True, outcome="web_history_candidate_received")
+    except history.HistoryLoginError as error:
+        metadata.update(outcome=error.code, request_attempted=metadata["request_attempted"] or error.request_attempted,
+                        http_status=error.http_status, application_code=error.application_code)
+        report = probe._report("web_history_login_failed")
+        report["sdk_history_login"] = metadata
+        return report
+    try:
+        report = attempt_auth(renewed.sauth, **auth_options)
+    except Exception:
+        report = probe._report("web_history_candidate_auth_failed", transmission_unknown=True)
+    metadata["owner_authentication_verified"] = (
+        report.get("auth_service_accepted") is True and report.get("own_role_verified") is True)
+    report["sdk_history_login"] = metadata
+    return report
+
+
+def attempt_history_chain(bundle, **auth_options):
+    """Explicit two-round replacement-token verification; all credentials transient."""
+    from web_sdk_history_chain import run_history_chain
+    validate_history_auth_options(auth_options)
+    if (auth_options.get("lookup_uid") is not None or any(auth_options.get(name, False) for name in (
+            "collect_social_token", "verify_social_session", "own_career", "other_career",
+            "other_matches", "other_ranks", "rank_panel"))):
+        raise ValueError("history_chain_requires_auth_only")
+    auth_rounds = []
+
+    def authenticate(sauth):
+        try:
+            raw_report = attempt_auth(sauth, **auth_options)
+            # Keep this boundary explicit even though the production callback
+            # already projects its diagnostics. No future/raw callback fields
+            # belong in the two-round helper response.
+            projector = probe._project_gateway_report if auth_options.get("enter_gateway") is True else probe._project_report
+            report = projector(raw_report)
+        except Exception:
+            report = probe._report("web_history_candidate_auth_failed", transmission_unknown=True)
+        auth_rounds.append(report)
+        return report
+
+    summary = run_history_chain(bundle, authenticate=authenticate,
+        clock_ms=lambda: time.time_ns() // 1_000_000,
+        random_samples=lambda: tuple(secrets.randbits(53) / (1 << 53) for _ in range(8)))
+    return {"outcome": summary["outcome"], "sdk_history_chain": summary, "auth_rounds": auth_rounds,
+            "renewal_chain_verified": summary["renewal_chain_verified"],
+            "automatic_renewal_verified": False, "secrets_saved": False,
+            "browser_storage_changed": False}
+
+
+def make_handler(path, attempt=attempt_auth, *, allow_refresh=False, allow_history=False):
+    if type(allow_history) is not bool or allow_history and allow_refresh:
+        raise ValueError("select_one_renewal_path")
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass  # Never log URLs, payloads or request headers.
@@ -259,7 +399,10 @@ def make_handler(path, attempt=attempt_auth, *, allow_refresh=False):
                 if len(raw) != length:
                     raise ValueError
                 value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
-                if (type(value) is not dict or set(value) != {"selected_uid", "sauth"}
+                expected_fields = {"selected_uid", "sauth"}
+                if allow_history:
+                    expected_fields |= {"saved_account", "mpay_context", "wrapper_udid"}
+                if (type(value) is not dict or set(value) != expected_fields
                         or type(value["selected_uid"]) is not int or value["selected_uid"] != 1370598422):
                     raise ValueError
                 # Only the explicit normal-renewal mode accepts this field.
@@ -270,13 +413,19 @@ def make_handler(path, attempt=attempt_auth, *, allow_refresh=False):
                                               or not value["sauth"]["refresh_token"].strip())):
                     raise ValueError
                 probe.build_web_login_inputs(value["sauth"])
+                if allow_history:
+                    from web_sdk_history_login import build_history_login_inputs
+                    build_history_login_inputs(value["sauth"], value["saved_account"], value["mpay_context"])
+                    if (type(value["wrapper_udid"]) is not str or not value["wrapper_udid"]
+                            or value["wrapper_udid"] != value["sauth"].get("udid")):
+                        raise ValueError
             except Exception:
                 self.reply(400, {"outcome": "handoff_invalid_payload"}, cors=True)
                 return
             # Consume before any downstream I/O: no second attempt on error.
             self.server.completed = True
             try:
-                report = attempt(value["sauth"])
+                report = attempt(value if allow_history else value["sauth"])
             except Exception:
                 report = {"outcome": "auth_probe_failed", "secrets_saved": False}
             finally:
@@ -314,12 +463,33 @@ def main(argv=None):
                         help="Read the explicit other UID's native aggregate if its overview is available.")
     parser.add_argument("--other-matches", action="store_true",
                         help="Read one first match page for the other UID if its history is available.")
+    parser.add_argument("--other-ranks", action="store_true",
+                        help="Read other-player season ranks if overview is available, without a current-season guess.")
+    parser.add_argument("--rank-panel", action="store_true",
+                        help="Read the owner's normal current-season/rank panel on the same verified gateway.")
     parser.add_argument("--refresh-before-auth", action="store_true",
                         help="Use one normal OAuth refresh, then verify the renewed owner session.")
+    parser.add_argument("--history-login-before-auth", action="store_true",
+                        help="Use the saved-Steam token exchange and fresh-wrapper SAUTH before normal owner AUTH.")
+    parser.add_argument("--verify-history-renewal", action="store_true",
+                        help="Verify exactly two owner-authenticated exchanges using the returned renewal token.")
     args = parser.parse_args(argv)
+    if sum((args.history_login_before_auth, args.refresh_before_auth, args.verify_history_renewal)) > 1:
+        parser.error("select only one normal renewal path")
+    if args.verify_history_renewal and (args.lookup_uid is not None or args.collect_social_token
+            or args.verify_social_session or args.own_career or args.other_career or args.other_matches
+            or args.other_ranks or args.rank_panel):
+        parser.error("renewal-chain verification permits only AUTH and optional --enter")
+    if args.rank_panel:
+        if (args.own_career or args.other_career or args.other_matches or args.other_ranks
+                or args.lookup_uid not in (None, 1370598422)):
+            parser.error("--rank-panel requires the owner and no other profile section")
+        args.lookup_uid = 1370598422
     if args.other_matches and (args.own_career or args.other_career):
         parser.error("select only one Career or matches section per research read")
-    if (args.other_career or args.other_matches) and (args.own_career or args.lookup_uid is None
+    if args.other_ranks and (args.own_career or args.other_career or args.other_matches):
+        parser.error("select only one profile section per research read")
+    if (args.other_career or args.other_matches or args.other_ranks) and (args.own_career or args.lookup_uid is None
                              or not 0 < args.lookup_uid < 2**63 or args.lookup_uid == 1370598422):
         parser.error("native other-player sections require --lookup-uid with an explicit other-player UID")
     if args.own_career:
@@ -328,7 +498,7 @@ def main(argv=None):
         args.lookup_uid = 1370598422
     if args.lookup_uid is not None and not 0 < args.lookup_uid < 2**64:
         parser.error("lookup UID must be a positive uint64")
-    if (args.enter or args.collect_social_token or args.refresh_before_auth or args.verify_social_session
+    if (args.enter or args.collect_social_token or args.refresh_before_auth or args.history_login_before_auth or args.verify_history_renewal or args.verify_social_session
             or args.lookup_uid is not None) and (
             args.runtime_version != "3848703" or not args.with_reviewed_pc_envelope):
         parser.error("gateway actions require --runtime-version 3848703 --with-reviewed-pc-envelope")
@@ -344,7 +514,11 @@ def main(argv=None):
                           "own_career": args.own_career,
                           "other_career": args.other_career,
                           "other_matches": args.other_matches,
+                          "other_ranks": args.other_ranks,
+                          "rank_panel": args.rank_panel,
                           "refresh_before_auth": args.refresh_before_auth,
+                          "history_login_before_auth": args.history_login_before_auth,
+                          "verify_history_renewal": args.verify_history_renewal,
                           "runtime_version": args.runtime_version}))
         return 0
     path = "/auth-once/" + secrets.token_urlsafe(32)
@@ -356,7 +530,14 @@ def main(argv=None):
             lookup_options["other_career"] = True
         if args.other_matches:
             lookup_options["other_matches"] = True
-        return attempt_auth(sauth, with_reviewed_version=args.with_reviewed_version,
+        if args.other_ranks:
+            lookup_options["other_ranks"] = True
+        if args.rank_panel:
+            lookup_options["rank_panel"] = True
+        runner = attempt_history_auth if args.history_login_before_auth else attempt_auth
+        if args.verify_history_renewal:
+            runner = attempt_history_chain
+        return runner(sauth, with_reviewed_version=args.with_reviewed_version,
                             with_reviewed_pc_envelope=args.with_reviewed_pc_envelope,
                             runtime_version=args.runtime_version, enter_gateway=args.enter,
                             collect_social_token=args.collect_social_token,
@@ -364,7 +545,8 @@ def main(argv=None):
                             refresh_before_auth=args.refresh_before_auth, **lookup_options)
 
     with HTTPServer(("127.0.0.1", 0), make_handler(path, attempt=attempt,
-                                               allow_refresh=args.refresh_before_auth)) as server:
+                                               allow_refresh=args.refresh_before_auth,
+                                               allow_history=args.history_login_before_auth or args.verify_history_renewal)) as server:
         server.completed, server.report, server.timeout = False, None, 1
         server.payload_read_started = False
         print(json.dumps({"outcome": "awaiting_one_owner_session",
@@ -378,7 +560,11 @@ def main(argv=None):
                           "own_career": args.own_career,
                           "other_career": args.other_career,
                           "other_matches": args.other_matches,
+                          "other_ranks": args.other_ranks,
+                          "rank_panel": args.rank_panel,
                           "refresh_before_auth": args.refresh_before_auth,
+                          "history_login_before_auth": args.history_login_before_auth,
+                          "verify_history_renewal": args.verify_history_renewal,
                           "runtime_version": args.runtime_version,
                           "expires_in_seconds": WAIT_SECONDS}), flush=True)
         deadline = time.monotonic() + WAIT_SECONDS

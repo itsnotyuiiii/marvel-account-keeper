@@ -18,6 +18,9 @@ ERROR_CODES = frozenset({
     "own_career_statistics_shape",
     "other_career_inputs_invalid", "other_career_response_shape",
     "other_career_identity_mismatch", "other_career_statistics_shape",
+    "xyq_inputs_invalid", "xyq_service_mismatch", "xyq_http_rejected",
+    "xyq_response_shape", "xyq_response_bound", "xyq_response_encoding",
+    "xyq_response_json", "xyq_application_rejected",
 })
 
 
@@ -102,17 +105,25 @@ def _decode_body(wrapper):
     return _response_json(raw)
 
 
-def project_own_career_response(wrapper, own_uid):
-    """Validate service/HTTP/application/owner independently, then project five totals."""
-    own_uid = _uid(own_uid)
+def decode_xyq_response(wrapper, expected_service):
+    """Decode the two reviewed XYQ services; no UID or request-binding claim.
+
+    The caller must independently correlate its RPC and project the requested
+    target. This function does not execute or choose any service operation.
+    """
+    if type(expected_service) is not str or expected_service not in {"xyq-career", "xyq-namecard"}:
+        raise CareerQueryError("xyq_inputs_invalid")
     if type(wrapper) is not dict:
-        raise CareerQueryError("own_career_response_shape")
-    if wrapper.get("service") != "xyq-career":
-        raise CareerQueryError("own_career_service_mismatch")
+        raise CareerQueryError("xyq_response_shape")
+    if wrapper.get("service") != expected_service:
+        raise CareerQueryError("xyq_service_mismatch")
     status = wrapper.get("status_code")
     if type(status) is not int or status != 200:
-        raise CareerQueryError("own_career_http_rejected", http_status=status)
-    response = _decode_body(wrapper)
+        raise CareerQueryError("xyq_http_rejected", http_status=status)
+    try:
+        response = _decode_body(wrapper)
+    except CareerQueryError as error:
+        raise CareerQueryError(error.code.replace("own_career_", "xyq_", 1), http_status=200) from None
     # Current103 wrap_callback: code wins, then error_code, else implicit data.
     if "code" in response:
         code, expected, status_source = response["code"], 200, "code"
@@ -121,8 +132,20 @@ def project_own_career_response(wrapper, own_uid):
     else:
         code, expected, status_source = 0, 0, "implicit_data"
     if type(code) is not int or code != expected:
-        raise CareerQueryError("own_career_application_rejected", http_status=200, application_code=code)
-    result = _project_totals(response.get("data"), own_uid, kind="own")
+        raise CareerQueryError("xyq_application_rejected", http_status=200, application_code=code)
+    return response.get("data"), status_source
+
+
+def project_own_career_response(wrapper, own_uid):
+    """Validate service/HTTP/application/owner independently, then project five totals."""
+    own_uid = _uid(own_uid)
+    try:
+        data, status_source = decode_xyq_response(wrapper, "xyq-career")
+    except CareerQueryError as error:
+        # Preserve the existing own-Career diagnostic contract for its callers.
+        raise CareerQueryError(error.code.replace("xyq_", "own_career_", 1),
+                               http_status=error.http_status, application_code=error.application_code) from None
+    result = _project_totals(data, own_uid, kind="own")
     result.update(http_status=200, application_status_source=status_source)
     return result
 

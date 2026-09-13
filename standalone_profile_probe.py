@@ -12,6 +12,7 @@ import json
 from standalone_social_session import GatewaySocialToken
 from standalone_social_transport import run_social_setup_once
 from standalone_career_query import CareerQueryError, project_own_career_response
+from standalone_rank_query import RankQueryError, project_other_rank_response
 
 
 MAX_UID = (1 << 64) - 1
@@ -163,17 +164,18 @@ def _failure_shape(data):
             "aid_type": _kind(row.get("aid")) if type(row) is dict else "unavailable"}
 
 
-def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_career=False):
-    """One mesh read, with an explicit optional exact-owner Career aggregate."""
+def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_career=False, other_ranks=False):
+    """One mesh read, with an explicit optional owner aggregate or other ranks."""
     _uid(target_uid)
     if (type(session) is not GatewaySocialToken or type(platform) is not str
-            or platform not in PLATFORM_IDS or type(own_career) is not bool
-            or own_career and (target_uid != session.own_uid or platform != "pc")):
+            or platform not in PLATFORM_IDS or type(own_career) is not bool or type(other_ranks) is not bool
+            or own_career and (target_uid != session.own_uid or platform != "pc")
+            or other_ranks and (own_career or target_uid == session.own_uid)):
         raise ProfileLookupError("uid_lookup_inputs_invalid")
-    projected, career_result = None, None
+    projected, career_result, rank_result = None, None, None
 
     def on_setup(connection):
-        nonlocal projected, career_result
+        nonlocal projected, career_result, rank_result
         data = connection.read_mesh_user(target_uid)
         try:
             projected = project_mesh_user(data, target_uid=target_uid, own_uid=session.own_uid,
@@ -192,6 +194,19 @@ def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_ca
                 # The transport has fixed per-section diagnostics. Preserve the
                 # earlier verified identity without exporting exception text.
                 career_result = _not_completed("own_career_read_failed")
+        if other_ranks and projected.get("identity_verified") is True and projected.get("is_owner") is False:
+            if projected["visibility"]["overview"]["state"] != "allowed":
+                rank_result = _not_completed("other_rank_overview_not_available")
+            else:
+                try:
+                    rank_data = connection.read_other_ranks(target_uid)
+                    rank_result = project_other_rank_response(rank_data, target_uid, session.zone_id, platform=platform)
+                except RankQueryError as error:
+                    rank_result = _not_completed(error.code)
+                    rank_result.update(http_status=error.http_status, application_code=error.application_code,
+                                       shape=error.shape)
+                except Exception:
+                    rank_result = _not_completed("other_rank_read_failed")
 
     report = run_social_setup_once(session, parameter=parameter, on_setup=on_setup)
     # A callback alone is not enough: retain the accepted session and correlated
@@ -209,4 +224,21 @@ def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_ca
             report["career_lookup"] = career_result
         else:
             report["career_lookup"] = _not_completed("own_career_not_verified")
+    if other_ranks:
+        identity_ok = report.get("profile_lookup", {}).get("identity_verified") is True
+        if (report.get("social_session_accepted") is True and report.get("setup_consumer_completed") is True
+                and identity_ok and rank_result is not None):
+            if report.get("rank_reply_bound") is True:
+                report["rank_lookup"] = rank_result
+                # Returned data need not echo a UID. Require the earlier exact
+                # mesh identity PLUS this same-context target request/RPC.
+                if rank_result.get("ranks_verified") is True:
+                    rank_result.update(identity_verified=True, request_bound=True,
+                                       identity_basis="mesh_identity_and_rank_request")
+            elif rank_result.get("outcome") == "other_rank_overview_not_available":
+                report["rank_lookup"] = rank_result
+            else:
+                report["rank_lookup"] = _not_completed("other_rank_not_verified")
+        else:
+            report["rank_lookup"] = _not_completed("other_rank_not_verified")
     return report

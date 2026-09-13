@@ -381,5 +381,115 @@ class HistoryHTTPTest(unittest.TestCase):
         self.assertTrue(reply.closed)
 
 
+class FreshWrapperSauthTest(unittest.TestCase):
+    def candidate(self):
+        return history.validate_history_response(inputs(), response(), http_status=200)
+
+    def build(self, candidate=None, **overrides):
+        supplied = {"wrapper_udid": "fixture-wrapper-udid", "clock_ms": 1700000000123,
+                    "random_samples": [0, .1, .4, .5, .55, .99, .95, .9]}
+        supplied.update(overrides)
+        return history.build_fresh_wrapper_sauth(self.candidate() if candidate is None else candidate, **supplied)
+
+    def test_exact_ten_fields_and_fresh_context_serial_vector(self):
+        candidate = self.candidate()
+        result = self.build(candidate)
+        expected = {
+            "gameid": "x20naxx2gb", "login_channel": "netease_global",
+            "app_channel": "netease.allysdk_global", "platform": "pc",
+            "sdkuid": "123456789012345", "sessionid": "fixture-access-token",
+            "deviceid": "fixture-saved-device", "sdk_version": "1.0.0",
+            "udid": "fixture-wrapper-udid",
+            # MD5("fixture-wrapper-udid_1700000000123_01455998__")
+            "client_login_sn": "1268e4611e3aedf9aa5555ffd8db014c",
+        }
+        self.assertEqual(result.sauth, expected)
+        self.assertEqual(list(result.sauth), list(expected))
+        self.assertEqual(len(result.sauth), 10)
+        self.assertEqual(result.refresh_token, "fixture-replacement-token")
+        self.assertNotIn("refresh_token", result.sauth)
+        self.assertEqual(json.loads(history.build_web_login_inputs(result.sauth).auth["sauth_json"]), expected)
+
+    def test_rounding_matches_js_positive_half_up_not_python_round(self):
+        real_md5 = history.hashlib.md5
+        with patch.object(history.hashlib, "md5", wraps=real_md5) as digest:
+            self.build(random_samples=[.5] * 8)
+        self.assertEqual(digest.call_args.args[0], b"fixture-wrapper-udid_1700000000123_55555555__")
+        self.assertEqual(digest.call_args.kwargs, {"usedforsecurity": False})
+
+    def test_udid_is_explicit_and_not_derived_from_mpay_or_candidate_account(self):
+        real_md5 = history.hashlib.md5
+        with patch.object(history.hashlib, "md5", wraps=real_md5) as digest:
+            result = self.build(wrapper_udid="fixture-\u00e9")
+        self.assertEqual(digest.call_args.args[0], "fixture-\u00e9_1700000000123_01455998__".encode("utf-8"))
+        self.assertEqual(result.sauth["udid"], "fixture-\u00e9")
+        self.assertNotIn(self.candidate().sdkuid.encode(), digest.call_args.args[0])
+        self.assertNotIn(self.candidate().access_token.encode(), digest.call_args.args[0])
+
+    def test_candidate_and_supplied_randomness_are_not_mutated_or_claimed_verified(self):
+        candidate, samples = self.candidate(), [0, .1, .4, .5, .55, .99, .95, .9]
+        before = copy.deepcopy(candidate), samples.copy()
+        result = self.build(candidate, random_samples=samples)
+        self.assertEqual((candidate, samples), before)
+        self.assertEqual(result.expected_owner_uid, history.EXPECTED_OWNER_UID)
+        self.assertTrue(result.sauth_constructed)
+        self.assertFalse(result.owner_authentication_verified)
+        self.assertFalse(result.automatic_renewal_verified)
+        self.assertFalse(candidate.sauth_constructed)
+        self.assertFalse(hasattr(result, "expires_in"))
+        self.assertNotIn("fixture-", repr(result))
+        with self.assertRaises(FrozenInstanceError):
+            result.refresh_token = "fixture-mutated"
+        result.sauth["sessionid"] = "fixture-mutated"
+        self.assertEqual(candidate.access_token, "fixture-access-token")
+        self.assertEqual(self.build(candidate).sauth["sessionid"], "fixture-access-token")
+
+    def test_bad_serial_context_is_rejected_with_fixed_errors(self):
+        cases = [{"clock_ms": value} for value in (True, False, None, "1700000000123", 1.0,
+                                                  -1, history.MAX_DATE_MILLISECONDS + 1)]
+        cases += [{"random_samples": value} for value in (None, "01234567", [], [0] * 7,
+                                                          [0] * 9, iter([0] * 8))]
+        cases += [{"random_samples": [0] * 7 + [value]} for value in
+                  (True, False, None, "fixture-secret", -.01, 1, float("nan"), float("inf"), float("-inf"))]
+        for kwargs in cases:
+            with self.subTest(keys=list(kwargs)), self.assertRaises(history.HistoryLoginError) as raised:
+                self.build(**kwargs)
+            self.assertEqual(raised.exception.code, "history_serial_context_invalid")
+            self.assertFalse(raised.exception.request_attempted)
+            self.assertNotIn("fixture-", str(raised.exception))
+        for clock_ms in (0, history.MAX_DATE_MILLISECONDS):
+            self.assertEqual(len(self.build(clock_ms=clock_ms, random_samples=(0,) * 8).sauth["client_login_sn"]), 32)
+
+    def test_untrusted_direct_candidates_and_udid_are_revalidated(self):
+        base = self.candidate()
+        cases = ["fixture-secret", {}, replace(base, expected_owner_uid=True),
+                 replace(base, expected_owner_uid=1), replace(base, sdkuid="01"),
+                 replace(base, sdkuid="9007199254740992"), replace(base, sdkuid=True),
+                 replace(base, saved_device_id=""), replace(base, saved_device_id=123),
+                 replace(base, access_token=""), replace(base, access_token="\ud800"),
+                 replace(base, refresh_token="x" * 32769)]
+        for candidate in cases:
+            with self.subTest(candidate_type=type(candidate).__name__), self.assertRaises(history.HistoryLoginError) as raised:
+                self.build(candidate)
+            self.assertFalse(raised.exception.request_attempted)
+            self.assertNotIn("fixture-", str(raised.exception))
+        for udid in (None, True, 123, "", " ", "\ud800", "x" * 513):
+            with self.assertRaisesRegex(history.HistoryLoginError, "history_sauth_context_invalid"):
+                self.build(wrapper_udid=udid)
+
+    def test_pure_builder_does_not_fetch_time_randomness_files_network_or_browser(self):
+        candidate = self.candidate()
+        targets = ("builtins.open", "pathlib.Path.open", "socket.create_connection",
+                   "urllib.request.build_opener", "game_login_probe.load_own_login_inputs",
+                   "game_login_probe.check_login", "game_transport_probe.load_public_configuration",
+                   "time.time", "time.time_ns", "random.random", "os.urandom")
+        with ExitStack() as stack:
+            guards = [stack.enter_context(patch(target, side_effect=AssertionError("unexpected dependency")))
+                      for target in targets]
+            self.build(candidate)
+        for guard in guards:
+            guard.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

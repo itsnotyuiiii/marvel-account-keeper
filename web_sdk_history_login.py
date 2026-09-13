@@ -13,14 +13,17 @@ from similarly named SAUTH fields. The source has no per-request signature or
 encryption beyond HTTPS. Public source does not prove server-side acceptance.
 
 Success returns only transient replacement tokens and request-bound context.
-It does NOT construct SAUTH: the wrapper regenerates client_login_sn using its
-own UDID, UID/SESSION properties, clock and randomness. None is fabricated here.
+A separate pure builder can reproduce a NEW wrapper's SAUTH using explicitly
+supplied wrapper UDID, clock and random samples. It does not assume the current
+browser wrapper's UID/SESSION properties or change that wrapper's state.
 Fresh normal game AUTH for expected_owner_uid is still required. There is no
 storage access, device initialization, OAuth follow-up, login UI, retry, fallback,
 token-lifetime claim, game lookup or production integration.
 """
 from dataclasses import dataclass, field
+import hashlib
 import json
+import math
 import re
 from urllib import error as urlerror
 from urllib import request as urlrequest
@@ -34,6 +37,7 @@ TIMEOUT_SECONDS = 10
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_SAFE_INTEGER = (1 << 53) - 1
 MAX_TOKEN_BYTES = 32768
+MAX_DATE_MILLISECONDS = 8640000000000000  # ECMAScript Date's finite range.
 ACCOUNT_FIELDS = frozenset({"userId", "refreshToken", "method", "clientPlatform", "deviceId"})
 PUBLIC_CONTEXT = {
     "game_id": "502", "cp": "w", "cv": "3.1.5", "gv": "1.0.0",
@@ -47,6 +51,7 @@ ERROR_CODES = frozenset({
     "history_numeric_id_unsupported", "history_form_value_unsupported", "history_http_error",
     "history_response_bound", "history_response_json", "history_response_shape",
     "history_service_rejected", "history_response_token_invalid", "history_request_failed",
+    "history_sauth_context_invalid", "history_serial_context_invalid",
 })
 
 
@@ -83,6 +88,16 @@ class HistoryLoginCandidate:
     owner_authentication_verified: bool = field(default=False, init=False)
     automatic_renewal_verified: bool = field(default=False, init=False)
     sauth_constructed: bool = field(default=False, init=False)
+
+
+@dataclass(frozen=True, repr=False)
+class HistorySauthCandidate:
+    expected_owner_uid: int
+    sauth: dict = field(repr=False)
+    refresh_token: str = field(repr=False)
+    owner_authentication_verified: bool = field(default=False, init=False)
+    automatic_renewal_verified: bool = field(default=False, init=False)
+    sauth_constructed: bool = field(default=True, init=False)
 
 
 def _bounded_string(value, limit, code, *, allow_empty=False):
@@ -231,6 +246,60 @@ def validate_history_response(inputs, response_bytes, *, http_status):
     # expiry, messages and flags are not projected or accepted as proof.
     return HistoryLoginCandidate(inputs.expected_owner_uid, inputs.sauth_sdkuid,
                                  inputs.saved_device_id, access, refresh)
+
+
+def build_fresh_wrapper_sauth(candidate, *, wrapper_udid, clock_ms, random_samples):
+    """Reproduce __createSauthJson for a fresh, initialized store SDK wrapper.
+
+    Pinned wrapper: base constructor 88196 omits UID/SESSION; _ntInit 103291
+    sets UDID from UNISDK_UDID, not Mpay's UDID. Store initialization does not
+    override UID/SESSION. _generateClientLoginSn 91239 reads those properties
+    before __createSauthJson 158242 calls __setUserInfo (which later sets UID
+    from SAUTH.udid). Thus both || "" inputs are empty for this NEW context.
+    This is not an inference about a reused browser wrapper's current state.
+
+    Supply eight Math.random-equivalent samples first, then the Date.getTime
+    millisecond value. Positive Math.round uses floor(x + 0.5), NOT Python's
+    ties-to-even round. MD5's ordinary UTF-8 lowercase hex output is retained.
+    This function reads no clock, RNG, browser, files, network or credentials.
+    """
+    if type(candidate) is not HistoryLoginCandidate:
+        raise HistoryLoginError("history_sauth_context_invalid")
+    if type(candidate.expected_owner_uid) is not int or candidate.expected_owner_uid != EXPECTED_OWNER_UID:
+        raise HistoryLoginError("history_owner_binding_invalid")
+    if (type(candidate.sdkuid) is not str
+            or re.fullmatch(r"[1-9][0-9]{0,15}", candidate.sdkuid) is None
+            or int(candidate.sdkuid) > MAX_SAFE_INTEGER):
+        raise HistoryLoginError("history_numeric_id_unsupported")
+    _bounded_string(candidate.saved_device_id, 512, "history_sauth_context_invalid")
+    _bounded_string(candidate.access_token, MAX_TOKEN_BYTES, "history_response_token_invalid")
+    _bounded_string(candidate.refresh_token, MAX_TOKEN_BYTES, "history_response_token_invalid")
+    _bounded_string(wrapper_udid, 512, "history_sauth_context_invalid")
+    if type(clock_ms) is not int or not 0 <= clock_ms <= MAX_DATE_MILLISECONDS:
+        raise HistoryLoginError("history_serial_context_invalid")
+    if type(random_samples) not in (list, tuple) or len(random_samples) != 8:
+        raise HistoryLoginError("history_serial_context_invalid")
+    samples = tuple(random_samples)
+    if any(type(value) not in (int, float) or not 0 <= value < 1 for value in samples):
+        raise HistoryLoginError("history_serial_context_invalid")
+    digits = "".join(str(math.floor(9 * value + 0.5)) for value in samples)
+    serial = hashlib.md5(f"{wrapper_udid}_{clock_ms}_{digits}__".encode("utf-8"),
+                         usedforsecurity=False).hexdigest()
+    # Exact insertion order/ten-field mapping at __createSauthJson. Public
+    # constants are the current Marvel store's initialization values, not the
+    # Mpay HTTP platform/cv or the native game build version.
+    sauth = {
+        "gameid": "x20naxx2gb", "login_channel": "netease_global",
+        "app_channel": "netease.allysdk_global", "platform": "pc",
+        "sdkuid": str(candidate.sdkuid), "sessionid": candidate.access_token,
+        "deviceid": str(candidate.saved_device_id), "sdk_version": "1.0.0",
+        "udid": wrapper_udid, "client_login_sn": serial,
+    }
+    try:
+        build_web_login_inputs(sauth)
+    except (LoginError, ValueError, TypeError, RecursionError):
+        raise HistoryLoginError("history_sauth_context_invalid") from None
+    return HistorySauthCandidate(EXPECTED_OWNER_UID, sauth, candidate.refresh_token)
 
 
 class _NoRedirect(urlrequest.HTTPRedirectHandler):

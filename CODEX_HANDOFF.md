@@ -3,7 +3,105 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: portable stats and match rank changes verified
+## Latest continuation — September 12: returned-token chain and current rank panel verified
+
+This turn remains PROGRESS; the goal is ACTIVE and INCOMPLETE. A bounded
+two-round normal saved-account exchange now passed LIVE. Round two used only
+round one's returned refresh token, after round one's fresh SAUTH authenticated
+owner1370598422. Both fresh sessions passed owner AUTH and gateway login. Each
+LOGIN received2398 bytes and sent286 handshake+625 application; each gateway
+received39295 and sent286+71. Helper44999 is terminal. No browser storage or
+credential files changed, and no game/log/capture runtime input was used.
+
+web_sdk_history_chain.py and explicit --verify-history-renewal implement this
+two-round experiment, with fixed projected diagnostics and no fallback or retry.
+renewal_chain_verified=true is NOT automatic_renewal_verified: expiry, restart
+durability, approved server secret storage and long-running hosted renewal still
+need implementation/verification. AUTH diagnostics are explicitly re-projected
+at the helper boundary; unknown callback fields cannot escape or prove ownership.
+
+The normal owner rank panel also passed LIVE through a newly exchanged SDK
+session, exact owner mesh identity and the SAME gateway. C_OPEN_PANEL(1) sent19
+application bytes; exact S_OPEN_PANEL returned100 bytes in one record. It says
+current season20, open0, start_time1789117200, left_time2272326, own level14 and
+raw server rank_score4350. Current season and numeric rank are verified
+separately; labels/display-point normalization remain unverified. Other-player
+history ended at19, so maximum history key must NOT be called current season.
+
+game_rank_panel_probe.py and explicit --rank-panel implement this read. It does
+not accept a target UID, invent an echo/nonce, or interpret unknown response
+fields such as rank_game_type. Correlation is fresh owner connection + single
+normal operation + exact method. Unknown RPC argument blobs stay undecoded.
+Rank-panel helper84773 is terminal. LOGIN2397/gateway39295 received; social token
+851036/24records, mesh setup14+909 sent/4859 received. Owner remained UID1370598422,
+IGNゆいᶻᶻᶻ, level32. No production website/provider changes or deployment occurred.
+
+Next implementation: compose independent mesh/overview/history/panel reads into
+one user-facing UID request, with explicit native connection reuse eligibility
+after complete correlated replies. Website contract must preserve partial stats,
+unlabelled numeric ranks and raw fractional server scores, stable match IDs/rank
+changes, and unfiltered Career scope. Current UI's season-performance label must
+not describe the unfiltered aggregate. Native-capable hosting preference remains
+an unanswered nonblocking question; do not purchase infrastructure or persist
+credentials without the required approval. Full regression run passed905 tests
+in106.832s. Existing synthetic vault/temp-file warnings were non-failing; full
+test helper77402 and all live helper processes are terminal.
+
+## Previous checkpoint — September 12: season history and fresh SDK session verified
+
+The previous goal turn was PROGRESS (commit aa80700); this continuation also
+made concrete live progress. Goal remains ACTIVE and INCOMPLETE. Runtime still
+uses only packaged public inputs and authorized SDK context, with no installed
+game, local logs, captures, game memory, third-party stats or production edits.
+
+The normal other-player namecard GetData now passed for1822797559, after exact
+mesh identity and overview permission. It returned19 PC normal-rank seasons
+(IDs1..19), level/raw-score/per-season peak data and available records. Season19
+has level23, raw score5560.617599588569, peak level23/raw score5570.414428329633,
+record28 matches/22 wins,10 placements. These are raw server points, not yet
+source-table-normalized display points; English rank labels and overall peak
+tie-breaking remain unresolved. No current season is inferred from max history.
+
+One connection sent14 handshake+1439 SocialMatrix application bytes, received
+10628. Mesh query198 bytes; rank query530 bytes via advertised mesh/sub2.
+Exact RPC/service/status and prior mesh target bind the result; no response UID
+echo is fabricated. rank_game_season was a5791-character JSON string with19
+JSON-string rows. LOGIN2396/gateway39295 bytes received, token850846/19records.
+Rank helper81113 is terminal. New standalone_rank_query.py shares the reviewed
+bounded XYQ decoder; --other-ranks is explicit, overview-gated and research-only.
+
+Normal saved-Steam SDK token exchange IS NOW LIVE VERIFIED, not just prepared.
+The sourced saved-account/Mpay context was handed once to the local research
+helper, which POSTed the official sdk_token route, obtained a replacement
+candidate, rebuilt exact fresh-wrapper ten-field SAUTH and authenticated THAT
+candidate (no old-session fallback). Expected owner1370598422 and game gateway
+accepted. LOGIN2398/gateway39295 bytes received. Helper48040 is terminal; no
+credentials/raw responses saved and no browser storage changed. One successful
+exchange does not yet establish replacement-token chaining, expiry handling,
+restart durability or hosted automatic renewal; those checks remain next.
+
+Fresh-wrapper client_login_sn uses MD5 of wrapperUDID_clockMs_8digits__.
+The empty UID/SESSION suffix is independently verified fresh-constructor state,
+not an assumption about a reused browser wrapper. Digits use floor(9*x+0.5),
+samples before clock. Source __setUserInfo occurs afterward and sets UID from
+SAUTH.udid. Current store language source persist:gameclub -> JSON appConfig ->
+lan was en-US; wrapper transforms it to en_US. Known Mpay UDID/DEVICE_ID remain
+separate from UNISDK_UDID; the latter matched current SAUTH.udid. Saved SDK ID
+and device are safe integers, with lossless string normalization. See
+web_sdk_history_login.py and the explicit --history-login-before-auth path.
+
+Current-season/own-rank source investigation found the normal native
+RankGame.C_OPEN_PANEL(1) -> S_OPEN_PANEL(info) route. It returns cur_game_id and
+optional cur_data; it is narrower than decoding native initdata. Current RPC
+IDs1543545906/1616581796 derive from verified RankGame VAR_NAME and current5781
+salt. Implementation/live proof remain in progress; no current season claim yet.
+
+A nonblocking hosting-preference question is pending. No paid infrastructure,
+external deployment, website provider, Wi-Fi settings or credential persistence
+has been changed. Do not mark the goal complete or blocked on the old OAuth
+failure; independent session acquisition now works through the normal SDK path.
+
+## Previous checkpoint — September 12: portable stats and match rank changes verified
 
 The standalone hosted goal remains ACTIVE and INCOMPLETE, but the next-query
 wording in the setup checkpoint below is now superseded. The current packaged
