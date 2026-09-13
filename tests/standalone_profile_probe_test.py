@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 import standalone_profile_probe as profile
 from tests.standalone_social_transport_test import session, PARAMETER
 from tests.standalone_career_query_test import wrapped
+from tests.standalone_match_query_test import own_wrapped, match
 
 
 def user_data(*, uid=456, zone=1, config=None):
@@ -186,6 +187,119 @@ class StandaloneProfileProbeTest(unittest.TestCase):
         self.assertFalse(result["profile_lookup"]["identity_verified"])
         self.assertFalse(result["career_lookup"]["career_verified"])
         context.read_own_career.assert_not_called()
+
+    def test_own_matches_are_opt_in_and_reject_nonowner_console_or_mixed_other_request(self):
+        with patch.object(profile, "run_social_setup_once") as setup:
+            for changes in ({"target_uid": 456}, {"platform": "xbox"}, {"own_matches": 1},
+                            {"own_matches": "true"}, {"other_ranks": True}):
+                with self.assertRaises(profile.ProfileLookupError):
+                    profile.run_uid_lookup_once(session(), **({"parameter": PARAMETER, "target_uid": 123,
+                                                               "own_matches": True} | changes))
+            setup.assert_not_called()
+        context = Mock()
+        context.read_mesh_user.return_value = user_data(uid=123)
+        def setup_once(owner, **kwargs):
+            kwargs["on_setup"](context)
+            return {"social_session_accepted": True, "setup_consumer_completed": True, "mesh_request_bound": True}
+        with patch.object(profile, "run_social_setup_once", side_effect=setup_once):
+            result = profile.run_uid_lookup_once(session(), parameter=PARAMETER, target_uid=123)
+        context.read_own_matches.assert_not_called()
+        self.assertNotIn("match_lookup", result)
+
+    def test_owner_matches_follow_exact_identity_and_keep_valid_empty_page(self):
+        for data in ({"match_info": []}, {"match_info": [match()]}):
+            context = Mock()
+            context.read_mesh_user.return_value = user_data(uid=123)
+            context.read_own_career.return_value = wrapped()
+            context.read_own_matches.return_value = own_wrapped(data)
+            def setup_once(owner, **kwargs):
+                kwargs["on_setup"](context)
+                return {"social_session_accepted": True, "setup_consumer_completed": True,
+                        "mesh_request_bound": True, "career_reply_bound": True, "own_match_reply_bound": True}
+            with patch.object(profile, "run_social_setup_once", side_effect=setup_once):
+                result = profile.run_uid_lookup_once(session(), parameter=PARAMETER, target_uid=123,
+                                                      own_career=True, own_matches=True)
+            self.assertEqual([call[0] for call in context.method_calls],
+                             ["read_mesh_user", "read_own_career", "read_own_matches"])
+            self.assertTrue(result["profile_lookup"]["identity_verified"])
+            self.assertTrue(result["career_lookup"]["career_verified"])
+            projected = result["match_lookup"]
+            self.assertTrue(projected["matches_verified"])
+            self.assertTrue(projected["request_bound"])
+            self.assertEqual(projected["identity_basis"], "mesh_identity_and_owner_match_request")
+            self.assertNotIn("reply_context_verified", projected)
+            self.assertEqual(projected["match_count"], len(data["match_info"]))
+            self.assertIsNone(projected["has_more"])
+            self.assertEqual(result["profile_lookup"]["visibility"]["history"]["basis"], "owner")
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_owner_match_projection_failure_preserves_career_and_identity(self):
+        wrong = match()
+        wrong["match_player"]["player_uid"] = 456
+        for response, expected in ((own_wrapped({"match_info": [wrong]}), "match_identity_mismatch"),
+                                   (own_wrapped(status_code=500), "xyq_http_rejected"),
+                                   (own_wrapped({}), "match_response_shape")):
+            context = Mock()
+            context.read_mesh_user.return_value = user_data(uid=123)
+            context.read_own_career.return_value = wrapped()
+            context.read_own_matches.return_value = response
+            def setup_once(owner, **kwargs):
+                kwargs["on_setup"](context)
+                return {"social_session_accepted": True, "setup_consumer_completed": True,
+                        "mesh_request_bound": True, "career_reply_bound": True, "own_match_reply_bound": True}
+            with patch.object(profile, "run_social_setup_once", side_effect=setup_once):
+                result = profile.run_uid_lookup_once(session(), parameter=PARAMETER, target_uid=123,
+                                                      own_career=True, own_matches=True)
+            self.assertTrue(result["profile_lookup"]["identity_verified"])
+            self.assertTrue(result["career_lookup"]["career_verified"])
+            self.assertFalse(result["match_lookup"]["matches_verified"])
+            self.assertEqual(result["match_lookup"]["outcome"], expected)
+
+    def test_career_projection_failure_does_not_suppress_independent_owner_matches(self):
+        context = Mock()
+        context.read_mesh_user.return_value = user_data(uid=123)
+        context.read_own_career.return_value = wrapped({"code": 200, "data": {}})
+        context.read_own_matches.return_value = own_wrapped()
+        def setup_once(owner, **kwargs):
+            kwargs["on_setup"](context)
+            return {"social_session_accepted": True, "setup_consumer_completed": True,
+                    "mesh_request_bound": True, "career_reply_bound": True, "own_match_reply_bound": True}
+        with patch.object(profile, "run_social_setup_once", side_effect=setup_once):
+            result = profile.run_uid_lookup_once(session(), parameter=PARAMETER, target_uid=123,
+                                                  own_career=True, own_matches=True)
+        self.assertFalse(result["career_lookup"]["career_verified"])
+        self.assertTrue(result["match_lookup"]["matches_verified"])
+
+    def test_owner_match_needs_all_parent_gates_not_just_projected_rows(self):
+        baseline = {"social_session_accepted": True, "setup_consumer_completed": True,
+                    "mesh_request_bound": True, "own_match_reply_bound": True}
+        for key in baseline:
+            for invalid in (False, 1, None):
+                context = Mock()
+                context.read_mesh_user.return_value = user_data(uid=123)
+                context.read_own_matches.return_value = own_wrapped()
+                def setup_once(owner, **kwargs):
+                    kwargs["on_setup"](context)
+                    return baseline | {key: invalid}
+                with patch.object(profile, "run_social_setup_once", side_effect=setup_once):
+                    result = profile.run_uid_lookup_once(session(), parameter=PARAMETER, target_uid=123, own_matches=True)
+                self.assertFalse(result["match_lookup"]["matches_verified"])
+
+    def test_owner_mesh_mismatch_never_dispatches_owner_match_and_io_failure_keeps_identity(self):
+        for mismatch in (True, False):
+            context = Mock()
+            context.read_mesh_user.return_value = user_data(uid=456 if mismatch else 123)
+            context.read_own_matches.side_effect = OSError("PRIVATE_IO_ERROR")
+            def setup_once(owner, **kwargs):
+                kwargs["on_setup"](context)
+                return {"social_session_accepted": True, "setup_consumer_completed": True,
+                        "mesh_request_bound": True, "own_match_reply_bound": False}
+            with patch.object(profile, "run_social_setup_once", side_effect=setup_once):
+                result = profile.run_uid_lookup_once(session(), parameter=PARAMETER, target_uid=123, own_matches=True)
+            self.assertEqual(result["profile_lookup"]["identity_verified"], not mismatch)
+            self.assertFalse(result["match_lookup"]["matches_verified"])
+            self.assertEqual(context.read_own_matches.call_count, 0 if mismatch else 1)
+            self.assertNotIn("PRIVATE", json.dumps(result))
 
 
 if __name__ == "__main__":

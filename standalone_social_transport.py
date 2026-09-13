@@ -9,7 +9,8 @@ Python variant, not a claim that native overrides use the same hello/version.
 Only a supplied fresh gateway token and supplied hash-pinned public parameter
 are used. A single primary route connection is closed after setup, or after an
 explicit transient callback makes at most one reviewed mesh identity read and
-one authenticated-owner Career read and one other-player namecard rank read.
+one authenticated-owner Career read, one owner match page and one other-player
+namecard rank read.
 There are no local files, retries,
 captured templates, HMAC signing, renewal, payload execution or credential
 exports in reports. Career service-body decoding belongs to the caller.
@@ -26,6 +27,7 @@ import time
 
 from socialmatrix_capture_probe import RC4Stream, fold_xor, magic_signature, opening_fields
 from standalone_career_query import make_own_career_request
+from standalone_match_query import make_own_match_request
 from standalone_rank_query import make_other_rank_request
 from standalone_social_session import (
     ERROR_CODES as TOKEN_ERROR_CODES, GatewaySocialToken, SocialSessionError,
@@ -58,6 +60,9 @@ ERROR_CODES = frozenset({
     "social_rank_target_invalid", "social_rank_request_invalid", "social_rank_reply_invalid",
     "social_rank_rejected", "social_rank_identity_mismatch", "social_rank_correlation_missing",
     "social_rank_payload_invalid",
+    "social_own_match_context_closed", "social_own_match_already_consumed", "social_own_match_module_unavailable",
+    "social_own_match_request_invalid", "social_own_match_reply_invalid", "social_own_match_rejected",
+    "social_own_match_identity_mismatch", "social_own_match_correlation_missing", "social_own_match_payload_invalid",
     "social_query_connection_failed",
 })
 SETUP_VALIDATION_REASONS = frozenset({
@@ -99,7 +104,12 @@ def _report():
             "rank_application_bytes_sent": 0, "rank_reply_bound": False,
             "rank_reply_received": False, "rank_reply_command": None, "rank_ignored_records": 0,
             "rank_error": None, "rank_server_error_code": None, "rank_status_layer": None,
-            "rank_validation_reason": None, "rank_shape": {}}
+            "rank_validation_reason": None, "rank_shape": {},
+            "own_match_query_attempted": False, "own_match_query_sent": False, "own_match_query_count": 0,
+            "own_match_application_bytes_sent": 0, "own_match_reply_bound": False,
+            "own_match_reply_received": False, "own_match_reply_command": None, "own_match_ignored_records": 0,
+            "own_match_error": None, "own_match_server_error_code": None, "own_match_status_layer": None,
+            "own_match_validation_reason": None, "own_match_shape": {}}
 
 
 def _unique(pairs):
@@ -403,14 +413,14 @@ def _accept_setup(wire, session):
 
 
 class _SocialConnectionContext:
-    """Only the current callback may use these three bounded read capabilities.
+    """Only the current callback may use these bounded read capabilities.
 
     Decoded data is deliberately returned only to that callback. It still needs
     the caller's exact-target projection; transport correlation is not identity
     verification of a returned player row. The context is invalidated on exit.
     """
     __slots__ = ("_wire", "_session", "_streamid", "_modules", "_now", "_active", "_consumed",
-                 "_career_consumed", "_rank_consumed", "_next_rpc", "_connection_failed")
+                 "_career_consumed", "_rank_consumed", "_own_match_consumed", "_next_rpc", "_connection_failed")
 
     def __init__(self, wire, session, streamid, modules, now):
         self._wire, self._session, self._streamid, self._now = wire, session, streamid, now
@@ -418,6 +428,7 @@ class _SocialConnectionContext:
         self._active, self._consumed = True, False
         self._career_consumed, self._next_rpc, self._connection_failed = False, 3, False
         self._rank_consumed = False
+        self._own_match_consumed = False
 
     def __reduce_ex__(self, protocol):
         raise SocialTransportError("social_mesh_context_closed")
@@ -491,7 +502,7 @@ class _SocialConnectionContext:
                 header["token"] = session.token
             payload = base64.b64encode(_packed(data)).decode("ascii")
             request = {"header": header, "body": {"cmd": 0, "payload": payload}}
-            if kind in {"career", "rank"}:
+            if kind in {"career", "rank", "own_match"}:
                 report["stats_requested"] = True
             self._wire.send(main, sub, _packed(request), carries_token=not self._streamid, query=kind)
             report["stage"] = f"{kind}_reply"
@@ -551,6 +562,31 @@ class _SocialConnectionContext:
             raise SocialTransportError("social_career_request_invalid") from None
         return self._run_query("career", command, 2, data)
 
+    def read_own_matches(self):
+        """One normal first match page, always bound to the token owner.
+
+        The caller must bind owner mesh identity and project the XYQ response.
+        No target argument, pagination or native-other-player fallback exists.
+        """
+        if not self._active:
+            raise SocialTransportError("social_own_match_context_closed")
+        report = self._wire.report
+        if self._own_match_consumed:
+            report["own_match_error"] = "social_own_match_already_consumed"
+            raise SocialTransportError("social_own_match_already_consumed")
+        self._own_match_consumed = True
+        report.update(own_match_query_attempted=True, own_match_query_count=1, stage="own_match_query")
+        command = self._modules.get("mesh")
+        if type(command) is not int or not 1 <= command <= 65535:
+            report["own_match_error"] = "social_own_match_module_unavailable"
+            raise SocialTransportError("social_own_match_module_unavailable")
+        try:
+            data = make_own_match_request(self._session.own_uid, self._session.zone_id)
+        except Exception:
+            report["own_match_error"] = "social_own_match_request_invalid"
+            raise SocialTransportError("social_own_match_request_invalid") from None
+        return self._run_query("own_match", command, 2, data)
+
     def read_other_ranks(self, target_uid):
         """One normal other-player namecard request, not an access grant.
 
@@ -587,7 +623,7 @@ def run_social_setup_once(session, *, parameter, connect=socket.create_connectio
 
     Optional aid/streamid/module echoes are reported separately. Successful
     setup does not imply any query was made or that player stats are available.
-    Explicit on_setup receives a transient one-mesh/one-own-Career/one-other-rank
+    Explicit on_setup receives a transient one-mesh/one-own-Career/one-own-match/one-other-rank
     context; its return value and decoded player data never enter this report. This function cannot
     establish the original gateway callback provenance.
     """

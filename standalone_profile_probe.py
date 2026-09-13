@@ -2,8 +2,8 @@
 
 Only the supplied accepted owner session is used. Raw user/configuration rows
 stay inside the transient callback. This module does not acquire credentials,
-load game files/captures, store profiles, or query ranks/history. An explicit
-owner-only option adds one source-supported Career aggregate after identity.
+load game files/captures or store profiles. Explicit options add source-supported
+owner Career/first match page or other-player ranks after identity.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import json
 from standalone_social_session import GatewaySocialToken
 from standalone_social_transport import run_social_setup_once
 from standalone_career_query import CareerQueryError, project_own_career_response
+from standalone_match_query import MatchQueryError, project_own_match_response
 from standalone_rank_query import RankQueryError, project_other_rank_response
 
 
@@ -164,18 +165,20 @@ def _failure_shape(data):
             "aid_type": _kind(row.get("aid")) if type(row) is dict else "unavailable"}
 
 
-def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_career=False, other_ranks=False):
-    """One mesh read, with an explicit optional owner aggregate or other ranks."""
+def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_career=False,
+                        other_ranks=False, own_matches=False):
+    """One mesh read, optionally owner aggregate/matches or other-player ranks."""
     _uid(target_uid)
     if (type(session) is not GatewaySocialToken or type(platform) is not str
             or platform not in PLATFORM_IDS or type(own_career) is not bool or type(other_ranks) is not bool
-            or own_career and (target_uid != session.own_uid or platform != "pc")
-            or other_ranks and (own_career or target_uid == session.own_uid)):
+            or type(own_matches) is not bool
+            or (own_career or own_matches) and (target_uid != session.own_uid or platform != "pc")
+            or other_ranks and (own_career or own_matches or target_uid == session.own_uid)):
         raise ProfileLookupError("uid_lookup_inputs_invalid")
-    projected, career_result, rank_result = None, None, None
+    projected, career_result, rank_result, match_result = None, None, None, None
 
     def on_setup(connection):
-        nonlocal projected, career_result, rank_result
+        nonlocal projected, career_result, rank_result, match_result
         data = connection.read_mesh_user(target_uid)
         try:
             projected = project_mesh_user(data, target_uid=target_uid, own_uid=session.own_uid,
@@ -194,6 +197,17 @@ def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_ca
                 # The transport has fixed per-section diagnostics. Preserve the
                 # earlier verified identity without exporting exception text.
                 career_result = _not_completed("own_career_read_failed")
+        if own_matches and projected.get("identity_verified") is True and projected.get("is_owner") is True:
+            try:
+                match_data = connection.read_own_matches()
+                match_result = project_own_match_response(match_data, session.own_uid)
+            except CareerQueryError as error:
+                match_result = _not_completed(error.code)
+                match_result.update(http_status=error.http_status, application_code=error.application_code)
+            except MatchQueryError as error:
+                match_result = _not_completed(error.code)
+            except Exception:
+                match_result = _not_completed("own_match_read_failed")
         if other_ranks and projected.get("identity_verified") is True and projected.get("is_owner") is False:
             if projected["visibility"]["overview"]["state"] != "allowed":
                 rank_result = _not_completed("other_rank_overview_not_available")
@@ -241,4 +255,17 @@ def run_uid_lookup_once(session, *, parameter, target_uid, platform="pc", own_ca
                 report["rank_lookup"] = _not_completed("other_rank_not_verified")
         else:
             report["rank_lookup"] = _not_completed("other_rank_not_verified")
+    if own_matches:
+        identity = report.get("profile_lookup", {})
+        if (report.get("social_session_accepted") is True and report.get("setup_consumer_completed") is True
+                and identity.get("identity_verified") is True and identity.get("is_owner") is True
+                and identity.get("uid") == str(session.own_uid)
+                and report.get("own_match_reply_bound") is True and match_result is not None):
+            report["match_lookup"] = match_result
+            if match_result.get("matches_verified") is True:
+                # Social RPC plus exact owner mesh/request binds even an empty
+                # page. Do not invent the other-player native nonce here.
+                match_result.update(request_bound=True, identity_basis="mesh_identity_and_owner_match_request")
+        else:
+            report["match_lookup"] = _not_completed("own_match_not_verified")
     return report

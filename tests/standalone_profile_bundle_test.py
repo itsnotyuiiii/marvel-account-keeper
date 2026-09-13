@@ -55,11 +55,12 @@ def matches(uid=TARGET):
 
 def setup(uid=TARGET):
     return {"outcome": "social_setup_verified", "social_session_accepted": True, "setup_consumer_completed": True, "mesh_request_bound": True,
-        "career_reply_bound": True, "rank_reply_bound": True,
+        "career_reply_bound": True, "rank_reply_bound": True, "own_match_reply_bound": True,
         "profile_lookup": {"outcome": "uid_profile_identity_verified", "identity_verified": True, "uid": str(uid), "is_owner": uid == OWNER,
             "requested_platform": "pc", "platform": "pc", "in_game_name": "FixturePlayer", "level": 63,
             "visibility": {name: permission() for name in ("overview", "heroes", "history", "timeline")},
             "private": "PRIVATE_IDENTITY"}, "career_lookup": career(uid), "rank_lookup": ranks(uid),
+        "match_lookup": {key: value for key, value in matches(uid).items() if key != "reply_context_verified"},
         "private": "PRIVATE_SETUP"}
 
 
@@ -99,7 +100,7 @@ class StandaloneProfileBundleTest(unittest.TestCase):
         def social_lookup(session, **options):
             calls.append("social")
             self.assertEqual(options, {"parameter": PARAMETER, "target_uid": uid, "platform": "pc",
-                **({"own_career": True} if uid == OWNER else {"other_ranks": True})})
+                **({"own_career": True, "own_matches": True} if uid == OWNER else {"other_ranks": True})})
             return accepted
 
         def read_panel(connection, cipher, received_zone, **options):
@@ -182,18 +183,72 @@ class StandaloneProfileBundleTest(unittest.TestCase):
         self.assertEqual(result["token_outcome"], "social_token_claims_validated")
         self.assertEqual(result["social_setup_outcome"], "social_setup_verified")
 
-    def test_owner_uses_own_career_and_panel_not_other_history_or_matches(self):
+    def test_owner_uses_social_career_matches_and_panel_not_other_native_sections(self):
         result, calls, mocks = self.run_case(uid=OWNER)
         self.assertEqual(calls, ["login", "social", "panel"])
         self.assertTrue(result["career_verified"])
         self.assertEqual(result["current_rank"]["level"], 5)
         self.assertEqual(result["current_rank_source"], "owner_panel")
         self.assertEqual(result["ranks"]["outcome"], "profile_owner_rank_history_not_implemented")
-        self.assertEqual(result["matches"]["outcome"], "profile_owner_matches_not_implemented")
+        self.assertEqual(result["matches"]["outcome"], "profile_matches_verified")
         self.assertFalse(result["ranks_verified"])
-        self.assertFalse(result["matches_verified"])
+        self.assertTrue(result["matches_verified"])
+        self.assertEqual(result["matches"]["data"]["uid"], str(OWNER))
+        self.assertEqual(result["matches"]["data"]["history_completeness"], "first_page_only")
         mocks[3].assert_not_called()
         mocks[4].assert_not_called()
+
+    def test_owner_match_failure_preserves_identity_career_and_current_panel(self):
+        value = setup(OWNER)
+        value["match_lookup"] = {"outcome": "xyq_http_rejected", "http_status": 500,
+                                 "matches_verified": False, "private": "PRIVATE_FAILURE"}
+        result, calls, _ = self.run_case(uid=OWNER, accepted=value)
+        self.assertTrue(result["identity_verified"])
+        self.assertTrue(result["career_verified"])
+        self.assertTrue(result["current_season_verified"])
+        self.assertFalse(result["matches_verified"])
+        self.assertEqual(result["matches"]["outcome"], "xyq_http_rejected")
+        self.assertEqual(calls, ["login", "social", "panel"])
+
+    def test_owner_match_available_independently_of_career_and_native_panel_failures(self):
+        value = setup(OWNER)
+        value["career_lookup"] = {"career_verified": False, "outcome": "own_career_statistics_shape"}
+        result, _, _ = self.run_case(uid=OWNER, accepted=value,
+                                     rank_panel={"outcome": "rank_panel_timeout", "connection_reuse_allowed": False})
+        self.assertTrue(result["identity_verified"])
+        self.assertTrue(result["matches_verified"])
+        self.assertFalse(result["career_verified"])
+        self.assertFalse(result["current_season_verified"])
+        raw_auth = auth()
+        raw_auth["social_token"]["on_game_connection_completed"] = False
+        result, _, _ = self.run_case(uid=OWNER, auth_result=raw_auth)
+        self.assertTrue(result["matches_verified"])
+        self.assertFalse(result["current_season_verified"])
+
+    def test_owner_matches_require_same_social_reply_and_exact_projected_uid(self):
+        for key, invalid in (("uid", str(TARGET)), ("identity_verified", False),
+                             ("request_bound", False), ("matches_verified", 1),
+                             ("page", 1), ("page_size", 51)):
+            value = setup(OWNER)
+            value["match_lookup"][key] = invalid
+            result, _, _ = self.run_case(uid=OWNER, accepted=value)
+            self.assertTrue(result["identity_verified"])
+            self.assertTrue(result["career_verified"])
+            self.assertFalse(result["matches_verified"])
+        value = setup(OWNER)
+        value["own_match_reply_bound"] = False
+        result, _, _ = self.run_case(uid=OWNER, accepted=value)
+        self.assertFalse(result["matches_verified"])
+        self.assertTrue(result["identity_verified"])
+
+    def test_owner_empty_page_is_available_but_not_complete_history(self):
+        value = setup(OWNER)
+        value["match_lookup"].update(matches=[], match_count=0)
+        result, _, _ = self.run_case(uid=OWNER, accepted=value)
+        self.assertTrue(result["matches_verified"])
+        self.assertEqual(result["matches"]["data"]["match_count"], 0)
+        self.assertEqual(result["matches"]["data"]["history_completeness"], "first_page_only")
+        self.assertIsNone(result["matches"]["data"]["has_more"])
 
     def test_owner_points_honor_explicit_source_verification(self):
         value = panel()

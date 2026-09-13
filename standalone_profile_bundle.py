@@ -2,8 +2,8 @@
 
 The caller supplies current reviewed public inputs and transient SAUTH. This
 module never loads credentials, game files, captures, or runtime artifacts.
-The normal Social connection performs mesh identity and one allowed service
-read; the same already-authenticated game connection then performs the normal
+The normal Social connection performs mesh identity and allowed service reads;
+the same already-authenticated game connection then performs the normal
 owner panel and permitted native other-player reads, sequentially. Only typed
 projections escape. No retry, relogin, persistence, or provider fallback exists.
 """
@@ -40,6 +40,7 @@ MAX_POINTS = 1_000_000
 ERROR_CODES = frozenset({"profile_bundle_inputs_invalid", "profile_bundle_callback_repeated"})
 SECTION_ERRORS = frozenset(CAREER_ERRORS | MATCH_ERRORS | RANK_ERRORS | PANEL_ERRORS) | {
     "own_career_read_failed", "own_career_not_verified", "other_rank_read_failed",
+    "own_match_read_failed", "own_match_not_verified",
     "other_rank_not_verified", "other_career_read_failed", "other_career_reply_unverified",
     "other_match_summary_read_failed", "other_match_summary_reply_unverified",
     "profile_native_deadline", "profile_native_connection_unusable", "profile_native_read_failed",
@@ -264,9 +265,10 @@ def _rank_change(row):
             "placements_completed": _integer(row.get("placements_completed"))}
 
 
-def _matches(raw, target_uid):
+def _matches(raw, target_uid, *, own=False):
     if (type(raw) is not dict or any(raw.get(key) is not True for key in (
-            "matches_verified", "identity_verified", "request_bound", "reply_context_verified")) or raw.get("uid") != str(target_uid)
+            "matches_verified", "identity_verified", "request_bound")) or raw.get("uid") != str(target_uid)
+            or not own and raw.get("reply_context_verified") is not True
             or type(raw.get("page")) is not int or raw["page"] != 0
             or type(raw.get("page_size")) is not int or raw["page_size"] != 50):
         return _failure(raw, "profile_matches_not_verified")
@@ -338,7 +340,7 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
             raise ProfileBundleError()
         session_zone = session.zone_id
         setup = run_uid_lookup_once(session, parameter=parameter, target_uid=target_uid, platform="pc",
-                                    **({"own_career": True} if own else {"other_ranks": True}))
+                                    **({"own_career": True, "own_matches": True} if own else {"other_ranks": True}))
 
     def on_game_connection(connection, transport, zone):
         nonlocal panel, native_career, native_matches, game_consumed, reusable, native_outcome
@@ -419,7 +421,9 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
         report["career"] = (_career(setup.get("career_lookup"), target_uid, own=True)
                             if setup.get("career_reply_bound") is True else _section(outcome="profile_career_not_verified"))
         report["ranks"] = _section(outcome="profile_owner_rank_history_not_implemented")
-        report["matches"] = _section(outcome="profile_owner_matches_not_implemented")
+        report["matches"] = (_matches(setup.get("match_lookup"), target_uid, own=True)
+            if setup.get("own_match_reply_bound") is True
+            else _failure(setup.get("match_lookup"), "profile_matches_not_verified"))
     else:
         report["ranks"] = _permission(identity, "overview") or (
             _ranks(setup.get("rank_lookup"), target_uid) if setup.get("rank_reply_bound") is True

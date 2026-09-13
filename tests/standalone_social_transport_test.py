@@ -661,6 +661,114 @@ class StandaloneSocialTransportTest(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(result))
         self.assertNotIn("career_verified", result)
 
+    def test_owner_matches_share_mesh_career_connection_with_exact_request_and_fresh_rpc(self):
+        contexts, received = [], []
+        def consume(context):
+            contexts.append(context)
+            context.read_mesh_user(123)
+            context.read_own_career()
+            received.append(context.read_own_matches())
+            with self.assertRaisesRegex(transport.SocialTransportError, "social_own_match_already_consumed"):
+                context.read_own_matches()
+        result, sock, connector = self.run_setup(wire_data=fixture(responses=[
+            (1, 3, career_setup()), (1, 4, mesh_reply()), (42, 2, career_reply(rpcid="4")),
+            (42, 2, career_reply(rpcid="5", data={"private": "PRIVATE_MATCH_DATA"}))]), on_setup=consume)
+        self.assertEqual(received, [{"private": "PRIVATE_MATCH_DATA"}])
+        self.assertTrue(result["setup_consumer_completed"])
+        self.assertTrue(result["own_match_reply_bound"])
+        self.assertTrue(result["career_reply_bound"])
+        self.assertTrue(result["mesh_request_bound"])
+        self.assertEqual(result["own_match_query_count"], 1)
+        self.assertTrue(result["stats_requested"])
+        requests = outgoing(sock)[2:]
+        self.assertEqual([row[2]["header"]["rpcid"] for row in requests], ["3", "4", "5"])
+        self.assertEqual(requests[-1][:2], (42, 2))
+        self.assertEqual(requests[-1][2]["header"], {"version": "3.10.1", "rpcid": "5", "aid": "1_123",
+                                                  "streamid": "fixture-stream"})
+        wrapper = json.loads(base64.b64decode(requests[-1][2]["body"]["payload"]))
+        self.assertEqual(wrapper["uri"], "query_my_match_summary")
+        self.assertEqual(json.loads(base64.b64decode(wrapper["post_body"])),
+                         {"player_uid": 123, "zone_id": 1, "page": 0, "page_size": 50})
+        self.assertEqual(connector.call_count, 1)
+        self.assertEqual(len(sock.sent), 6)
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        self.assertTrue(sock.closed)
+        with self.assertRaisesRegex(transport.SocialTransportError, "social_own_match_context_closed"):
+            contexts[0].read_own_matches()
+
+    def test_owner_matches_are_opt_in_no_target_argument_and_use_owner_token_without_stream(self):
+        result, _, _ = self.run_setup()
+        self.assertFalse(result["own_match_query_attempted"])
+        owner = session()
+        def consume(context):
+            with self.assertRaises(TypeError):
+                context.read_own_matches(456)
+            context.read_own_matches()
+        result, sock, _ = self.run_setup(owner=owner, wire_data=fixture(responses=[
+            (1, 3, career_setup(header={"streamid": None})), (42, 2, career_reply())]), on_setup=consume)
+        self.assertTrue(result["own_match_reply_bound"])
+        self.assertEqual(outgoing(sock)[2][2]["header"],
+                         {"version": "3.10.1", "rpcid": "3", "aid": "1_123", "token": owner.token})
+        self.assertNotIn(owner.token, json.dumps(result))
+
+    def test_owner_matches_need_advertised_mesh_and_do_not_guess_module(self):
+        for setup in (reply(), career_setup(command=0)):
+            result, sock, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, setup)]),
+                                             on_setup=lambda context: context.read_own_matches())
+            self.assertEqual(result["own_match_error"], "social_own_match_module_unavailable")
+            self.assertFalse(result["own_match_query_sent"])
+            self.assertFalse(result["own_match_reply_bound"])
+            self.assertEqual(len(sock.sent), 3)
+
+    def test_owner_match_route_rpc_owner_status_and_payload_correlation_are_independent(self):
+        cases = [(career_reply(header={"aid": "1_456"}), "social_own_match_identity_mismatch"),
+                 (career_reply(header={"errorcode": 403}), "social_own_match_rejected"),
+                 (career_reply(body={"errorcode": 429}), "social_own_match_rejected"),
+                 (career_reply(body={"cmd": True}), "social_own_match_reply_invalid"),
+                 (career_reply(body={"payload": "PRIVATE_BAD_BASE64"}), "social_own_match_payload_invalid")]
+        for raw, expected in cases:
+            result, sock, _ = self.run_setup(wire_data=fixture(responses=[
+                (1, 3, career_setup()), (42, 2, raw)]), on_setup=lambda context: context.read_own_matches())
+            self.assertEqual(result["own_match_error"], expected)
+            self.assertFalse(result["own_match_reply_bound"])
+            self.assertFalse(result["career_query_attempted"])
+            self.assertTrue(sock.closed)
+            self.assertNotIn("PRIVATE", json.dumps(result))
+        result, _, _ = self.run_setup(wire_data=fixture(responses=[(1, 3, career_setup()),
+            (41, 2, career_reply()), (42, 2, career_reply(rpcid="2")), (42, 2, career_reply())]),
+            on_setup=lambda context: context.read_own_matches())
+        self.assertTrue(result["own_match_reply_bound"])
+        self.assertEqual(result["own_match_ignored_records"], 2)
+
+    def test_owner_match_partial_send_stops_later_query_and_has_unknown_send_state(self):
+        def consume(context):
+            with self.assertRaises(OSError):
+                context.read_own_matches()
+            with self.assertRaisesRegex(transport.SocialTransportError, "social_query_connection_failed"):
+                context.read_own_career()
+        result, sock, connector = self.run_setup(sock=Socket(fixture(responses=[
+            (1, 3, career_setup())]), fail_send=4), on_setup=consume)
+        self.assertIsNone(result["own_match_query_sent"])
+        self.assertIsNone(result["own_match_application_bytes_sent"])
+        self.assertFalse(result["own_match_reply_bound"])
+        self.assertEqual(result["career_error"], "social_query_connection_failed")
+        self.assertFalse(result["career_query_sent"])
+        self.assertEqual(len(sock.sent), 4)
+        self.assertEqual(connector.call_count, 1)
+
+    def test_owner_match_shares_original_social_deadline_without_reset(self):
+        clock = [10]
+        def consume(context):
+            context.read_own_career()
+            clock[0] = 31
+            context.read_own_matches()
+        result, sock, _ = self.run_setup(wire_data=fixture(responses=[
+            (1, 3, career_setup()), (42, 2, career_reply())]), monotonic=lambda: clock[0], on_setup=consume)
+        self.assertTrue(result["career_reply_bound"])
+        self.assertFalse(result["own_match_query_sent"])
+        self.assertEqual(result["own_match_error"], "social_transport_timeout")
+        self.assertEqual(len(sock.sent), 4)
+
     def test_career_and_mesh_each_once_use_fresh_rpcids_in_either_order(self):
         for career_first in (False, True):
             received = []

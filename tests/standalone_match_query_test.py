@@ -1,10 +1,13 @@
 """Synthetic match rows only; no game, files, credentials or network."""
+import base64
 import copy
+import gzip
 import json
 import math
 import unittest
 
 import standalone_match_query as query
+from standalone_career_query import CareerQueryError
 
 
 def match(**changes):
@@ -29,7 +32,74 @@ def project(*rows):
     return query.project_match_summary_response({"match_info": list(rows)}, 123)
 
 
+def own_wrapped(data=None, *, response=None, zipped=False, **changes):
+    response = {"code": 200, "data": {"match_info": [match()]} if data is None else data} if response is None else response
+    raw = json.dumps(response).encode()
+    if zipped:
+        raw = gzip.compress(raw)
+    return {"service": "xyq-career", "status_code": 200,
+            "headers": {"Content-Encoding": "gzip"} if zipped else {},
+            "response_body": base64.b64encode(raw).decode(), **changes}
+
+
 class StandaloneMatchQueryTest(unittest.TestCase):
+    def test_owner_request_is_exact_normal_unfiltered_first_page(self):
+        request = query.make_own_match_request(123, 11001)
+        self.assertEqual({key: value for key, value in request.items() if key != "post_body"}, {
+            "service": "xyq-career", "headers": {"Content-Type": "application/json", "Accept-Encoding": "gzip"},
+            "uri": "query_my_match_summary", "method": "POST", "querystring": None,
+            "host": None, "protocol": None, "version": None})
+        self.assertEqual(json.loads(base64.b64decode(request["post_body"])), {
+            "player_uid": 123, "zone_id": 11001, "page": 0, "page_size": 50})
+        for owner, zone in ((True, 1), ("123", 1), (0, 1), (2**63, 1), (123, True), (123, 0), (123, 2**64)):
+            with self.assertRaisesRegex(query.MatchQueryError, "match_inputs_invalid"):
+                query.make_own_match_request(owner, zone)
+
+    def test_owner_xyq_projection_decodes_normal_wrapper_without_native_context_claim(self):
+        result = query.project_own_match_response(own_wrapped(zipped=True), 123)
+        self.assertTrue(result["matches_verified"])
+        self.assertEqual(result["matches"][0]["kills"], 36)
+        self.assertEqual(result["application_status_source"], "code")
+        self.assertFalse(result["response_uid_echoed"])
+        self.assertNotIn("reply_context_verified", result)
+        self.assertNotIn("request_bound", result)
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        for response, status in (({"error_code": 0, "data": {"match_info": []}}, "error_code"),
+                                 ({"data": {"match_info": []}}, "implicit_data")):
+            result = query.project_own_match_response(own_wrapped(response=response), 123)
+            self.assertEqual(result["application_status_source"], status)
+            self.assertEqual(result["match_count"], 0)
+            self.assertEqual(result["history_completeness"], "first_page_only")
+            self.assertIsNone(result["has_more"])
+
+    def test_optional_owner_filter_echo_is_checked_not_required(self):
+        for filters, echoed in (({}, False), ({"player_uid": 0}, False), ({"player_uid": 123}, True)):
+            result = query.project_own_match_response(own_wrapped({"match_info": [], "filter": filters}), 123)
+            self.assertEqual(result["response_uid_echoed"], echoed)
+        for uid in (456, True, None, "123", -1):
+            with self.assertRaisesRegex(query.MatchQueryError, "match_identity_mismatch"):
+                query.project_own_match_response(own_wrapped({"match_info": [], "filter": {"player_uid": uid}}), 123)
+        for data in ({}, {"match_info": None}, {"match_info": [], "filter": None}):
+            with self.assertRaisesRegex(query.MatchQueryError, "match_response_shape"):
+                query.project_own_match_response(own_wrapped(data), 123)
+
+    def test_owner_response_requires_service_status_and_every_row_identity(self):
+        cases = [(own_wrapped(service="xyq-namecard"), "xyq_service_mismatch"),
+                 (own_wrapped(status_code=500), "xyq_http_rejected"),
+                 (own_wrapped(response={"code": 500, "error_code": 0, "data": {"match_info": []}}), "xyq_application_rejected"),
+                 (own_wrapped(response_body="PRIVATE_NOT_BASE64"), "xyq_response_encoding")]
+        for wrapper, expected in cases:
+            with self.assertRaises(CareerQueryError) as error:
+                query.project_own_match_response(wrapper, 123)
+            self.assertEqual(error.exception.code, expected)
+        wrong = match()
+        wrong["match_player"]["player_uid"] = 456
+        with self.assertRaisesRegex(query.MatchQueryError, "match_identity_mismatch"):
+            query.project_own_match_response(own_wrapped({"match_info": [match(), wrong]}), 123)
+        result = query.project_own_match_response(own_wrapped({"match_info": [ranked(new_level="bad"), match()]}), 123)
+        self.assertTrue(result["matches_verified"])
+        self.assertFalse(result["rank_changes_verified"])
+
     def test_basic_projection_uses_exact_server_match_id_and_drops_unknown_fields(self):
         result = project(match())
         row = result["matches"][0]

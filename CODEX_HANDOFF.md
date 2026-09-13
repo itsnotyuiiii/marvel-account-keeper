@@ -3,6 +3,80 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
+## Latest continuation — September 12: owner matches live and website contract integrated
+
+The normal owner first-page Social XYQ operation is now implemented and LIVE
+verified inside the single profile bundle. UID1370598422 returned IGNゆいᶻᶻᶻ,
+level32, Career273/149/4165/1609/3145, current season20/numeric level14/raw4350,
+and50 first-page matches with50 verified rank changes. First match is
+5517387_1782185921_1231058_11001_11 at1782187019, season17, mode2,818s,
+win36/6/7, score4639->4659(+20), level-after17. No further-page or complete
+lifetime-history claim is made. Live helper77276 is terminal, exit0.
+
+Source3848703 entry1838 c_get_history_matches:414 owner branch sends only
+player_uid/zone_id/page0/page_size50 to xyq-career/query_my_match_summary over
+the advertised Social mesh main/sub2. It has no native nonce or added filters.
+standalone_match_query adds the exact request and owner XYQ projection;
+standalone_social_transport adds one-use read_own_matches; profile_probe adds
+optional own_matches=False; bundle enables it only for the exact owner. Owner
+mesh, Social RPC, optional actual filter.player_uid echo and every nonempty
+match row bind the owner. Missing filter UID/default0 is not invented failure.
+Independent failures retain earlier identity/Career and do not alter the other
+player route or native deadline. Four module/four test files changed. Targeted
+133 tests passed twice, independent review found no concrete issues, and full
+regression passed986 tests in70.763s. No credential/browser storage changed.
+
+Website checkout C:/CodexRepos/marvel-stats-web is commit
+40ba255d81cd72b0b69001da0616ba66ac7d323d, pushed to its Sites source/main.
+lib/native-profile.ts accepts an internal schemaVersion2 envelope containing
+source=netease, exact string uid, ISO fetchedAt and nativeProfile=projected
+bundle. It maps only public card fields then validates through parsePlayer.
+The HTTP/frontend card remains schemaVersion1. Numeric rank levels/rawScore
+floats are separate from names/normalized points; guessed names and old
+fixed_finished placement logic were removed. Present fixed_battle_count uses
+the reviewed threshold10. Current target rank must match its current-season
+history row; no owner/current/overall-peak substitution. Unavailable sections,
+unfiltered Career scope, stable match IDs and verified rank changes now render.
+Existing anonymous store identity mode remains the default; no backend secrets
+or laptop tunnel were configured. A prepared UI is NOT a hosted full-stat API.
+
+Website validation:38 tests and TypeScript passed; both prior actual bundles
+(other19 seasons/43 matches and owner partial) plus the new owner50-match bundle
+passed the adapter. Desktop tabs/mobile-width overflow checked with synthetic
+browser-only data; override removed by navigation and viewport reset. No test
+fixture or player snapshot enters production. Build helper could not launch
+the local package-manager shim; unchanged build script succeeded through
+node --run build. Packaging wrapper required absent Bash; reused its actual
+prepare-site-build.cjs and Windows tar after verifying the fresh staging path,
+identical source/built hosting manifests, no migrations, and archive entries.
+No OS/package/global configuration was changed.
+
+Site version4 saved as
+appgprj_6aa103c328fc8191abc05fb743cfcbe6~appgver_f704029e992081918970af4c473f90d4;
+private deployment appgdep_6aa5f9ab09d48191a6a240b6d78ee12c SUCCEEDED, terminal
+status confirmed at2026-09-13T01:17:53Z. Literal production URL:
+https://yui-rivals-stats.kbj311.chatgpt.site . Owner-only access preserved, runtime
+env revision0 unchanged. Do not repeat saving/deployment. Preview helper78204
+is stopped during final teardown; owner store tab2 remains the auth handoff.
+
+Next: durable authorized SDK session lifecycle and independent native-capable
+hosting (user preference still pending), own season history, and reviewed rank
+labels/normalization. Sites explicitly does not support raw TCP connect().
+Current C_MY_SEASON(1) is only a supplemental current summary, not season
+history: source1874 consumes info.cur_data; optional rank_game_id can fall back
+to cached season. Own history instead uses synchronized RankGame.ranks P_MAP
+(entry5041 OWN_CLIENT). Do not replace history with C_MY_SEASON or a maximum key.
+
+Session review: validated SDK token response has no expiry metadata. Social JWT
+exp is not SDK TTL. A future serialized owner worker needs per-UID coalescing,
+injected durable load/CAS storage and rotation states: persist refresh_in_flight
+before exchange, returned candidate_pending before owner AUTH, then promote on
+exact owner proof even when target stats fail. Unknown crash rotation must not
+retry the old token. Generic AUTH false is insufficient for refresh/replay;
+preserve internal typed AUTH outcome/code (253 is recognized rejection,1911
+is not refreshable). No new credentials were saved and automatic renewal is
+still unverified. This is a concrete PROGRESS turn; goal remains ACTIVE.
+
 ## Latest continuation — September 12: single-request profile bundle verified
 
 After checkpoint24ad3f6, one combined UID request is now LIVE verified for

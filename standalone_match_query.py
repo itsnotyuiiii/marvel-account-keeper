@@ -1,13 +1,17 @@
-"""Pure first-page native Career match projection; no files, tokens or sockets.
+"""Pure first-page Career match requests/projection; no files, tokens or sockets.
 
-Call only after game_career_probe.verify_match_summary_args has bound the normal
-query_match_summary reply and the caller has checked independent history access.
+The native other-player route needs verified request/nonce and history access;
+the XYQ owner route needs a correlated Social request and exact owner identity.
 Current3848703 sources:1838 MosClient_Career.s_get_history_matches:893 uses
 match_uid and match_player.dynamic_fields;1712 refresh_rank_dan_level:488 uses
 the selected player's rank fields;5500 const_match.EGameModeType:110 is Ranking2.
 Basic fields follow career_provider.project_matches without exporting raw rows.
 """
+import base64
+import json
 import math
+
+from standalone_career_query import decode_xyq_response
 
 
 MAX_MATCHES = 50
@@ -25,6 +29,46 @@ class MatchQueryError(ValueError):
     def __init__(self, code):
         self.code = code if type(code) is str and code in ERROR_CODES else "match_response_shape"
         super().__init__(self.code)
+
+
+def make_own_match_request(own_uid, zone_id):
+    """Current1838 c_get_history_matches:414 owner branch, first page only.
+
+    No device_type, season/mode/filter fields are sent by this normal call.
+    Current103/3520 supply the standard XYQ POST/socket wrapper below.
+    """
+    if (type(own_uid) is not int or not 0 < own_uid < 2**63
+            or type(zone_id) is not int or not 0 < zone_id < 2**64):
+        raise MatchQueryError("match_inputs_invalid")
+    body = {"player_uid": own_uid, "zone_id": zone_id, "page": 0, "page_size": MAX_MATCHES}
+    return {"service": "xyq-career", "headers": {
+        "Content-Type": "application/json", "Accept-Encoding": "gzip"},
+        "uri": "query_my_match_summary", "method": "POST", "querystring": None,
+        "post_body": base64.b64encode(json.dumps(body, separators=(",", ":")).encode("utf-8")).decode("ascii"),
+        "host": None, "protocol": None, "version": None}
+
+
+def project_own_match_response(wrapper, own_uid):
+    """Decode owner XYQ data only after Social RPC/request correlation.
+
+    Source1838 s_get_history_matches:893 reads optional filter.player_uid with
+    a default of0. That sentinel is not a required UID echo. Any actual echo
+    must agree; nonempty match rows independently require the exact owner.
+    CareerQueryError retains fixed XYQ service/HTTP/application diagnostics.
+    """
+    if type(own_uid) is not int or not 0 < own_uid < 2**63:
+        raise MatchQueryError("match_inputs_invalid")
+    data, status_source = decode_xyq_response(wrapper, "xyq-career")
+    filters = data.get("filter", {}) if type(data) is dict else None
+    if type(filters) is not dict:
+        raise MatchQueryError("match_response_shape")
+    echoed = filters.get("player_uid", 0)
+    if type(echoed) is not int or echoed not in (0, own_uid):
+        raise MatchQueryError("match_identity_mismatch")
+    result = project_match_summary_response(data, own_uid)
+    result.update(http_status=200, application_status_source=status_source,
+                  response_uid_echoed=echoed == own_uid)
+    return result
 
 
 def _count(value):
@@ -159,8 +203,8 @@ def _project_match(row, target_uid):
 def project_match_summary_response(data, target_uid):
     """Project one already-correlated page, never infer access or completeness.
 
-    Empty pages are valid only because the caller first checks native request
-    context/nonce. Every nonempty row independently requires the exact target.
+    Empty pages require the caller's independently bound native request/nonce
+    or exact-owner Social XYQ request. Every nonempty row requires that target.
     Missing required basic values fail; optional IDs/rank changes stay nullable.
     """
     if type(target_uid) is not int or not 0 < target_uid < 2**63:
