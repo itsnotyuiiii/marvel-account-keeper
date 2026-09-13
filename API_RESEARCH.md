@@ -1,5 +1,19 @@
 # Live API research checkpoints
 
+## September 12, 2026: owner-history initialization decoder located
+
+See OWNER_RANK_RESEARCH.md for the pinned current-build source investigation.
+The owner GameServiceAvatar alias, separate synchronized UID, RankGame Python
+attachment and RankGameComponent descriptor names are now source-bound.
+Native init_prop_from_message resolves to 0x55bd810 and the type-zero extension
+decoder at 0x559d840: class name followed by streamed key/value pairs, with
+numeric keys resolved through registered field descriptors. The actual native
+type enum differs from modern MessagePack C++ and must not be guessed from it.
+Root native attachment, field-index/wire-tag validation, lifecycle updates,
+bounded decoding and live owner-history acceptance remain unimplemented.
+No raw initialization, credentials, account data or live NetEase call was used
+in this read-only checkpoint; the website's owner-history state is unchanged.
+
 ## September 12, 2026: combined UID request, owner partial support and no-row diagnosis
 
 standalone_profile_bundle.run_profile_bundle now performs one normal owner

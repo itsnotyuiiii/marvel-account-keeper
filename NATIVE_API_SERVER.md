@@ -34,6 +34,36 @@ commit them, put them in command arguments, or embed them in a source archive.
 Existing environment-specific credential and hosting approval is still needed
 before any real bootstrap or deployment.
 
+## Portable source package
+
+From the trusted development checkout, create a new ZIP at an explicit path:
+
+```text
+python -B scripts/package-native-api.py --output /existing/output/native-api-3848703.zip
+```
+
+The packager includes an explicit 30-file runtime allowlist: 25 shared Python
+modules, the serving CLI, pinned requirements, this guide and both current
+public manifests. Some shared wire modules retain historical `_probe` names;
+their file-analysis entry points are not used by the service. Game archives,
+native executables, research scripts, tests, browser data, session databases,
+environment files and credentials are not included.
+
+It verifies both public-input hashes, rejects links/reparse points and special
+files, and refuses to overwrite an existing ZIP. Before saving, it extracts
+the ZIP into a temporary directory and imports the runtime closure there, then
+runs `serve-native-api.py --check` with desktop/research dependencies and
+network entry points blocked. A missing runtime dependency fails packaging.
+The packager must itself run in an environment with the native requirements
+installed; it does not install or bundle an interpreter or third-party wheels.
+
+The output report supplies the ZIP SHA256, size, file count and tested platform.
+Extract the package on the approved host, install its requirements and repeat
+`--check` there. A Windows extraction check does not establish Linux operation,
+live authentication or cloud-IP acceptance. The packager executes only our
+trusted Python sources for its smoke check; it is not a sandbox for untrusted
+checkouts. Ordinary source archives are not credential backups.
+
 ## Commands on the approved host
 
 Validate the packaged inputs without credentials, persistence or network:

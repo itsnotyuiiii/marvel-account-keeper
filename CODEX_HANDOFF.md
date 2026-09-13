@@ -3,7 +3,53 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: one-submit lookup waiting published
+## Latest continuation — September 12: portable server package and owner-history decoder research
+
+Added scripts/package-native-api.py and tests/pack_native_api_test.py. The
+explicit 30-file allowlist contains 25 runtime modules, serve-native-api.py,
+requirements-native-client.txt, NATIVE_API_SERVER.md and both current3848703
+public manifests. No game assets, research scripts, tests, credentials or
+session state are packaged. Some shared runtime modules retain historical
+_probe names; their file-analysis entry points are not part of server startup.
+
+The packager verifies exact public-input pins and source stability, refuses
+existing outputs and links/reparse/special files, and tests an extracted ZIP
+with the full runtime import closure, desktop/research imports blocked and
+network entry points disabled before saving. It does not bundle Python or
+third-party wheels. NATIVE_API_SERVER.md now documents building/using it.
+Main reran34 focused packaging/portability/CLI/runtime tests in28.041seconds:
+32passed and2actual-symlink tests skipped because this Windows account cannot
+create links. Synthetic link/reparse/special-file rejection tests passed.
+This is Windows offline verification, not a Linux or hosted acceptance claim.
+
+Built ignored artifact:
+C:/CodexRepos/marvel-account-keeper/dist/marvel-native-api-3848703-20260912.zip
+119099bytes,30files,SHA256
+7c9600eb2df3437d60b045a7bd3e0634f869ed726fce2676e3914f046cf76183.
+Its isolated extracted --check passed; network_attempted=false. No real key,
+SDK credential, database or running service was created.
+
+OWNER_RANK_RESEARCH.md records the new read-only current-build source trace.
+GameServiceAvatar is PlayerAvatar's property-system alias; actual UID is a
+separate synchronized property, never engineeid. RankGame is the Python
+component attachment and RankGameComponent its descriptor classname. Native
+init_prop_from_message is at0x55bd810, through0x559d5f0/0x559d6b0 to0x559d840.
+The decoded type-zero extension starts with a class string then streamed
+string-or-numeric-key/value pairs. Numeric keys use registered16-bit indices.
+The actual native MessagePack in-memory enum differs from modern upstream;
+do not assume its array/map/binary type values. Root native attachment,
+index/wire-tag validation, lifecycle/update handling and a live-verified
+bounded owner-rank decoder remain required. No raw initialization or owner
+account records were read; no new live NetEase call occurred.
+
+Website source/deployment are unchanged from the one-submit checkpoint below:
+version5 is private and still in official-store identity mode, without the
+native backend configured. Hosting choice and authorized persistent bootstrap
+destination are still pending. Do not purchase hosting, save real credentials,
+or claim the hosted/full-stat goal complete. This checkpoint is concrete
+packaging/research PROGRESS, not a repeated external-state impasse.
+
+## Earlier continuation — September 12: one-submit lookup waiting published
 
 The website now waits automatically for long native lookups after one UID
 submission. Native standalone_http_api.py issues an opaque lowercase-hex32
