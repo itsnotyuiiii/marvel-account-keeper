@@ -1,8 +1,9 @@
 """Passive, bounded social-token delivery on a verified owner game connection.
 
 The caller must supply the reviewed token RPC index and invoke this reader only
-after the normal gateway has verified its owner. It sends no bytes, requests no
-refresh, and never executes startup code. JWT claims are local consistency
+after the normal gateway has verified its owner. The reader sends no bytes,
+requests no refresh, and never executes startup code. Explicit trusted callback
+work is separate from the reader's byte counters. JWT claims are local consistency
 checks, not signature verification or SocialMatrix service acceptance.
 """
 from __future__ import annotations
@@ -36,6 +37,8 @@ def _report():
         "startup_record_count": 0, "entity_create_records": 0, "entity_destroy_records": 0,
         "startup_hotfix_records": 0, "startup_hotfix_bytes": 0,
         "application_bytes_sent": 0, "consumer_completed": False,
+        "on_game_connection_attempted": False, "on_game_connection_completed": False,
+        "on_game_connection_error": None,
         "career_verified": False, "secrets_saved": False, "remote_code_executed": False,
     }
 
@@ -137,17 +140,27 @@ def read_social_token(connection, transport, zone, *, token_rpc_index, on_token=
     return report
 
 
-def run_social_token_once(sauth, configuration, server, *, client_version, on_token=None):
-    """One current-build owner login, then passive delivery; no social requests.
+def run_social_token_once(sauth, configuration, server, *, client_version, on_token=None,
+                          on_game_connection=None):
+    """One current-build owner login, then passive token delivery.
 
     Public configuration is an explicit input. The exact RPC index is pinned
     for the selected build. No installed-file, SDK-log, browser or capture fallback exists.
     A claims-valid token alone never sets social_session_verified to true.
+
+    Optional on_game_connection(connection, transport, zone) is a trusted local
+    continuation, not a second login. It is invoked only after a claims-valid
+    token and successful on_token callback. Its return is discarded; the caller
+    owns operation-specific request authority, reviewed methods and projection.
+    Reader byte counters exclude callback I/O. The login helper closes the same
+    connection when this continuation returns or raises.
     """
     collected = None
     if (type(client_version) is not str
             or client_version != REVIEWED_BUILD
-            or (on_token is not None and not callable(on_token))):
+            or (on_token is not None and not callable(on_token))
+            or (on_game_connection is not None
+                and (not callable(on_game_connection) or not callable(on_token)))):
         return web_auth._report("social_token_reader_inputs_invalid")
     try:
         inputs = web_auth.build_web_login_inputs(sauth, client_version=client_version, os_name="pc")
@@ -160,6 +173,21 @@ def run_social_token_once(sauth, configuration, server, *, client_version, on_to
             raise ValueError("social_token_reader_already_consumed")
         collected = read_social_token(connection, transport, zone,
                                       token_rpc_index=REVIEWED_TOKEN_RPC_INDEX, on_token=on_token)
+        if (on_game_connection is not None
+                and collected.get("outcome") == "social_token_claims_validated"
+                and all(collected.get(key) is True for key in (
+                    "token_rpc_received", "social_token_received", "owner_claim_matches",
+                    "time_claims_valid", "route_shape_valid", "consumer_completed"))):
+            collected["on_game_connection_attempted"] = True
+            try:
+                on_game_connection(connection, transport, zone)
+            except Exception:
+                # Preserve established token/owner provenance. Continuation
+                # exceptions and return values may contain raw response data.
+                collected.update(outcome="social_token_game_consumer_failed",
+                                 on_game_connection_error="social_token_game_consumer_failed")
+            else:
+                collected["on_game_connection_completed"] = True
         return collected
 
     try:

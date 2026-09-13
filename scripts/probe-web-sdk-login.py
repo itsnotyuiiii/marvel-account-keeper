@@ -9,6 +9,15 @@ game files, SDK logs, captures, credential files or production changes.
 push, checks its claims in memory, then closes without any SocialMatrix request.
 --verify-social-session additionally establishes one normal SocialMatrix setup
 using that fresh token and a packaged public parameter; no player queries.
+--lookup-uid explicitly adds one current mesh user lookup to that setup. Only
+the exact bound name/platform and independent visibility projection is returned;
+no Career, ranks, matches or punishment records are queried by this flag.
+--own-career adds one unfiltered PC Career read after exact owner mesh identity
+verification. It cannot select another player's owner-only Career operation.
+--other-career uses the same verified game connection for one explicit other
+UID's native aggregate, after that UID's fresh mesh overview permission passes.
+--other-matches selects one native first match page instead, independently gated
+by history visibility. It cannot be combined with either Career flag.
 --refresh-before-auth explicitly uses one normal OAuth refresh first. Only this
 mode accepts a renewal token in the one-use handoff; nothing is saved or retried.
 Missing native metadata is omitted, never fabricated. --with-reviewed-version
@@ -44,13 +53,28 @@ WAIT_SECONDS = 75
 
 def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelope=False,
                  runtime_version="3825464", enter_gateway=False, collect_social_token=False,
-                 refresh_before_auth=False, verify_social_session=False):
+                 refresh_before_auth=False, verify_social_session=False, lookup_uid=None, own_career=False,
+                 other_career=False, other_matches=False):
     # Validate before consulting any file or opening a network connection.
     probe.build_web_login_inputs(sauth)
     provenance, pin = runtime.reviewed_runtime_pin(runtime_version)
+    if any(type(flag) is not bool for flag in (own_career, other_career, other_matches)):
+        raise ValueError("uid_lookup_inputs_invalid")
+    if other_matches and (own_career or other_career):
+        raise ValueError("select_one_native_section")
+    if (other_career or other_matches) and (own_career or type(lookup_uid) is not int
+                         or not 0 < lookup_uid < 2**63 or lookup_uid == 1370598422):
+        raise ValueError("other_career_requires_explicit_other_uid")
+    if own_career:
+        if lookup_uid is not None and (type(lookup_uid) is not int or lookup_uid != 1370598422):
+            raise ValueError("own_career_requires_owner_uid")
+        lookup_uid = 1370598422
+    if lookup_uid is not None and (type(lookup_uid) is not int or not 0 < lookup_uid < 2**64):
+        raise ValueError("uid_lookup_inputs_invalid")
     if (any(type(flag) is not bool for flag in (enter_gateway, collect_social_token, refresh_before_auth,
                                                verify_social_session))
-            or ((enter_gateway or collect_social_token or refresh_before_auth or verify_social_session) and (
+            or ((enter_gateway or collect_social_token or refresh_before_auth or verify_social_session
+                 or lookup_uid is not None) and (
             runtime_version != "3848703" or not with_reviewed_pc_envelope))):
         raise ValueError("gateway_requires_current_reviewed_pc_envelope")
     if refresh_before_auth and ("refresh_token" not in sauth or not sauth["refresh_token"].strip()):
@@ -59,7 +83,7 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
         Path(__file__).resolve().parents[1] / "runtime-inputs" / (runtime_version + ".json"),
         expected_sha256=pin, expected_provenance=provenance)
     social_public = None
-    if verify_social_session:
+    if verify_social_session or lookup_uid is not None:
         from portable_social_runtime import load_social_runtime
         social_public = load_social_runtime(
             Path(__file__).resolve().parents[1] / "runtime-inputs" / (runtime_version + "-social.json"))
@@ -91,26 +115,54 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
         refresh_report = {"outcome": "web_refresh_candidate_received", "request_attempted": True,
                           "candidate_received": True, "owner_authentication_verified": False,
                           "automatic_renewal_verified": False, "secrets_saved": False}
-    if verify_social_session:
+    if verify_social_session or lookup_uid is not None:
         from game_social_token_probe import run_social_token_once
         from standalone_social_transport import run_social_setup_once
-        setup_report, consumed = None, False
+        setup_report, consumed, native_result = None, False, None
 
         def on_token(fresh_session):
             nonlocal setup_report, consumed
             if consumed:
                 raise ValueError("social_setup_already_consumed")
             consumed = True
-            setup_report = run_social_setup_once(fresh_session, parameter=social_public.parameter)
+            if lookup_uid is not None:
+                from standalone_profile_probe import run_uid_lookup_once
+                career_options = {"own_career": True} if own_career else {}
+                setup_report = run_uid_lookup_once(fresh_session, parameter=social_public.parameter,
+                                                   target_uid=lookup_uid, **career_options)
+            else:
+                setup_report = run_social_setup_once(fresh_session, parameter=social_public.parameter)
 
+        def on_game_connection(connection, transport, zone):
+            nonlocal native_result
+            from standalone_native_sections import read_other_career_once, read_other_matches_once
+            read_section = read_other_matches_once if other_matches else read_other_career_once
+            native_result = read_section(connection, transport, zone, public.career_methods,
+                                         setup_report=setup_report, target_uid=lookup_uid)
+
+        game_options = {"on_game_connection": on_game_connection} if other_career or other_matches else {}
         report = run_social_token_once(sauth, public.configuration, server,
                                        client_version=public.provenance.client_version,
-                                       on_token=on_token)
+                                       on_token=on_token, **game_options)
         token_report = report.get("social_token", {})
         if (report.get("game_login_verified") is True and type(token_report) is dict
                 and token_report.get("owner_claim_matches") is True
                 and token_report.get("consumer_completed") is True and setup_report is not None):
             report["social_setup"] = setup_report
+            career_result = setup_report.get("career_lookup", {})
+            if (own_career and type(career_result) is dict and career_result.get("career_verified") is True
+                    and career_result.get("identity_verified") is True
+                    and career_result.get("uid") == "1370598422"):
+                report["career_verified"] = True
+            if ((other_career or other_matches) and token_report.get("on_game_connection_completed") is True
+                    and type(native_result) is dict):
+                report["other_matches" if other_matches else "other_career"] = native_result
+                verified_key = "matches_verified" if other_matches else "career_verified"
+                if (native_result.get(verified_key) is True
+                        and native_result.get("request_bound") is True
+                        and native_result.get("identity_verified") is True
+                        and native_result.get("uid") == str(lookup_uid)):
+                    report[verified_key] = True
     elif collect_social_token:
         from game_social_token_probe import run_social_token_once
         report = run_social_token_once(sauth, public.configuration, server,
@@ -254,10 +306,30 @@ def main(argv=None):
                         help="Also passively receive one normal owner social token; no social requests.")
     parser.add_argument("--verify-social-session", action="store_true",
                         help="Also verify one normal fresh-token SocialMatrix setup; no player queries.")
+    parser.add_argument("--lookup-uid", type=int,
+                        help="Read one UID's normal mesh identity/visibility; no Career or history queries.")
+    parser.add_argument("--own-career", action="store_true",
+                        help="Also read the verified owner's unfiltered PC Career aggregate, not other players.")
+    parser.add_argument("--other-career", action="store_true",
+                        help="Read the explicit other UID's native aggregate if its overview is available.")
+    parser.add_argument("--other-matches", action="store_true",
+                        help="Read one first match page for the other UID if its history is available.")
     parser.add_argument("--refresh-before-auth", action="store_true",
                         help="Use one normal OAuth refresh, then verify the renewed owner session.")
     args = parser.parse_args(argv)
-    if (args.enter or args.collect_social_token or args.refresh_before_auth or args.verify_social_session) and (
+    if args.other_matches and (args.own_career or args.other_career):
+        parser.error("select only one Career or matches section per research read")
+    if (args.other_career or args.other_matches) and (args.own_career or args.lookup_uid is None
+                             or not 0 < args.lookup_uid < 2**63 or args.lookup_uid == 1370598422):
+        parser.error("native other-player sections require --lookup-uid with an explicit other-player UID")
+    if args.own_career:
+        if args.lookup_uid not in (None, 1370598422):
+            parser.error("--own-career only supports the authenticated owner UID")
+        args.lookup_uid = 1370598422
+    if args.lookup_uid is not None and not 0 < args.lookup_uid < 2**64:
+        parser.error("lookup UID must be a positive uint64")
+    if (args.enter or args.collect_social_token or args.refresh_before_auth or args.verify_social_session
+            or args.lookup_uid is not None) and (
             args.runtime_version != "3848703" or not args.with_reviewed_pc_envelope):
         parser.error("gateway actions require --runtime-version 3848703 --with-reviewed-pc-envelope")
     if not args.serve_once:
@@ -265,20 +337,31 @@ def main(argv=None):
                           "credentials_read": False, "files_read": False,
                           "with_reviewed_version": args.with_reviewed_version or args.with_reviewed_pc_envelope,
                           "with_reviewed_pc_envelope": args.with_reviewed_pc_envelope,
-                          "enter_gateway": args.enter or args.collect_social_token or args.verify_social_session,
-                          "collect_social_token": args.collect_social_token or args.verify_social_session,
-                          "verify_social_session": args.verify_social_session,
+                          "enter_gateway": args.enter or args.collect_social_token or args.verify_social_session or args.lookup_uid is not None,
+                          "collect_social_token": args.collect_social_token or args.verify_social_session or args.lookup_uid is not None,
+                          "verify_social_session": args.verify_social_session or args.lookup_uid is not None,
+                          "lookup_uid": args.lookup_uid,
+                          "own_career": args.own_career,
+                          "other_career": args.other_career,
+                          "other_matches": args.other_matches,
                           "refresh_before_auth": args.refresh_before_auth,
                           "runtime_version": args.runtime_version}))
         return 0
     path = "/auth-once/" + secrets.token_urlsafe(32)
     def attempt(sauth):
+        lookup_options = {"lookup_uid": args.lookup_uid} if args.lookup_uid is not None else {}
+        if args.own_career:
+            lookup_options["own_career"] = True
+        if args.other_career:
+            lookup_options["other_career"] = True
+        if args.other_matches:
+            lookup_options["other_matches"] = True
         return attempt_auth(sauth, with_reviewed_version=args.with_reviewed_version,
                             with_reviewed_pc_envelope=args.with_reviewed_pc_envelope,
                             runtime_version=args.runtime_version, enter_gateway=args.enter,
                             collect_social_token=args.collect_social_token,
                             verify_social_session=args.verify_social_session,
-                            refresh_before_auth=args.refresh_before_auth)
+                            refresh_before_auth=args.refresh_before_auth, **lookup_options)
 
     with HTTPServer(("127.0.0.1", 0), make_handler(path, attempt=attempt,
                                                allow_refresh=args.refresh_before_auth)) as server:
@@ -288,9 +371,13 @@ def main(argv=None):
                           "url": "http://127.0.0.1:" + str(server.server_port) + path,
                           "with_reviewed_version": args.with_reviewed_version or args.with_reviewed_pc_envelope,
                           "with_reviewed_pc_envelope": args.with_reviewed_pc_envelope,
-                          "enter_gateway": args.enter or args.collect_social_token or args.verify_social_session,
-                          "collect_social_token": args.collect_social_token or args.verify_social_session,
-                          "verify_social_session": args.verify_social_session,
+                          "enter_gateway": args.enter or args.collect_social_token or args.verify_social_session or args.lookup_uid is not None,
+                          "collect_social_token": args.collect_social_token or args.verify_social_session or args.lookup_uid is not None,
+                          "verify_social_session": args.verify_social_session or args.lookup_uid is not None,
+                          "lookup_uid": args.lookup_uid,
+                          "own_career": args.own_career,
+                          "other_career": args.other_career,
+                          "other_matches": args.other_matches,
                           "refresh_before_auth": args.refresh_before_auth,
                           "runtime_version": args.runtime_version,
                           "expires_in_seconds": WAIT_SECONDS}), flush=True)

@@ -187,7 +187,8 @@ class GameSocialTokenProbeTest(unittest.TestCase):
 
 
 class SocialTokenLoginChainTest(unittest.TestCase):
-    def run_chain(self, *, auth_uid=1370598422, gateway_uid=1370598422, claim_uid=1370598422):
+    def run_chain(self, *, auth_uid=1370598422, gateway_uid=1370598422, claim_uid=1370598422,
+                  token_callback=None, on_game_connection=None):
         now = 1700000000
         def segment(value):
             return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
@@ -209,7 +210,7 @@ class SocialTokenLoginChainTest(unittest.TestCase):
         connect = Mock(side_effect=[first, second])
         transport = SimpleNamespace(acknowledgement=b"ack", encrypt=lambda value: value, decrypt=lambda value: value)
         original = login.check_login
-        callback = Mock()
+        callback = Mock() if token_callback is None else token_callback
         def check(configuration, server, **kwargs):
             self.assertTrue(kwargs["enter"])
             self.assertEqual(kwargs["expected_uid"], 1370598422)
@@ -221,7 +222,8 @@ class SocialTokenLoginChainTest(unittest.TestCase):
                 patch.object(login, "load_own_login_inputs") as desktop, \
                 patch("pathlib.Path.open") as files:
             report = probe.run_social_token_once(fixture(), None, login.LoginServer("8.8.8.8", 13001, (10001,)),
-                                                 client_version="3848703", on_token=callback)
+                                                 client_version="3848703", on_token=callback,
+                                                 on_game_connection=on_game_connection)
         files.assert_not_called()
         desktop.assert_not_called()
         self.assertTrue(first.closed)
@@ -267,6 +269,135 @@ class SocialTokenLoginChainTest(unittest.TestCase):
                 self.assertEqual(report["outcome"], "social_token_reader_inputs_invalid")
                 self.assertFalse(report["credentials_sent"])
                 check.assert_not_called()
+
+    def test_post_token_callback_reuses_verified_open_gateway_after_consumer(self):
+        ordered, contexts = [], []
+        token_callback = Mock(side_effect=lambda session: ordered.append("token"))
+        def native(connection, transport, zone):
+            self.assertEqual(ordered, ["token"])
+            self.assertFalse(connection.closed)
+            self.assertEqual(zone["role_uid"], login.EXPECTED_OWN_UID)
+            self.assertEqual(zone["zone_id"], 11001)
+            self.assertEqual(transport.acknowledgement, b"ack")
+            contexts.append((connection, transport, zone))
+            ordered.append("game")
+            return {"PRIVATE_NATIVE_RETURN": "fixture-secret", "career_verified": True}
+        callback = Mock(side_effect=native)
+        report, consumed, connect, second = self.run_chain(token_callback=token_callback,
+                                                          on_game_connection=callback)
+        self.assertEqual(ordered, ["token", "game"])
+        consumed.assert_called_once()
+        callback.assert_called_once()
+        self.assertIs(contexts[0][0], second)
+        self.assertTrue(second.closed)
+        self.assertEqual(connect.call_count, 2)  # Existing auth + game gateway only.
+        token_report = report["social_token"]
+        self.assertTrue(token_report["on_game_connection_attempted"])
+        self.assertTrue(token_report["on_game_connection_completed"])
+        self.assertIsNone(token_report["on_game_connection_error"])
+        self.assertFalse(token_report["career_verified"])
+        self.assertNotIn("PRIVATE_NATIVE_RETURN", json.dumps(report))
+
+    def test_default_path_has_no_game_continuation(self):
+        report, _, _, _ = self.run_chain()
+        self.assertFalse(report["social_token"]["on_game_connection_attempted"])
+        self.assertFalse(report["social_token"]["on_game_connection_completed"])
+        self.assertIsNone(report["social_token"]["on_game_connection_error"])
+
+    def test_game_continuation_requires_valid_callbacks_before_login(self):
+        for on_token, continuation in ((None, Mock()), (Mock(), True), ("private", Mock())):
+            with patch.object(login, "check_login") as check, \
+                    patch.object(probe.web_auth, "build_web_login_inputs") as build:
+                report = probe.run_social_token_once(fixture(), None, None,
+                    client_version="3848703", on_token=on_token, on_game_connection=continuation)
+            self.assertEqual(report["outcome"], "social_token_reader_inputs_invalid")
+            self.assertFalse(report["credentials_sent"])
+            check.assert_not_called()
+            build.assert_not_called()
+
+    def test_auth_gateway_claim_or_token_consumer_failure_never_hands_off(self):
+        cases = ({"auth_uid": 1822797559}, {"gateway_uid": 1822797559},
+                 {"claim_uid": 1822797559},
+                 {"token_callback": Mock(side_effect=RuntimeError("fixture-secret"))})
+        for kwargs in cases:
+            continuation = Mock()
+            report, _, _, _ = self.run_chain(on_game_connection=continuation, **kwargs)
+            continuation.assert_not_called()
+            self.assertFalse(report["social_token"]["on_game_connection_attempted"])
+            self.assertFalse(report["social_token"]["on_game_connection_completed"])
+
+    def test_game_continuation_failure_preserves_token_owner_and_prior_consumer(self):
+        prior_projection = []
+        token_callback = Mock(side_effect=lambda session: prior_projection.append("verified-mesh"))
+        continuation = Mock(side_effect=RuntimeError("fixture-secret PRIVATE_NATIVE_FAILURE"))
+        report, consumed, _, second = self.run_chain(token_callback=token_callback,
+                                                    on_game_connection=continuation)
+        self.assertTrue(report["game_login_verified"])
+        token_report = report["social_token"]
+        self.assertTrue(token_report["owner_claim_matches"])
+        self.assertTrue(token_report["consumer_completed"])
+        self.assertTrue(token_report["on_game_connection_attempted"])
+        self.assertFalse(token_report["on_game_connection_completed"])
+        self.assertEqual(token_report["outcome"], "social_token_game_consumer_failed")
+        self.assertEqual(token_report["on_game_connection_error"], "social_token_game_consumer_failed")
+        self.assertEqual(prior_projection, ["verified-mesh"])
+        self.assertTrue(second.closed)
+        self.assertNotIn("PRIVATE_NATIVE_FAILURE", json.dumps(report))
+        consumed.assert_called_once()
+        continuation.assert_called_once()
+
+    def test_game_continuation_requires_all_passive_provenance_flags_exactly_true(self):
+        valid = {**probe._report(), "outcome": "social_token_claims_validated",
+                 "token_rpc_received": True, "social_token_received": True,
+                 "owner_claim_matches": True, "time_claims_valid": True,
+                 "route_shape_valid": True, "consumer_completed": True}
+        fields = ("token_rpc_received", "social_token_received", "owner_claim_matches",
+                  "time_claims_valid", "route_shape_valid", "consumer_completed")
+        for key in fields:
+            for invalid in (False, 1, "true", None):
+                continuation = Mock()
+                with patch.object(probe, "read_social_token", return_value={**valid, key: invalid}):
+                    report, _, _, second = self.run_chain(on_game_connection=continuation)
+                continuation.assert_not_called()
+                self.assertFalse(report["social_token"]["on_game_connection_attempted"])
+                self.assertTrue(second.closed)
+
+    def test_reentered_login_callback_cannot_repeat_token_or_game_consumers(self):
+        continuation, token_consumer = Mock(), Mock()
+        collected = {**probe._report(), "outcome": "social_token_claims_validated",
+                     "token_rpc_received": True, "social_token_received": True,
+                     "owner_claim_matches": True, "time_claims_valid": True,
+                     "route_shape_valid": True, "consumer_completed": True}
+        def check(*args, after_login, **kwargs):
+            after_login(object(), object(), dict(ZONE))
+            with self.assertRaisesRegex(ValueError, "social_token_reader_already_consumed"):
+                after_login(object(), object(), dict(ZONE))
+            return {}
+        with patch.object(login, "check_login", side_effect=check), \
+                patch.object(probe, "read_social_token", return_value=collected) as reader, \
+                patch.object(probe.web_auth, "_project_gateway_report", return_value={"game_login_verified": True}):
+            report = probe.run_social_token_once(fixture(), None, None, client_version="3848703",
+                on_token=token_consumer, on_game_connection=continuation)
+        reader.assert_called_once()
+        continuation.assert_called_once()
+        self.assertTrue(report["social_token"]["on_game_connection_completed"])
+
+    def test_unverified_parent_drops_collected_callback_metadata(self):
+        continuation = Mock()
+        collected = {**probe._report(), "outcome": "social_token_claims_validated",
+                     "token_rpc_received": True, "social_token_received": True,
+                     "owner_claim_matches": True, "time_claims_valid": True,
+                     "route_shape_valid": True, "consumer_completed": True}
+        def check(*args, after_login, **kwargs):
+            after_login(object(), object(), dict(ZONE))
+            return {}
+        with patch.object(login, "check_login", side_effect=check), \
+                patch.object(probe, "read_social_token", return_value=collected), \
+                patch.object(probe.web_auth, "_project_gateway_report", return_value={"game_login_verified": False}):
+            report = probe.run_social_token_once(fixture(), None, None, client_version="3848703",
+                on_token=Mock(), on_game_connection=continuation)
+        self.assertFalse(report["social_token"]["social_token_received"])
+        self.assertFalse(report["social_token"]["on_game_connection_completed"])
 
 
 if __name__ == "__main__":

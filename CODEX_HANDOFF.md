@@ -3,7 +3,103 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: capture-free SocialMatrix setup verified
+## Latest continuation — September 12: portable stats and match rank changes verified
+
+The standalone hosted goal remains ACTIVE and INCOMPLETE, but the next-query
+wording in the setup checkpoint below is now superseded. The current packaged
+3848703 inputs and owner's already-authorized official-store SDK context now
+support live UID identity/visibility AND both normal Career routes. Runtime
+used no installed game, SDK logs, captures, memory reads or third-party stats.
+No production website, desktop provider, Wi-Fi or saved credential changed.
+
+Verified mesh identities: owner1370598422 -> ゆいᶻᶻᶻ, level32, PC; other1822797559
+-> KovaaksKid2008, level63, PC. Exact returned row aid, not the session header
+owner, binds each UID. Other overview/heroes settings were explicit PC OPEN0,
+history explicit global OPEN0, timeline native default OPEN0. Source review
+corrected an earlier overly restrictive interpretation: present config_server
+with missing career_settings defaults to '{}'; a successfully decoded settings
+map with missing section keys defaults OPEN0. Missing/malformed whole config or
+malformed settings remains unknown. See source1838/4677 in API_RESEARCH.md.
+
+The own-only XYQ query_my_player_career returned a verified unfiltered PC
+aggregate:273 matches,149 wins,4165 kills,1609 deaths,3145 assists. Service/HTTP/
+application/UID checks passed independently. SocialMatrix sent14 handshake+
+1467 application bytes, received6236; mesh198 bytes then Career558 bytes. The
+Career response has41 fields; only five mapped totals escape the raw callback.
+Unfiltered omission branches do NOT establish lifetime/history completeness.
+
+The separate native other-player query_player_career also passed, on the SAME
+verified owner game connection after fresh mesh overview permission. Other
+UID1822797559 returned1271 matches,850 wins,25687 kills,6239 deaths,19527 assists.
+The exact method/request/nonce/target UID matched; one request196 bytes, one
+reply1126 bytes, no unrelated RPCs/startup records. LOGIN/gateway received2399/
+39295 bytes; passive token reader850788/19records; social setup+mesh14 handshake+
+909 application bytes sent and5447 received. This is not another-player login
+or an owner-only method with a substituted UID. All completed helpers are
+terminal and credentials remain transient.
+
+New modules standalone_profile_probe.py, standalone_career_query.py and
+standalone_native_sections.py compose the current mesh and independent Career
+routes. The transport's scoped callback owns one mesh and optional own-Career
+read; game_social_token_probe's explicit post-token callback owns continuation
+on the SAME authenticated gateway, never a parallel relogin. Research flags
+--lookup-uid, --own-career and --other-career require explicit current reviewed
+PC selection. Defaults and production providers are unchanged. Previews stay
+offline. A failed section preserves previously verified identity.
+
+The first-page other-player match read also passed for1822797559:43 exact-UID
+rows, all ranked mode2, seasons18/19,43 server match IDs;200 bytes sent,114261
+received in one native reply. First-page only; has_more remains unknown. Basic
+match timestamps/results/KDA projected. Initial optional rank projection
+verified none because it required integer-typed new_level. Source int(new_level)
+conversion resolved that LOCAL mismatch: a fresh comparison verified all43
+per-match rank changes. Raw dynamic_fields/rankscore_info were dicts and
+new_level/new_score/add_score were floats in all43 rows. Latest returned win
+was+15 points (5545->5560), next returned loss-25 (5570->5545); observed delta
+range-26..19. Old rank level/placements stay null where not separately verified.
+The exact match IDs/UID and source floor-difference formula bind the deltas,
+not differences between separate rank snapshots. Final match helper is terminal.
+--other-matches selects this independent history-gated
+read; research permits one section per attempt without changing user-facing UI.
+
+Remaining milestones: live season-rank history and broader section integration,
+independently renewable credentials, hosted-provider integration and approved
+native-capable infrastructure. No full website stats or authoritative public
+punishment history is claimed. Do not re-request the completed store login.
+
+Renewal preparation: the official saved-account login path uses
+sdk-os.mpsdk.easebar.com/api/users/login/v2/sdk_token, not the earlier OAuth
+refresh path. A read-only snapshot of ONLY known SDK storage keys found one
+Steam/p saved account exactly bound to current SAUTH.sdkuid, a renewal token,
+and JSON string UDID/DEVICE_ID/UNISDK_UDID. Saved userId/deviceId are numbers;
+SAUTH versions are strings. Saved deviceId is a safe integer and its decimal
+form equals SAUTH.deviceid. No token/identifier value was exported and no
+storage changed. This context evidence does NOT establish live token exchange,
+replacement SAUTH acceptance or autonomous renewal. Full contract below in
+API_RESEARCH.md; do not guess wrapper serial fields or conflate device IDs.
+
+Prepared web_sdk_history_login.py implements the sourced saved-Steam token
+exchange with explicit Mpay context, safe numeric-ID conversion and fixed
+HTTP/application diagnostics. Its transient candidate deliberately does NOT
+construct SAUTH or claim owner AUTH. No live exchange was made. Nonzero code
+means service rejection, not necessarily an expired/invalid credential.
+
+Next rank source is also documented: current1838 other-player namecard GetData
+has host/tag/id with NO fields selector or season filter; normal own branch
+uses synchronized avatar ranks instead of making that request. Current source
+does not require an explicit response UID echo. Bind request/RPC/target and
+report any echo separately. Do not infer current season from maximum history,
+or reuse raw-score peak tie-breaking as exact current source parity.
+
+Final verification:787 Python tests passed in101.666s;38 focused match/native/
+handoff tests passed in0.116s. Earlier full run774 passed in91.007s before final
+normalization/cases. Existing synthetic vault warnings and temporary-file
+ResourceWarnings were non-failing; no unrelated app code changed. All helper
+and test processes are terminal. Keep the signed-in official-store tab for
+continuation; no new user login/game launch is needed. The goal is still active;
+this is a verified research/client checkpoint, not deployed website completion.
+
+## Previous checkpoint — September 12: capture-free SocialMatrix setup verified
 
 The active standalone NetEase-only hosted goal remains INCOMPLETE. The current
 3848703 owner AUTH/gateway acceptance checkpoint below is preserved, but its

@@ -1,4 +1,4 @@
-"""One explicit normal Python SocialMatrix setup, without a capture or query.
+"""One explicit normal Python SocialMatrix session without capture dependencies.
 
 Reviewed current public source: Conf/Stub/SocketBase select JSON payload 1;
 TCPConnection entry 40 sends the uncustomized Python hello on command 0;
@@ -7,9 +7,11 @@ Constants entry 3498 identifies client version 3.10.1. This is that first-party
 Python variant, not a claim that native overrides use the same hello/version.
 
 Only a supplied fresh gateway token and supplied hash-pinned public parameter
-are used. A single primary route connection is closed after setup. There are
-no local files, retries, captured templates, HMAC signing, stats requests,
-callbacks, renewal, payload execution or credential exports.
+are used. A single primary route connection is closed after setup, or after an
+explicit transient callback makes at most one reviewed mesh identity read and
+one authenticated-owner Career read. There are no local files, retries,
+captured templates, HMAC signing, renewal, payload execution or credential
+exports in reports. Career service-body decoding belongs to the caller.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ import struct
 import time
 
 from socialmatrix_capture_probe import RC4Stream, fold_xor, magic_signature, opening_fields
+from standalone_career_query import make_own_career_request
 from standalone_social_session import (
     ERROR_CODES as TOKEN_ERROR_CODES, GatewaySocialToken, SocialSessionError,
     parse_gateway_social_token, social_token_metadata,
@@ -43,6 +46,13 @@ ERROR_CODES = frozenset({
     "social_setup_invalid", "social_setup_rejected", "social_setup_identity_mismatch",
     "social_setup_correlation_missing", "social_stream_bound", "social_connection_closed",
     "social_transport_timeout", "social_transport_network_error", "social_transport_unexpected",
+    "social_setup_consumer_failed", "social_mesh_context_closed", "social_mesh_already_consumed",
+    "social_mesh_target_invalid", "social_mesh_reply_invalid", "social_mesh_rejected",
+    "social_mesh_identity_mismatch", "social_mesh_correlation_missing", "social_mesh_payload_invalid",
+    "social_career_context_closed", "social_career_already_consumed", "social_career_module_unavailable",
+    "social_career_request_invalid", "social_career_reply_invalid", "social_career_rejected",
+    "social_career_identity_mismatch", "social_career_correlation_missing", "social_career_payload_invalid",
+    "social_query_connection_failed",
 })
 SETUP_VALIDATION_REASONS = frozenset({
     "payload_type", "str_payload_type", "payload_bound", "payload_missing",
@@ -67,7 +77,18 @@ def _report():
             "module_count": 0, "user_module_available": False, "setup_reply_command": None,
             "server_error_code": None, "social_session_accepted": False,
             "stats_requested": False, "secrets_saved": False,
-            "validation_reason": None, "setup_shape": {}}
+            "validation_reason": None, "setup_shape": {},
+            "setup_consumer_attempted": False, "setup_consumer_completed": False,
+            "mesh_query_attempted": False, "mesh_query_sent": False, "mesh_query_count": 0,
+            "mesh_application_bytes_sent": 0, "mesh_request_bound": False,
+            "mesh_reply_received": False, "mesh_reply_command": None, "mesh_ignored_records": 0,
+            "mesh_error": None, "mesh_server_error_code": None, "mesh_status_layer": None,
+            "mesh_validation_reason": None, "mesh_shape": {},
+            "career_query_attempted": False, "career_query_sent": False, "career_query_count": 0,
+            "career_application_bytes_sent": 0, "career_reply_bound": False,
+            "career_reply_received": False, "career_reply_command": None, "career_ignored_records": 0,
+            "career_error": None, "career_server_error_code": None, "career_status_layer": None,
+            "career_validation_reason": None, "career_shape": {}}
 
 
 def _unique(pairs):
@@ -169,7 +190,7 @@ class _Wire:
         self.sock.sendall(data)
         self.report["handshake_bytes_sent"] = len(data)
 
-    def send(self, main, sub, body, *, carries_token=False):
+    def send(self, main, sub, body, *, carries_token=False, query=None):
         if len(body) + 7 > MAX_BYTES:
             raise SocialTransportError("social_stream_bound")
         self.remaining()
@@ -177,13 +198,22 @@ class _Wire:
         previous = self.report["application_bytes_sent"]
         self.report["application_bytes_sent"] = None
         if carries_token:
-            self.report["token_sent"] = None
-            self.report["setup_request_sent"] = None
+            if self.report["token_sent"] is not True:
+                self.report["token_sent"] = None
+            if query is None:
+                self.report["setup_request_sent"] = None
+        if query is not None:
+            self.report[f"{query}_query_sent"] = None
+            self.report[f"{query}_application_bytes_sent"] = None
         self.sock.sendall(packet)
         self.report["application_bytes_sent"] = previous + len(packet)
         if carries_token:
             self.report["token_sent"] = True
-            self.report["setup_request_sent"] = True
+            if query is None:
+                self.report["setup_request_sent"] = True
+        if query is not None:
+            self.report[f"{query}_query_sent"] = True
+            self.report[f"{query}_application_bytes_sent"] = len(packet)
 
     def record(self):
         size, main, sub = struct.unpack("<IHB", self.exact(7, encrypted=True))
@@ -276,7 +306,7 @@ def _module_metadata(data, report=None):
         # Source map assignment overwrites a duplicate name; zero is allowed,
         # but does not establish an addressable positive service command.
         selected[name] = command
-    return len(selected), selected.get("svc-user", 0) > 0
+    return selected
 
 
 def _setup_payload(body, report=None):
@@ -354,24 +384,176 @@ def _accept_setup(wire, session):
         report["stage"] = "setup_payload"
         data = _setup_payload(body, report)
         report["stage"] = "setup_modules"
-        count, user_available = _module_metadata(data, report)
-        report.update(module_count=count, user_module_available=user_available,
+        modules = _module_metadata(data, report)
+        report.update(module_count=len(modules), user_module_available=modules.get("svc-user", 0) > 0,
                       social_session_accepted=True, outcome="social_setup_verified", stage="complete")
-        return
+        return header.get("streamid") or "", modules
     raise SocialTransportError("social_setup_correlation_missing")
 
 
+class _SocialConnectionContext:
+    """Only the current callback may use these two bounded read capabilities.
+
+    Decoded data is deliberately returned only to that callback. It still needs
+    the caller's exact-target projection; transport correlation is not identity
+    verification of a returned player row. The context is invalidated on exit.
+    """
+    __slots__ = ("_wire", "_session", "_streamid", "_modules", "_now", "_active", "_consumed",
+                 "_career_consumed", "_next_rpc", "_connection_failed")
+
+    def __init__(self, wire, session, streamid, modules, now):
+        self._wire, self._session, self._streamid, self._now = wire, session, streamid, now
+        self._modules = modules
+        self._active, self._consumed = True, False
+        self._career_consumed, self._next_rpc, self._connection_failed = False, 3, False
+
+    def __reduce_ex__(self, protocol):
+        raise SocialTransportError("social_mesh_context_closed")
+
+    def _deactivate(self):
+        self._active = False
+        self._wire = self._session = self._streamid = self._modules = self._now = None
+
+    def _status(self, value, layer, kind):
+        code = value.get("errorcode", 0)
+        if type(code) is not int or not -(10**9) <= code <= 10**9:
+            raise SocialTransportError(f"social_{kind}_reply_invalid")
+        if code != 0:
+            self._wire.report[f"{kind}_server_error_code"] = code
+            self._wire.report[f"{kind}_status_layer"] = layer
+            raise SocialTransportError(f"social_{kind}_rejected")
+
+    def _read_reply(self, kind, expected_main, expected_sub, rpcid):
+        wire, report, session = self._wire, self._wire.report, self._session
+        for _ in range(MAX_SETUP_RECORDS):
+            main, sub, raw = wire.record()
+            if (main, sub) != (expected_main, expected_sub):
+                report["ignored_records"] += 1
+                report[f"{kind}_ignored_records"] += 1
+                continue
+            envelope = _json(raw)
+            if type(envelope) is not dict or type(envelope.get("header")) is not dict:
+                raise SocialTransportError(f"social_{kind}_reply_invalid")
+            header = envelope["header"]
+            if type(header.get("rpcid")) is not str or header["rpcid"] != rpcid:
+                report["ignored_records"] += 1
+                report[f"{kind}_ignored_records"] += 1
+                continue
+            self._status(header, "header", kind)
+            if "aid" in header and (type(header["aid"]) is not str or header["aid"] != session.aid):
+                raise SocialTransportError(f"social_{kind}_identity_mismatch")
+            body = envelope.get("body")
+            if type(body) is not dict:
+                raise SocialTransportError(f"social_{kind}_reply_invalid")
+            self._status(body, "body", kind)
+            command = body.get("cmd", 0)
+            if type(command) is not int or not 0 <= command <= 0xFFFFFFFF:
+                raise SocialTransportError(f"social_{kind}_reply_invalid")
+            report[f"{kind}_reply_command"] = command
+            projection = {"setup_shape": report[f"{kind}_shape"]}
+            try:
+                data = _setup_payload(body, projection)
+            except SocialTransportError:
+                report[f"{kind}_validation_reason"] = projection.get("validation_reason")
+                raise SocialTransportError(f"social_{kind}_payload_invalid") from None
+            # This marks request/reply correlation and owner-envelope checks,
+            # not identity or service-status verification inside the payload.
+            report[f"{kind}_reply_received"] = True
+            report["mesh_request_bound" if kind == "mesh" else "career_reply_bound"] = True
+            return data
+        raise SocialTransportError(f"social_{kind}_correlation_missing")
+
+    def _run_query(self, kind, main, sub, data):
+        report = self._wire.report
+        try:
+            if self._connection_failed:
+                raise SocialTransportError("social_query_connection_failed")
+            session = self._session
+            social_token_metadata(session, now=self._now)
+            rpcid = str(self._next_rpc)
+            self._next_rpc += 1
+            header = {"version": CLIENT_VERSION, "rpcid": rpcid, "aid": session.aid}
+            if self._streamid:
+                header["streamid"] = self._streamid
+            else:
+                header["token"] = session.token
+            payload = base64.b64encode(_packed(data)).decode("ascii")
+            request = {"header": header, "body": {"cmd": 0, "payload": payload}}
+            if kind == "career":
+                report["stats_requested"] = True
+            self._wire.send(main, sub, _packed(request), carries_token=not self._streamid, query=kind)
+            report["stage"] = f"{kind}_reply"
+            response = self._read_reply(kind, main, sub, rpcid)
+            report["stage"] = "setup_consumer"
+            return response
+        except Exception as error:
+            # A partial send/read can advance either cipher. Never reuse that
+            # connection for the other capability after an unsuccessful query.
+            self._connection_failed = True
+            if isinstance(error, SocialSessionError):
+                code = error.code if error.code in TOKEN_ERROR_CODES else "social_transport_unexpected"
+            elif isinstance(error, SocialTransportError):
+                code = error.code
+            elif isinstance(error, TimeoutError):
+                code = "social_transport_timeout"
+            elif isinstance(error, OSError):
+                code = "social_transport_network_error"
+            else:
+                code = "social_transport_unexpected"
+            report[f"{kind}_error"] = code
+            raise
+
+    def read_mesh_user(self, target_uid):
+        """One source-backed mesh read; caller must verify the returned row aid."""
+        if not self._active:
+            raise SocialTransportError("social_mesh_context_closed")
+        report = self._wire.report
+        if self._consumed:
+            report["mesh_error"] = "social_mesh_already_consumed"
+            raise SocialTransportError("social_mesh_already_consumed")
+        self._consumed = True
+        report.update(mesh_query_attempted=True, mesh_query_count=1, stage="mesh_query")
+        if type(target_uid) is not int or not 1 <= target_uid <= (1 << 64) - 1:
+            report["mesh_error"] = "social_mesh_target_invalid"
+            raise SocialTransportError("social_mesh_target_invalid")
+        return self._run_query("mesh", 1, 4, {"aids": [f"{self._session.zone_id}_{target_uid}"]})
+
+    def read_own_career(self):
+        """One normal Career service request, always bound to the token owner."""
+        if not self._active:
+            raise SocialTransportError("social_career_context_closed")
+        report = self._wire.report
+        if self._career_consumed:
+            report["career_error"] = "social_career_already_consumed"
+            raise SocialTransportError("social_career_already_consumed")
+        self._career_consumed = True
+        report.update(career_query_attempted=True, career_query_count=1, stage="career_query")
+        command = self._modules.get("mesh")
+        if type(command) is not int or not 1 <= command <= 65535:
+            report["career_error"] = "social_career_module_unavailable"
+            raise SocialTransportError("social_career_module_unavailable")
+        try:
+            data = make_own_career_request(self._session.own_uid, self._session.zone_id)
+        except Exception:
+            report["career_error"] = "social_career_request_invalid"
+            raise SocialTransportError("social_career_request_invalid") from None
+        return self._run_query("career", command, 2, data)
+
+
 def run_social_setup_once(session, *, parameter, connect=socket.create_connection,
-                          now=None, monotonic=time.monotonic):
+                          now=None, monotonic=time.monotonic, on_setup=None):
     """Return redacted setup diagnostics; close the only connection on every exit.
 
     Optional aid/streamid/module echoes are reported separately. Successful
     setup does not imply any query was made or that player stats are available.
-    This function cannot establish the original gateway callback provenance.
+    Explicit on_setup receives a transient one-mesh/one-own-Career context; its return
+    value and decoded player data never enter this report. This function cannot
+    establish the original gateway callback provenance.
     """
     report, sock = _report(), None
     try:
-        if type(session) is not GatewaySocialToken or not callable(connect) or not callable(monotonic):
+        if (type(session) is not GatewaySocialToken or not callable(connect) or not callable(monotonic)
+                or (on_setup is not None and not callable(on_setup))):
             raise SocialTransportError("social_transport_context")
         social_token_metadata(session, now=now)
         session = parse_gateway_social_token(session.token, own_uid=session.own_uid,
@@ -420,7 +602,18 @@ def run_social_setup_once(session, *, parameter, connect=socket.create_connectio
                               "aid": session.aid, "token": session.token},
                    "body": {"cmd": 0, "payload": "e30="}}
         wire.send(1, 3, _packed(request), carries_token=True)
-        _accept_setup(wire, session)
+        streamid, modules = _accept_setup(wire, session)
+        if on_setup is not None:
+            context = _SocialConnectionContext(wire, session, streamid, modules, now)
+            report.update(setup_consumer_attempted=True, stage="setup_consumer")
+            try:
+                on_setup(context)
+            except Exception:
+                report["outcome"] = "social_setup_consumer_failed"
+            else:
+                report.update(setup_consumer_completed=True, stage="complete")
+            finally:
+                context._deactivate()
     except SocialSessionError as error:
         report["outcome"] = error.code if error.code in TOKEN_ERROR_CODES else "social_transport_unexpected"
     except SocialTransportError as error:

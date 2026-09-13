@@ -53,6 +53,29 @@ is verified, document that limit rather than creating an apparently live feed.
 
 ## Current evidence — September 12, 2026
 
+- New live milestone supersedes the setup-only limitations below: current
+  capture-free mesh identifies both owner1370598422 (ゆいᶻᶻᶻ,level32) and
+  other1822797559 (KovaaksKid2008,level63), exact aid/PC/independent visibility.
+  Valid empty settings use source-defined OPEN0 defaults; unavailable/malformed
+  whole settings are not silently public.
+- Own XYQ Career verified273 matches/149 wins/4165 kills/1609 deaths/3145 assists.
+  Other native Career verified1271/850/25687/6239/19527 respectively, through
+  the SAME owner gateway after fresh other-target overview permission. Exact
+  request/UID binding and strict totals passed; no installed game/log/capture
+  runtime input or third-party stats. These are unfiltered aggregate requests,
+  not proof of complete lifetime history. No website/provider was switched.
+- Normal saved-account sdk_token renewal contract and actual owner-bound
+  browser context are identified. No sdk_token exchange or renewed-SAUTH
+  acceptance yet; automatic renewal and approved native hosting remain open.
+  The earlier direct OAuth rejection is not the complete normal history flow.
+- Recent other-player matches now live-verified:43 exact-UID first-page rows
+  for1822797559,43 server IDs, all mode2/seasons18-19, basic timestamp/result/KDA
+  projected. Final source-aligned comparison verified all43 per-match rank
+  changes: the source int(new_level) conversion handles the server's floats,
+  resolving our initial strict-type false-negative. Latest example+15/next-25.
+  No pagination/completeness or current-season label is claimed. Source-backed
+  namecard season-rank request is prepared conceptually but not live queried.
+
 - Latest follow-up supersedes the token-index/initial-delivery wording below:
   reviewed RPC1538836248 delivered the normal SocialMatrix token after exact
   owner gateway verification. Owner/zone/time/route claims passed, using only

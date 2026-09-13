@@ -1,5 +1,20 @@
 # Reviewed public runtime inputs
 
+September12 follow-up: the unchanged current3848703 public artifacts now also
+support LIVE verified mesh identities/visibility for owner1370598422 and other
+1822797559, own XYQ Career and other native Career. Both aggregate responses
+were exact-target bound and projected into five totals. The explicit other
+path reuses the same accepted owner gateway after fresh mesh overview checks;
+it does not require the target to exist locally. Research flags are additive;
+no desktop/website provider default, runtime artifact or pin changed. This
+verifies query portability, not autonomous credential renewal or hosting.
+See API_RESEARCH.md for source contracts and exact live evidence.
+
+The same unchanged inputs subsequently verified43 first-page other-player
+matches and43 per-match rank changes. Source-aligned int(new_level) conversion
+resolved a local strict-integer false-negative; the live field is float-typed.
+This is independent match/UID-bound data, not reconstructed rank snapshots.
+
 ## Additional current SocialMatrix artifact
 
 `3848703-social.json` is 465 bytes, ASCII with LF and final newline; SHA256

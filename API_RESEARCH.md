@@ -1,5 +1,218 @@
 # Live API research checkpoints
 
+## September 12, 2026: portable UID and own/other Career results
+
+All source entries below refer to reviewed current3848703 archive SHA256
+`07a3dcf20d539b9a613246047f5f91e4c7b44de62e96e24c47acea1cef5d1f9f`.
+Live requests used only packaged public parameters and the owner-authorized
+official-store SDK context; no runtime game installation/log/capture input.
+
+### Current mesh identity and per-section visibility
+
+Entry3051 get_user:206 -> _get_user_server:219 -> _get_mesh_user:134 sends
+fixed main1/sub4 (command260), data_cmd0, {aids:[verified_zone_targetUID]}.
+Entry3044 do_func:520 uses version3.10.1, fresh RPC id, owner aid and accepted
+streamid; original token only if no streamid. No API ackRpcId is sent.
+Reply envelope correlation precedes exact returned row aid validation. The
+legacy svc-user CmdGetUser7/client_info path is not the normal current getter.
+
+Entry1850 MosClient_PlayerState.set_user:486 assigns name from row.name,
+level from row.grade, and login_os from config_server. Entry1838
+set_career_data:740 decodes json.loads(config_server.get('career_settings','{}')).
+Normal career_settings is a JSON string, not necessarily an already parsed
+object. Missing whole config or malformed settings is distinct from a valid
+empty settings map.
+
+Entry4677 get_permission:171 establishes owner access independently. For other
+players overview/heroes prefer a present platform-suffixed key, then the legacy
+global key. History/timeline use global keys. Missing keys in valid settings
+default OPEN0; an earlier blanket 'missing means unknown' interpretation was
+not source-faithful. Unknown/malformed values remain unknown; values1..4 are
+restricted without established relationship evidence. Entry5529 defines the
+keys, entry1688 hero:240 passes OS, entry1689 history:287 omits OS.
+
+Live owner1370598422: IGN ゆいᶻᶻᶻ, level32, PC, all owner-allowed. First mesh
+connection14 handshake+909 application bytes sent,4715 received;198-byte query,
+4052-char payload ->3038 decoded bytes. Other1822797559: KovaaksKid2008, level63,
+PC. Overview/heroes explicit platform OPEN0, history global OPEN0, timeline
+native-default OPEN0. Other mesh14+909 sent,5447 received;198-byte query,
+4784-char payload ->3588 decoded bytes. Both exact requested row aids matched.
+Only fixed identity/visibility/shape data was returned; raw config stayed local.
+
+### Own Career: normal SocialMatrix XYQ service
+
+Current1838 c_get_player_career_data:325 accepts player_uid/zone_id and PC
+device_type. Mode0, play-modeNone, season0, sort-hero0 and no BSON filter take
+the supported omission branches. These are not a claim about observed UI
+defaults or complete lifetime coverage. Own branch uses query_my_player_career.
+Entry103 XyqClient.call:1051 builds POST with base64 JSON post_body and
+Content-Type:application/json, Accept-Encoding:gzip. Entry3520
+XyqServiceClient.__init__:12 selects advertised mesh; http_request:15 defaults
+body_use_json=False and includes service,headers,uri,method,querystring:null,
+post_body,host:null,protocol:null,version:null. URI has no leading slash.
+The operation is advertised mesh main/sub2, data_cmd0, not an invented fixed
+module route or captured uni_lz4 template.
+
+Entry3520 nd:71 yields service,headers,status_code,response_body. Entry103
+wrap_callback:1070 base64-decodes body, decompresses ONLY exact header
+Content-Encoding:gzip, parses UTF8 JSON and requires HTTP200. Application
+precedence: if code exists require200; else if error_code exists require0;
+otherwise forward data implicitly. The previous captured decoder's code-only
+and gzip-magic assumptions are not reused. Response bounds and exact
+career.player_uid precede five strict integer totals; wins cannot exceed matches.
+
+Live own1370598422 returned273 matches,149 wins,4165 kills,1609 deaths,3145
+assists,41 Career fields, HTTP200/application code success. Fresh SocialMatrix
+connection sent14 handshake+1467 application bytes, received6236; one198-byte
+mesh query then one558-byte Career query, both exactly correlated. Passive
+token read850730 bytes/19records; LOGIN2399/gateway39295 received. Owner helper
+was polled terminal successfully; raw responses/tokens were not saved.
+
+### Other Career: same owner gateway, separate normal native operation
+
+Entry1838 c_get_other_player_career_data:668 -> c_query_career:656 calls
+PlayerAvatar.Server['Career'].C_QUERY_CAREER. Entry5371 S_QUERY_CAREER:253
+returns [url,ex_info,err_code,err_msg,data]; entry1822
+s_query_other_player_career:34 forwards data unchanged to1838
+s_get_player_career_data:824, the same Career data callback as own XYQ.
+Thus data is {career:{player_uid,total_match_count,total_win_count,k,d,a,...}},
+NOT another HTTP/base64 wrapper. Reviewed method IDs113612951/1993623137 from
+the packaged manifest are used, not old load_career_methods archive indices.
+
+The new explicit post-token callback retains the existing authenticated game
+connection until a fresh mesh exact-target/PC overview permission passes,
+then calls read_one_career(...,season=0). The request uses query_player_career
+and target player_uid/verified zone/device_type:pc, no match_season literal.
+Method, request context, nonce, success code and target UID bind the reply.
+Only fixed diagnostics/projected totals escape; native/mesh/parent failures
+cannot be promoted into success or 'invalid UID'.
+
+Live other1822797559 returned1271 matches,850 wins,25687 kills,6239 deaths,
+19527 assists (41 fields). Native request196 bytes, reply1126 bytes, one record,
+zero other RPCs/startup records. LOGIN2399/gateway39295 received; token850788/
+19records; social14+909 sent/5447 received. The same owner session served the
+other UID; no target-player login or local existence is required. Helper
+terminal; no saved credentials, HOTFIX execution or production writes.
+
+### Other recent matches and optional rank changes
+
+Current1838 c_get_history_matches:414 uses page0/page_size50. Other-player
+query_match_summary is native; owner query_my_match_summary is XYQ. New
+standalone_native_sections.read_other_matches_once reuses the SAME verified
+owner gateway only after independent global history permission. Overview
+permission is neither sufficient nor necessary for that history gate. The
+normal native reply must match method, nonce, whole request (including page),
+and every returned match_player.player_uid, before pure projection.
+
+Live other1822797559 first-page read returned43 rows, each with a valid server
+match_uid; all mode2, seasons18/19. One native request200 bytes/reply114261 bytes,
+one record/no other RPCs. LOGIN2396/gateway39295 received; passive token850846/
+19records; social14+909 sent/5447 received. All43 basic timestamps/results/KDA
+passed. Example latest row season19, duration993s,win,23/5/36 K/D/A. Raw response
+was not saved and helper is terminal. First-page only;43<50 is not proof of
+complete lifetime history or has_more=false.
+
+Current5500 const_match.EGameModeType:110 establishes Ranking2. Entry1712
+refresh_rank_dan_level:488 reads selected player's dynamic_fields new_level,
+level,new_score,add_score,rankscore_info.fixed_battle_count. Exact displayed
+delta is floor(new_score)-floor(new_score-add_score), not rounded add_score or
+a difference between unrelated namecard snapshots. Optional rank data cannot
+erase valid basic matches. Initial live projection verified0 deltas; this is
+unavailable/unverified, not evidence every change was zero or absent remotely.
+
+Static follow-up:1838 s_get_history_matches:893 offsets776-818 directly uses
+match_player.get('dynamic_fields',{}). It does NOT JSON-decode that field.
+Entry1689 add_record_list:296 passes the same nonfalsey match_player dictionary
+to Data.set_data:387, which assigns self_data without transformation;1712
+reads that nested dictionary. Source explicitly int-converts new_level; an
+int-only optional projection gate was stricter than the source. Bounded
+source-compatible numeric normalization and fixed aggregate kind diagnostics
+resolved this in a subsequent live comparison. No guessed decoder was added.
+
+Final live match comparison:43 exact-UID rows, ALL43 per-match rank changes
+verified. dynamic_fields and rankscore_info were dicts for43/43; new_level,
+new_score and add_score were floats for43/43. This explains the initial local
+false-negative, not a missing server field. Latest returned win:5545->5560,+15;
+next loss5570->5545,-25; observed delta range-26..19. Old level and placements
+remain null when not separately projected. No named current rank or complete
+rank history is inferred. Native bytes200 sent/114261 received, same43 IDs;
+LOGIN2397/gateway39295 received, token850846/19records, social14+909 sent/5447
+received. Final helper was polled to exit0. No raw responses/tokens saved.
+
+### Current other-player season-rank source (not yet queried)
+
+Entry1838 c_request_rank_data:479 sends xyq-namecard/GetData with EXACT body
+{host:verified_zone_integer,tag:'player',id:'zone_targetUID'}, no fields selector
+and no season filter. Current103/3520 use the same advertised mesh sub2/data0,
+POST/base64 JSON/gzip header and nullable XYQ wrapper fields as own Career.
+Entry1708 overview update_has_permissions_viewing:679 gates rank display by
+CareerOverviewIsVisibleToOther with the selected login_os.
+
+Entry1838 s_request_rank_data:499 JSON-decodes data.rank_game_season then each
+season value. It also reads device_display_username_info, but does not inspect
+returned aid/uid/id/host/tag. Current source establishes request/RPC binding;
+an explicit response identity echo must not be fabricated from historical
+captures. No current GetData response was retrieved in this checkpoint.
+
+Entry5535 get_rank_key:37 is OS*1000000+ranktype*1000+season; ERankGameType.Normal
+is1. Entry5523 confirms PC1/PS2/Xbox4. The own branch makes no namecard request;
+it copies synchronized PlayerAvatar.RankGame.ranks via current4672
+get_opened_season_ranks:444. Current season comes from synchronized
+RankGame.open_games/mc_rank.season_id, not largest historical key or local date.
+History can be projected without a 'current season' claim. Current4672 also
+normalizes top-rank points (season1 special case) before peak tie-breaking;
+the old provider's raw max_rank_score comparison is not exact parity there.
+Portable synchronized own-rank/current-season acquisition and current
+table-derived labels remain unverified.
+
+### Normal saved-account renewal preparation (not live verified)
+
+Current public components bundle
+https://pay.neteasegames.com/static/js/components.a8985237.js
+(1942982 bytes, SHA2561c2ff68f72d9ed9284daee35568eccc80f4804a9d31c6b0ff83acdfcc945a769f)
+defines saved-account Continue in module68577 offset64123; module24159
+offset122963/123073 calls ntExtendFunc('loginWithHistory',account), then ntLogin.
+Plain reload does not unconditionally refresh/login. Steam login may first
+logout; do not clear storage or log out just to manufacture a diagnostic.
+
+Current Mpay SDK
+https://sdk-os.mpsdk.easebar.com/gzip_static/h5/v1.4.2/js/mpay-h5-sdk-oversea.umd.js
+(SHA256062cb07880c31960f10ef5f5931b0c13e01825b0f426f952d8c56b1e61e4fa35)
+loginWithHistory offset809699 defines POST
+https://sdk-os.mpsdk.easebar.com/api/users/login/v2/sdk_token (single slash).
+Form user_id=saved userId, token=saved refreshToken, platform=clientPlatform,
+scene=login for Steam. apiPost796451/getRequiredKey799650 merge game_id502,
+cp=w,cv3.1.5,configured gv1.0.0,ci=Mpay UDID,configured app_channel/lang,
+device_id=Mpay DEVICE_ID,debug_mode0,optional package_name. Encoding uses
+qs.stringify(...,{encode:false}), form-urlencoded;charset=utf-8. Do not use
+SAUTHsessionid or assume Mpay ci/device equal wrapper udid/deviceid.
+
+Exact code0 maps user.login_token to access and user.token to renewal candidate.
+Returned SDK identity/device context is copied from request, not a server echo.
+Wrapper module.894e7ca6.js offset147658 calls __createSauthJson and rebuilds
+client_login_sn from wrapper state/time/randomness. Mpay only reorders its
+saved-account list; wrapper replaces its separate per-game refresh token.
+Neither proves token rotation/reuse semantics or autonomous renewal.
+
+Read-only known-key browser evidence: mpay_h5sdk_os_account_list_map['502'] has
+one Steam/p account matching current per-game sdkuid, saved refresh present;
+UDID/DEVICE_ID/UNISDK_UDID are JSON nonempty strings. Saved userId/deviceId are
+numbers; SAUTHsdkuid/deviceid strings; saved deviceId is a safe integer and
+decimal-equivalent to SAUTHdeviceid. No values exported, storage changed,
+sdk_token request or renewed SAUTH AUTH test yet. web_sdk_history_login.py
+implements the separate prepared candidate path, with26 synthetic tests, no
+automatic fallback, repr-hidden transient inputs/tokens and no invented SAUTH
+serial. Nonzero service code is reported as history_service_rejected with a
+bounded numeric application_code, not a claim that reauthentication is needed.
+
+Checkpoint verification:787 Python tests passed in101.666s after all changes;
+38 focused match/native/handoff tests passed in0.116s. Previous full774 passed
+in91.007s before final match normalization/cases. Existing mocked vault warnings
+and temporary-file ResourceWarnings remain non-failing. No real vault/capture/
+Wi-Fi mutation or production provider/deployment occurred. All helpers/tests
+are terminal. Hosted integration, season ranks and autonomous renewal remain
+required; this is not goal completion.
+
 ## September 12, 2026: capture-free social token and renewal investigation
 
 This checkpoint supersedes the unresolved token-index and initial-delivery
