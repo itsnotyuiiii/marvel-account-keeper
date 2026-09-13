@@ -1,12 +1,14 @@
 # Owner season-history acquisition: current source evidence
 
-Static-contract and candidate-implementation checkpoint, September 12, 2026
-(local time). The attachment and wire-format paths below have been traced, and
-a bounded named-property decoder, owner-rank observer and startup hooks are
-implemented with synthetic tests. **Actual live owner-history delivery remains
-unverified.** This document does not report the result of a pending live attempt
-or establish a deployed owner-history feature. Unsupported input remains an
-unavailable section, not evidence of an invalid player UID.
+Static-contract and live-integration checkpoint, September 12, 2026 (local
+time). The bounded named-property decoder, incremental-sync path parser,
+owner-rank observer and startup hooks are implemented. **The final live owner
+profile bundle now verifies all 12 returned season rows alongside identity,
+Career, current panel and first-page matches.** The Traceroute interruption was
+resolved through a narrowly bounded native attribute-assignment proof, not a
+guessed field name or wildcard exemption. This is not hosted acceptance or
+proof of complete history. Unsupported input remains an unavailable section,
+not evidence of an invalid player UID.
 
 ## Provenance and scope
 
@@ -160,7 +162,7 @@ to arrays, 7 to maps, 8 to an unsupported branch and 9 to extensions. The
 differs for arrays/maps/binary. Its documentation is corroboration for the
 general MessagePack model, not proof of this game's exact implementation.
 
-## Supported candidate rank-row representation
+## Supported rank-row representation
 
 `RankGameProp.ranks` is declared `P_MAP`. Current entry 5535, `get_rank_key`,
 computes `login_os * 1000000 + rank_game_type * 1000 + rank_game_id` without
@@ -172,7 +174,8 @@ then reads `rank_data.get('level', 0)` at 294-336. Entry 4672,
 
 Native `P_MAP` conversion at `0x55a0870` recursively handles ordinary
 MessagePack map pairs. These facts support an **integer-key/plain-row-map
-candidate**, but do not prove the actual live serialized representation:
+representation**, which has now passed live initialization for 12 selected
+owner season rows. This does not establish every possible delivery shape:
 extension row objects are possible in the native converter and their class
 contract has not been established. The implementation accepts only integer
 keys and plain selected row maps; it neither converts string keys nor guesses
@@ -181,8 +184,9 @@ an extension-row classname from the separate namecard JSON route.
 The projection selects PC OS `1`, normal rank type `1`, and seasons `1..999`.
 Each selected row must contain a `rank_game_id` consistent with its key plus
 bounded `level`, `rank_score`, `max_level` and `max_rank_score` values.
-Presence of `rank_game_id` in native delivery is not yet proven; missing fields
-produce a fixed unavailable diagnostic rather than fabricated defaults.
+The successful 12-row initialization passed these required-field checks;
+missing fields in another delivery still produce a fixed unavailable
+diagnostic rather than fabricated defaults.
 Optional match/win counts, timestamps and placements remain unknown if invalid.
 Missing `ranks` is unavailable; an explicitly returned empty map can represent
 an available empty history. Neither implies an "unranked" label.
@@ -207,6 +211,12 @@ completeness are not claimed.
   owner; its positive zone must match the caller's verified session zone.
   It emits only fixed metadata and bounded projected season rows, never raw
   initialization data, credentials or fabricated AUTH/request-bound flags.
+- `game_property_sync.py` implements bounded `decode_sync_paths`, accepting
+  one complete array of type-two extensions containing reviewed operations
+  1/2/3 and ordinary path/value entries. It preserves only paths, operations
+  and wire value kinds, not values or raw payloads. The observer separately
+  applies the exact unrelated-path classifier described below. It does not
+  execute a native mutation engine or update rank rows from incremental data.
 - `game_career_probe.StartupEvent` and optional `on_startup` hooks deliver
   validated create/destroy/property/reset envelopes before consumption.
   Current main 65534 creation/sync descriptors are in entry 5115
@@ -224,51 +234,100 @@ completeness are not claimed.
   unambiguous create can recover ordinary failures, but hard observer bounds
   remain terminal. Observer failures affect only owner history, not otherwise
   verified identity, Career or matches.
-- Synthetic codec, observer and hook tests cover named/numeric fields,
+- Synthetic codec, sync-parser, observer and hook tests cover named/numeric fields,
   nested extensions, identity/zone and season binding, malformed framing,
-  duplicates, bounds, lifecycle invalidation, redaction and failure isolation.
-  These tests are not evidence that a live server sends the supported shape.
+  duplicates, bounds, no-ops, exact unrelated paths, alias/deeper-path rejection,
+  mixed relevant/unrelated updates, lifecycle invalidation, redaction and
+  failure isolation. These tests are separate from the live checkpoint below.
 
-The explicit server-package allowlist now contains 27 runtime modules and
-32 files, including the candidate codec and observer. This is source allowlist
+The explicit server-package allowlist now contains 28 runtime modules and
+33 files, including the codec, sync parser and observer. This is source allowlist
 metadata, not confirmation of a newly built ZIP, archive hash or deployment.
 
 ## Remaining acceptance
 
-1. Observe a normal authorized owner connection and establish whether live
-   startup uses supported named properties, exact classes, integer rank keys
-   and plain rows with the required fields. Unsupported numeric keys or
-   extension rows need their own source-backed contract before any expansion.
-2. Verify the narrow owner-history projection and its PC/normal-season
-   selection in the full profile bundle. Check fixed diagnostics and preserve
-   working sections if history remains unavailable or an incremental update
-   invalidates it. Do not retain or publish raw initialization data.
-3. Complete regression and isolated package checks for the integrated candidate,
-   rebuild any distributable explicitly, and verify the actual web/HTTP result.
-   Static evidence and synthetic acceptance alone are not hosted acceptance.
-4. Keep hosting selection, authorized persistent server bootstrap and hosted
-   restart/renewal verification separate. No laptop-independent deployment or
-   long-term credential-renewal success is established by this decoder work.
+1. Complete isolated package verification and explicitly rebuild the selected
+   distributable; the focused regression run passed 430 tests in 2.590 seconds.
+   Package checking was still in progress at this checkpoint. Source allowlist
+   counts and a live Python bundle do not establish a deployed package.
+2. Verify the actual website/HTTPS response and owner-history presentation
+   against the live backend. The successful ephemeral full-bundle result below
+   is not hosted end-to-end acceptance. Preserve working sections when a future
+   unsupported update invalidates history; do not save raw initialization or
+   sync data. Numeric property keys and extension rows still require their own
+   contracts before expanding support.
+3. Complete hosting selection, authorized persistent server bootstrap and
+   hosted restart/renewal verification separately. No laptop-independent
+   deployment or long-term credential-renewal success is established by this
+   decoder milestone. Rank labels, an overall peak and full-history
+   completeness also remain unverified.
 
 ## Live integration checkpoint
 
-Two ephemeral normal saved-Steam SDK exchanges and owner gateway/profile
-reads completed from the authorized official-store session. Exact owner
-1370598422 AUTH, mesh identity, Career, current panel and first-page matches
-remained verified. The second preserved only fixed initialization diagnostics:
-`initialization_outcome=owner_rank_snapshot_projected`, followed by final
-`owner_rank_property_update_unhandled`. This proves initial named property
-decoding/projection succeeded on that connection, not that final history is
-available. An empty map also passes projection; initial row count/season rows
-were not retained for this diagnostic, so nonempty live history is not yet
-established. No raw init/sync or credentials were saved.
+Ephemeral normal saved-Steam SDK exchanges and owner gateway/profile reads
+completed from the authorized official-store session. Exact owner 1370598422
+AUTH, mesh identity, Career, current panel and first-page matches remained
+verified. Earlier diagnostics established successful initial projection but
+did not record a row count. Later bounded diagnostics established
+`initialization_outcome=owner_rank_snapshot_projected` with
+`initialization_season_count=12`; nonempty initial owner history is therefore
+established for the observed connection. At that intermediate stage, final
+`ranks_verified` was false with `owner_rank_property_update_unhandled` and an
+unreviewed sync path; it was not yet a successful final history result.
 
-Next is the source-backed incremental property-sync path. Only a proven
-unrelated named change may leave the snapshot intact; rank, identity and
-unknown updates must invalidate it until their semantics are implemented.
-Final live season selection and hosted acceptance remain required.
+All four previously unknown root fingerprints match exact literal `VAR_NAME`
+declarations in the pinned public archive, not class-name suffix guesses:
 
-## Incremental-sync entry and framing located
+| Literal root | Component entry | SHA256 of UTF-8 root |
+| --- | --- | --- |
+| `Traceroute` | 5410 | `5e472e4e9f3637790f5ddb9fc1cb702e5990d1e07f07621ca5f0af5a219c9f0e` |
+| `Career` | 5371 | `732863fa5c6125a201487a2f52e400a2f29a8c9548512fc84c35da1aef3d710d` |
+| `League` | 5416 | `7f06ea4f0831f4f9f155579f51dda6e70086bc1627ac2bea0d42f34bbcf3f8f3` |
+| `Status` | 5386 | `920e413c7d411b61ef3e8c63b1cb6ad058d5f95f8b481dbafe60248387d8c355` |
+
+The exact-field classifier accepted the observed Career, League and Status
+updates. That left only the then-unreviewed `Traceroute` shape, path length two,
+operation one, map value, with second-segment SHA256
+`090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237`.
+It differs from declared `rules`
+(`6c621d1a05138a7888d37d9269a9da8e2e11e4aced2f6cfd24b05ab1b9e61bb0`).
+The fingerprint matched no exact string/name, including nested constants, in
+Traceroute 5410, Component 8859 or Property 8866. Traceroute has no constructor,
+attribute writes or dynamic property-registration call. Its eight declarations
+are `enable`, `rules`, `enable_traceroute`, `enable_sdk_traceroute`,
+`enable_sdk_mtr`, `traceroute_count`, `sdk_traceroute_count`, `sdk_mtr_count`.
+
+The field's name and business meaning remain unidentified. Native MRO and
+data-descriptor review instead proved that this exact terminal write affects
+only the separate Traceroute instance dictionary, not owner identity or ranks.
+The implemented fingerprint-specific exemption is described below.
+
+After that proof and its synthetic regressions, terminal helper session 74037
+completed a fresh live full-bundle read with `outcome=profile_bundle_verified`.
+Owner authentication, game login, exact-UID identity, Career, current season,
+matches and final ranks were verified. The projected result was:
+
+- UID `1370598422`, IGN `ゆいᶻᶻᶻ`, PC, account level 32.
+- Final owner season rows: `20, 19, 17, 16, 15, 14, 13, 12, 5, 4, 3, 2`
+  (12 rows), retained through the complete observed startup/panel window.
+- Independently verified panel current season 20, numeric rank level 14 and
+  raw server `rank_score` 4350; the greatest history key was not used as a
+  substitute for the panel's authoritative current season.
+- Career: 273 matches, 149 wins, 4,165 kills, 1,609 deaths and 3,145 assists.
+- First match page: 50 matches. This does not establish all-match completeness.
+
+Per-season numeric peak fields are not a verified overall peak. Rank labels
+and full-history completeness remain unknown; the missing season numbers are
+not interpreted as evidence of inactivity or missing-account errors. This
+success establishes the observed owner full-bundle path, not universal player
+coverage or hosted website acceptance.
+
+Only bounded projected profile data and fixed diagnostics were retained; no
+raw init/sync bytes or values, credentials or renewal secrets were saved. There
+were no browser-storage, game or Wi-Fi changes. Hosting, persistent bootstrap,
+site integration and hosted restart/renewal remain separate acceptance work.
+
+## Incremental-sync entry, framing and implemented parser
 
 Read-only follow-up on the same pinned native image located the exact receive
 path, without retaining or decoding live sync bytes:
@@ -297,15 +356,111 @@ path, without retaining or decoding live sync bytes:
 - Traversal at `0x55aaeb0` uses dictionary keys or existing object attributes
   (`0x55aaf85-0x55aafb2`), then recurses. Numeric object segments resolve
   registered field descriptors; their meaning cannot be inferred by order.
-- Dictionary mutation helper `0x559fe90` sets keys for operations1/3 and
-  deletes for2. Object helper `0x559ff80` has a distinct operation7 branch;
-  its complete semantics remain unreviewed.
+- Dictionary mutation helper `0x559fe90` sets keys for operations 1/3 and
+  deletes for 2. Object helper `0x559ff80` instead converts the incoming value
+  and calls generic `setattr` on the terminal object attribute for non-7
+  operations, including 1/2/3 (`0x559ffc2-0x559ffcd`, through `0x931f3b0`).
+  **Operation 2 is not universally a deletion.** Its separate operation-7
+  branch remains unsupported by the parser/classifier.
+- Every ordinary entry consumes a value, including operation 2
+  (`0x55ac662-0x55ac6cf`). A valid operation-only extension is a no-op
+  (`0x55abf1c -> 0x55acbcd -> 0x55acbec`); empty outer arrays are also accepted.
 
-No sync classifier or mutation engine is implemented by this trace. A narrow
-next implementation can require complete bounded array/ext2/operation/path
-framing and reject packed paths, numeric/empty roots, unknown operations,
-malformed/trailing data and changes to `uid`, `zone_id` or `RankGame`.
-Before retaining a snapshot, establish that any allowed named root is genuinely
-unrelated, including aliases and whole-object changes; a merely different
-string is not enough. Unknown or rank-relevant changes must still invalidate.
-An actual received update has not yet been classified or live-verified.
+The implemented parser requires complete bounded array/ext2/operation/path
+framing and shared byte/node/depth budgets. It rejects packed-index paths,
+unknown operations, invalid/empty path segments and malformed/trailing data;
+numeric segments are retained as numbers, never resolved by guessed indices.
+The observer rejects unreviewed numeric roots. Wire `value_kind` describes a
+MessagePack tag, not a native sentinel conversion or independently proven
+source type. No update values or raw payloads escape the parser.
+
+The native outer helper is weaker about trailing bytes and an extension
+handler's failure, and can skip other extension types. The standalone parser
+deliberately requires whole-message validity: a later failed entry invalidates
+the entire result, never yielding a partial path list or treating failed
+decoding as a nil value. This stricter acceptance is intentional, not a claim
+that the native receiver enforces identical framing.
+
+### Exact unrelated-path classifier and alias limits
+
+The observer does not replay mutations. It retains the initial snapshot only
+when every parsed change belongs to the following reviewed unrelated shapes;
+rank/identity changes and unreviewed paths invalidate it. A later unrelated
+update or no-op cannot restore invalidated history.
+
+- Exactly one scalar root segment: `name` with a string, or `score`, `level`,
+  `exp`, `create_time` with an integer. These are the five selected BasicProp
+  declarations in entry 5041, not all root fields or arbitrary deeper paths.
+- Exactly two segments, matching a declared field and the wire kind below:
+
+| Component | Exact field(s) | Required value kind |
+| --- | --- | --- |
+| `Traceroute` | `rules` | map |
+| `Career` | `show_shape_id`, `level_reward_record`, `frequently_used_hero_info`, `my_device_display_username_info`, `cur_multi_people_lobby_hero`, `hero_title_dict` | map |
+| `League` | `league_regions` | array |
+| `League` | `view_league_id`, `championship_logo`, `watched_MRC_video_season`, `league_ban_info` | string |
+| `Status` | `state_infos` | map |
+
+These field declarations are in component entries 5410, 5371, 5416 and 5386
+respectively. For operations 1/2/3, the exact depth-two terminal object-attribute
+branch replaces only that field with the newly converted value; it does not
+traverse or mutate an alias of the previous field container. Native map and
+array conversion allocate new `PyDict`/`PyList` containers at `0x55a0882` and
+`0x55a0823`, with recursive element conversion at `0x55a0849`.
+
+The sole deeper exemption is exactly
+`("Status", "state_infos", direct_key)`: operations 1/3 require a map value;
+operation 2 requires a null wire value. The final string/integer segment is a
+dictionary key, not an object attribute or a traversal into a stored value.
+Entry 5386 declares `Property('state_infos', P_MAP)` at 30-40 and has no
+constructor or assignment alias for it. Base Component initialization only
+sets `entity`; native GameObject construction creates separate object/descriptor
+state without shared field values. Missing initial map attributes use fresh
+map conversion and then `setattr` (`0x559e6e2`), so `state_infos` starts as its
+own dictionary. This matters because the existing-map initialization branch
+does clear/reuse the old dict (`0x559d20f`); a generic P_MAP declaration alone
+would not prove independence.
+
+There is **no whole-component prefix rule**. Entry 8859 `Component.__init__:33`
+stores a weak reference to the owner in `self.entity`; a path through that
+back-reference could reach `uid`, `zone_id` or `RankGame`. Component replacement,
+arbitrary suffixes, `__dict__`, deeper map-value traversal and wrong wire kinds
+remain unreviewed. Apart from the single structural case below, unknown fields
+still invalidate the snapshot. Root labels used only for diagnostics do not
+grant an exemption.
+
+### Fingerprint-specific Traceroute terminal-map exemption
+
+The additional implemented case requires all of the following: exact root
+`Traceroute`, exactly two path segments, a string terminal field with SHA256
+`090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237`, operation
+1, and a map wire value. The field must not be `entity` or start with `__`.
+Operations 2/3, deeper paths, another root or fingerprint, non-map values and
+extension values remain rejected. The hash identifies only the exact observed
+field; it does not assign a guessed public name, content schema or meaning.
+
+The reviewed inheritance chain is
+`TracerouteComponent -> Component -> GameObject -> object`. No data descriptor
+in that MRO matches the field fingerprint. The terminal assignment path
+`0x559ff80 -> 0x931f3b0 -> 0x9320c50` therefore writes to the separate
+Traceroute instance dictionary after fresh map conversion at `0x55a0882`,
+rather than invoking a matching descriptor setter or traversing an existing
+map/back-reference. This proves the location and independence of this bounded
+write without identifying the auxiliary field's business meaning. It does
+not permit arbitrary Traceroute fields or component prefixes.
+
+Exact native anchors: MRO lookup `0x93a3bb0` is called at `0x9320cce`;
+the descriptor's `tp_descr_set` is checked at `0x9320ce2-0x9320cf7`.
+Absent a matching data descriptor, the fallback targets only the instance's
+managed dictionary at `0x9320d24` or ordinary dictionary slot at `0x9320d86`.
+The Python Traceroute/Component classes define no matching descriptor or
+`__setattr__`. Native GameObject type `0xf36fb20` has no members and its
+getset table `0xf370070` contains only `eid`, whose hash differs. Type readiness
+`0x93a9975-0x93a9995` supplies the base `object` type `0xf694420`; its empty
+member table and sole dunder getset also cannot match. Thus this finite chain
+does not route the exact field through a property registry or another object.
+
+Synthetic observer tests cover the matching fingerprint case, wrong root/hash,
+operation, depth and value kind, and explicit `entity`/dunder exclusions. The
+successful final live bundle above verifies that this narrow classifier keeps
+the 12 observed owner rows through the actual update window.

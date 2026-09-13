@@ -265,13 +265,32 @@ class StandaloneProfileBundleTest(unittest.TestCase):
         result, _, _ = self.run_case(uid=OWNER, panel_events=[owner_create()])
         self.assertTrue(result["ranks_verified"])
 
+    def test_owner_reviewed_scalar_update_preserves_available_history(self):
+        payload = b"".join(msgpack.packb(value, use_bin_type=True) for value in (1, 1, "level", 32))
+        event = StartupEvent("property", 98765, data=msgpack.packb([msgpack.ExtType(2, payload)]))
+        result, _, _ = self.run_case(uid=OWNER, startup_events=[owner_create()], panel_events=[event])
+        self.assertEqual(result["outcome"], "profile_bundle_verified")
+        self.assertTrue(result["ranks_verified"])
+        self.assertEqual(result["ranks"]["data"]["seasons"][0]["points"], 4350.5)
+
+    def test_owner_unknown_update_only_exposes_fixed_diagnostics(self):
+        payload = b"".join(msgpack.packb(value, use_bin_type=True) for value in (
+            1, 1, "PRIVATE_UNKNOWN_ROOT", "PRIVATE_VALUE"))
+        event = StartupEvent("property", 98765, data=msgpack.packb([msgpack.ExtType(2, payload)]))
+        result, _, _ = self.run_case(uid=OWNER, startup_events=[owner_create()], panel_events=[event])
+        self.assertFalse(result["ranks_verified"])
+        self.assertEqual(result["ranks"]["sync_roots"], ["unreviewed_root"])
+        self.assertEqual(result["ranks"]["sync_outcome"], "owner_rank_sync_root_unreviewed")
+        self.assertEqual(result["ranks"]["initialization_season_count"], 1)
+
     def test_owner_lifecycle_after_snapshot_cannot_leave_stale_ranks(self):
         for event in (StartupEvent("destroy", 98765), StartupEvent("property", 98765, data=b"PRIVATE_SYNC"),
                       StartupEvent("reset"), StartupEvent("create", 98765, "OtherClass", b"PRIVATE")):
             with self.subTest(event=event):
                 result, _, _ = self.run_case(uid=OWNER, startup_events=[owner_create()], panel_events=[event])
                 self.assertFalse(result["ranks_verified"])
-                self.assertEqual(result["ranks"]["initialization_outcome"], "owner_rank_snapshot_projected")
+                self.assertEqual(result["ranks"]["initialization_outcome"],
+                    "owner_rank_entity_recreated" if event.kind == "create" else "owner_rank_snapshot_projected")
                 self.assertTrue(result["career_verified"])
                 self.assertTrue(result["matches_verified"])
                 self.assertIsNotNone(result["current_rank"])

@@ -3,7 +3,55 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: owner startup decoding works; incremental sync remains
+## Latest continuation — September 12: owner season history live-verified
+
+The final owner-history gap is fixed for the observed normal startup/panel
+window. New game_property_sync.py parses complete bounded array/ext2 updates,
+retaining only path/operation/value-kind metadata. OwnerRankObserver accepts
+only exact source-backed unrelated paths; rank/UID/zone changes, unknown paths,
+malformed data and lifecycle changes still invalidate history. It never
+replays guessed rank mutations or restores previously invalidated rows.
+
+The final auxiliary Traceroute update is an exact root/depth2/op1/map/field-hash
+exception. Native finite-MRO/setattr analysis proves a separate instance-dict
+write without a matching data descriptor; it does not establish the field's
+name/meaning or permit a whole-component prefix. Detailed source pins, RVAs,
+strict parser framing and alias evidence are in OWNER_RANK_RESEARCH.md.
+Same-EID recreation and foreign-UID diagnostics now preserve generation scope.
+
+LIVE helper74037 exited normally with profile_bundle_verified and all identity,
+Career,ranks,matches verification flags true for owner1370598422. Final12season
+rows:20,19,17,16,15,14,13,12,5,4,3,2. IGNゆいᶻᶻᶻ/PC/level32;
+Career273/149/4165/1609/3145;separatecurrentpanel20/level14/raw4350;
+50first-page matches with50verified rank deltas. Rank labels, overall peak and
+lifetime completeness remain unverified. The same live projected result passed
+the Python web-envelope validator and actual website parsePlayer/round-trip
+offline. This is not hosted HTTP acceptance.
+
+430 focused tests passed; separate34package/portability/CLI/runtime cases:
+32passed,2Windowsactual-symlink privilege skips. Independent narrow review
+passed152tests and mixed-rank-update/stale/trailing-data checks. New source ZIP:
+C:/CodexRepos/marvel-account-keeper/dist/marvel-native-api-3848703-owner-ranks-verified-20260912.zip
+133926bytes,33files,28runtime modules,SHA256
+da5caea3875c2d4f533fba212bc53d11b25482e9964224382a210eb7cbdd748d.
+Its isolated extracted offline Windows check passed. Previous ZIPs untouched.
+No interpreter,wheels,credentials,session database or hosted service included.
+
+No game launch, capture, process-memory read, network-setting change, purchase
+or browser-storage change occurred. All one-use helpers are terminal. Official
+store browser tab5 remains available for the owner's authorized session; no
+credential values or raw init/sync values were persisted.
+
+NEXT: approved independent host and explicit real-session bootstrap destination,
+then persist/renew/restart acceptance there and connect the private website's
+native provider. No host has been selected/purchased; do not save credentials
+or expose a service without the required approval. Website remains version5
+in official-store identity mode. Punishment research remains limited as
+documented in PUNISHMENT_RESEARCH.md; no public UID-linked feed was established.
+Goal remains ACTIVE/incomplete. This checkpoint is concrete PROGRESS, not a
+repeated external-state impasse and not laptop-independent deployment success.
+
+## Earlier continuation — September 12: owner startup decoding works; incremental sync remains
 
 The owner-only startup reader is now integrated into standalone_profile_bundle.
 New game_property_codec.py parses the source-confirmed standard MessagePack

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import math
+import re
 import time
 
 from cryptography.hazmat.primitives import serialization
@@ -23,7 +24,8 @@ from game_rank_panel_probe import ERROR_CODES as PANEL_ERRORS, read_rank_panel_o
 from game_social_token_probe import run_social_token_once
 from game_property_codec import ERROR_CODES as PROPERTY_ERRORS
 from game_transport_probe import PublicConfiguration, PARAMETER_SHA256, PUBLIC_KEY_SHA256
-from owner_rank_snapshot import OUTCOMES as OWNER_RANK_OUTCOMES, OwnerRankObserver
+from owner_rank_snapshot import (OUTCOMES as OWNER_RANK_OUTCOMES, SYNC_OUTCOMES,
+                                 DIAGNOSTIC_ROOTS, OwnerRankObserver)
 from portable_social_runtime import PARAMETER_SHA256 as SOCIAL_PARAMETER_SHA256
 from standalone_career_query import ERROR_CODES as CAREER_ERRORS
 from standalone_match_query import ERROR_CODES as MATCH_ERRORS
@@ -266,6 +268,40 @@ def _owner_ranks(raw, target_uid):
         initial_decode = raw.get("initialization_decode_outcome")
         if type(initial_decode) is str and initial_decode in PROPERTY_ERRORS:
             result["initialization_decode_outcome"] = initial_decode
+        initial_count = _integer(raw.get("initialization_season_count"), 0, 1000)
+        if initial_count is not None:
+            result["initialization_season_count"] = initial_count
+        sync_code = raw.get("sync_outcome")
+        if type(sync_code) is str and sync_code in SYNC_OUTCOMES:
+            result["sync_outcome"] = sync_code
+        roots = raw.get("sync_roots")
+        if type(roots) is list and len(roots) <= len(DIAGNOSTIC_ROOTS) + 1:
+            result["sync_roots"] = sorted({root for root in roots
+                if type(root) is str and root in DIAGNOSTIC_ROOTS | {"unreviewed_root"}})
+        for key in ("sync_records", "unrelated_sync_records"):
+            count = _integer(raw.get(key), 0, 256)
+            if count is not None:
+                result[key] = count
+        shapes = raw.get("sync_root_shapes")
+        if type(shapes) is list and len(shapes) <= 16:
+            safe_shapes = []
+            for shape in shapes:
+                if type(shape) is not dict:
+                    continue
+                kind, digest, index = shape.get("kind"), shape.get("sha256"), shape.get("index")
+                field_digest = shape.get("field_sha256")
+                if (kind not in ("str", "int") or type(kind) is not str
+                        or kind == "str" and (type(digest) is not str or re.fullmatch(r"[a-f0-9]{64}", digest) is None or index is not None)
+                        or kind == "int" and (digest is not None or index is not None and _integer(index, 0, 65535) is None)
+                        or field_digest is not None and (type(field_digest) is not str or re.fullmatch(r"[a-f0-9]{64}", field_digest) is None)
+                        or _integer(shape.get("segments"), 1, 32) is None
+                        or _integer(shape.get("operation"), 1, 3) is None
+                        or type(shape.get("value_kind")) is not str
+                        or shape["value_kind"] not in {"null", "bool", "int", "float", "str", "bytes", "array", "map", "extension"}):
+                    continue
+                safe_shapes.append({key: shape.get(key) for key in
+                    ("kind", "sha256", "index", "field_sha256", "segments", "operation", "value_kind")})
+            result["sync_root_shapes"] = safe_shapes
         return result
     return _rank_data(raw, target_uid)
 

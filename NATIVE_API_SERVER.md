@@ -42,7 +42,7 @@ From the trusted development checkout, create a new ZIP at an explicit path:
 python -B scripts/package-native-api.py --output /existing/output/native-api-3848703.zip
 ```
 
-The packager includes an explicit 30-file runtime allowlist: 25 shared Python
+The packager includes an explicit 33-file runtime allowlist: 28 shared Python
 modules, the serving CLI, pinned requirements, this guide and both current
 public manifests. Some shared wire modules retain historical `_probe` names;
 their file-analysis entry points are not used by the service. Game archives,
@@ -101,8 +101,14 @@ NetEase envelope accepted by the website's `parsePlayer` adapter. The UID is
 validated exactly; output contains only projected identity/display statistics,
 not credentials, raw packets, callback objects or upstream diagnostic text.
 
-Each section independently respects visibility. Missing owner season history
-remains unavailable. Matches are at most the first 50, not lifetime history.
+Each section independently respects visibility. Owner season history is read
+from exact-UID/zone-bound startup properties, with a bounded parser preserving
+it only across source-reviewed unrelated updates. Rank/identity changes,
+unknown updates and lifecycle invalidation make that section unavailable;
+other independently verified sections survive. The September 12 authorized
+live owner bundle returned 12 season rows through the complete startup/panel
+window. This is not a completeness, hosted or long-term renewal claim.
+Matches are at most the first 50, not lifetime history.
 Numeric rank levels and raw server scores are not guessed English rank names
 or normalized points. A match without a stable ID retains its basic statistics
 but does not expose an unbindable rank change. Zero optional rank-update times

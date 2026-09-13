@@ -36,6 +36,7 @@ RUNTIME_MODULES = (
     "game_config_probe.py",
     "game_login_probe.py",
     "game_property_codec.py",
+    "game_property_sync.py",
     "game_rank_panel_probe.py",
     "game_social_token_probe.py",
     "game_transport_probe.py",

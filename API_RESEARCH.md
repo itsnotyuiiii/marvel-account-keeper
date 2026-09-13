@@ -1,6 +1,55 @@
 # Live API research checkpoints
 
-## September 12, 2026: owner startup decoder integrated; live update gap isolated
+## September 12, 2026: final owner season history live-verified
+
+Added game_property_sync.py: complete bounded MessagePack array/ext2 parsing,
+reviewed operations1/2/3, ordinary literal/integer path segments and value-kind
+projection only. Packed indices, malformed/trailing data and unknown operations
+are rejected. OwnerRankObserver preserves its initial rows only when EVERY
+change is source-proven unrelated. Rank/identity changes, unknown paths and
+lifecycle invalidation still discard history without dropping other sections.
+Initialization metadata is generation-bound, including failed same-EID creates.
+
+Exact scalar/component fields and the one observed Traceroute auxiliary field
+are now source-bound. The latter is an exact hash/root/depth2/op1/plain-map
+case, not a guessed field name or a component-prefix exception. Finite MRO
+and native generic-attribute assignment establish its separate instance-dict
+write; incoming maps are newly constructed. See OWNER_RANK_RESEARCH.md for
+the public-build pins, source entries, RVAs, alias analysis and limitations.
+
+LIVE terminal helper74037: normal authorized official-store saved-Steam SDK
+exchange, owner1370598422 AUTH/gateway and complete profile startup/panel window
+returned profile_bundle_verified, including ranks_verified=true. Final twelve
+PC/normal season rows are20,19,17,16,15,14,13,12,5,4,3,2. IGNゆいᶻᶻᶻ,level32;
+Career273matches/149wins/4165kills/1609deaths/3145assists; separately verified
+panelcurrent20,level14,raw4350;50first-page matches and50verified rank deltas.
+Numeric per-season peak fields do not establish rank labels, an overall peak
+or complete lifetime history. No raw init/sync values or credentials were
+saved; browser storage was not modified. No game launch/capture/memory read,
+Wi-Fi change or purchase occurred.
+
+The same live projected bundle passed project_profile_envelope (schemaVersion2,
+23244UTF-8bytes), then the actual website parsePlayer adapter and its public
+round-trip:12rank rows,50matches/50rank changes, correct IGN/Career/current
+numeric rank. This was an offline contract check, not a deployed HTTP request.
+
+430 focused regression tests passed in2.590s. Packaging/portability/CLI/runtime:
+34ran in27.431s,32passed,2actual Windows symlink-privilege skips. Independent
+review passed152focusedtests and mixed-update/stale/trailing-data checks.
+New ignored source archive (previous ZIPs untouched):
+dist/marvel-native-api-3848703-owner-ranks-verified-20260912.zip
+133926bytes/33files (28runtime modules),SHA256
+da5caea3875c2d4f533fba212bc53d11b25482e9964224382a210eb7cbdd748d.
+Its isolated extracted offline Windows check passed,network_attempted=false.
+No interpreter,wheels,real session database or credentials are included.
+
+The hosted goal remains incomplete: approved independent hosting, explicitly
+authorized durable bootstrap, real restart/renewal and website backend wiring
+are still pending. Website source/configuration/deployment remain unchanged
+in official-store identity mode. No punishment feed or authoritative public
+UID-linked punishment history was established by this work.
+
+## Earlier September 12, 2026: owner startup decoder integrated; live update gap isolated
 
 Implemented game_property_codec.py, owner_rank_snapshot.py and optional typed
 startup hooks spanning pre-token startup and the same gateway's rank-panel

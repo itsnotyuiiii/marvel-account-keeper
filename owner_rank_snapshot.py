@@ -17,10 +17,12 @@ Unsupported selected-entity updates invalidate rank data, never other readers.
 No raw initialization bytes, property maps or remote errors leave this module.
 """
 
+import hashlib
 import math
 
 import game_career_probe as career
 import game_property_codec as codec
+import game_property_sync as sync
 from standalone_rank_query import MAX_COUNT, MAX_POINTS, MAX_SEASONS
 
 
@@ -32,6 +34,48 @@ MAX_BYTES = 4 * 1024 * 1024
 MAX_OWNER_ENTITIES = 16
 MAX_ROW_FIELDS = 512
 REQUIRED_ROW_FIELDS = ("rank_game_id", "level", "rank_score", "max_level", "max_rank_score")
+# Current5041 BasicProp declarations/tupleconst7 at242: independent P_INT
+# score/level/exp/create_time and P_STR name. ONLY one-segment scalar changes
+# are unrelated. Components' .entity backrefs can alias the owner (current8859
+# __init__:33), so no component-prefix or arbitrary-suffix exemption exists.
+UNRELATED_SCALAR_ROOTS = {
+    "name": frozenset({"str"}), "score": frozenset({"int"}),
+    "level": frozenset({"int"}), "exp": frozenset({"int"}),
+    "create_time": frozenset({"int"}),
+}
+# Exact declarations, not component-prefix exemptions: current5410/5371/5416/
+# 5386. Depth2 terminal attribute operations1/2/3 replace only that field
+# (559ff80 ->931f3b0); incoming maps/arrays are freshly converted, never applied
+# to an alias of the old field. No arbitrary suffix is followed.
+UNRELATED_COMPONENT_FIELDS = {
+    ("Traceroute", "rules"): "map",
+    **{("Career", name): "map" for name in (
+        "show_shape_id", "level_reward_record", "frequently_used_hero_info",
+        "my_device_display_username_info", "cur_multi_people_lobby_hero", "hero_title_dict")},
+    ("League", "league_regions"): "array",
+    **{("League", name): "str" for name in (
+        "view_league_id", "championship_logo", "watched_MRC_video_season", "league_ban_info")},
+    ("Status", "state_infos"): "map",
+}
+UNRELATED_COMPONENT_ROOTS = frozenset(root for root, _ in UNRELATED_COMPONENT_FIELDS)
+# Observed auxiliary field is not declared by this client. Its exact hash has
+# no data-descriptor match in Traceroute -> Component -> GameObject -> object.
+# For ONLY depth2/op1/plain-map, 559ff80 ->931f3b0 ->9320c50 writes the separate
+# Traceroute instance dict; 55a0882 constructs a fresh value. This proves the
+# write location, NOT the field's name/content/meaning. No wildcard exemption.
+TRACEROUTE_AUX_MAP_FIELD_SHA256 = "090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237"
+DIAGNOSTIC_ROOTS = frozenset({"uid", "name", "score", "level", "exp", "zone_id",
+    "client_red_infos", "create_time", "RankGame", "upvote_exp", "max_continue_win_count",
+    "cur_continue_win_count", "active_badges", "cur_show_badges", "career_settings",
+    "gameserver", "env_token", "force_tcp_fallback", "force_tcp_fallback_by_udid",
+    "Traceroute", "Career", "League", "Status"})
+# Remaining diagnostic-only names: current5041 CareerProp tupleconst9 at522
+# and current3781 direct Property declarations60-154. None grants an exemption.
+SYNC_OUTCOMES = sync.ERROR_CODES | frozenset({
+    "owner_rank_sync_not_observed", "owner_rank_sync_unrelated",
+    "owner_rank_sync_relevant", "owner_rank_sync_root_unreviewed",
+    "owner_rank_sync_path_unreviewed", "owner_rank_sync_value_unreviewed",
+})
 OUTCOMES = frozenset({
     "owner_rank_inputs_invalid", "owner_rank_not_observed", "owner_rank_snapshot_projected",
     "owner_rank_snapshot_invalid", "owner_rank_properties_unavailable", "owner_rank_fields_missing",
@@ -47,6 +91,34 @@ class OwnerRankError(ValueError):
     def __init__(self, outcome):
         self.outcome = outcome if type(outcome) is str and outcome in OUTCOMES else "owner_rank_snapshot_invalid"
         super().__init__(self.outcome)
+
+
+def _sync_relevance(change):
+    root, path = change.path[0], change.path
+    if root in ("uid", "zone_id", "RankGame"):
+        return "owner_rank_sync_relevant"
+    if root in UNRELATED_SCALAR_ROOTS:
+        if len(path) != 1:
+            return "owner_rank_sync_path_unreviewed"
+        return None if change.value_kind in UNRELATED_SCALAR_ROOTS[root] else "owner_rank_sync_value_unreviewed"
+    if root not in UNRELATED_COMPONENT_ROOTS:
+        return "owner_rank_sync_root_unreviewed"
+    field = tuple(path[:2])
+    if (root == "Traceroute" and len(path) == 2 and type(path[1]) is str
+            and not path[1].startswith("__") and path[1] != "entity"
+            and hashlib.sha256(path[1].encode("utf-8")).hexdigest() == TRACEROUTE_AUX_MAP_FIELD_SHA256):
+        if change.operation != 1:
+            return "owner_rank_sync_path_unreviewed"
+        return None if change.value_kind == "map" else "owner_rank_sync_value_unreviewed"
+    if len(path) == 2 and field in UNRELATED_COMPONENT_FIELDS:
+        return None if change.value_kind == UNRELATED_COMPONENT_FIELDS[field] else "owner_rank_sync_value_unreviewed"
+    if len(path) == 3 and field == ("Status", "state_infos"):
+        # Current5386 has no assignment/constructor alias for state_infos;
+        # normal initialization allocates its own PyDict55a0882. At depth3,
+        # 559fe90 changes only the terminal key, not an attribute/back-reference.
+        expected = "null" if change.operation == 2 else "map"
+        return None if change.value_kind == expected else "owner_rank_sync_value_unreviewed"
+    return "owner_rank_sync_path_unreviewed"
 
 
 def _positive(value, bound):
@@ -138,6 +210,13 @@ class OwnerRankObserver:
         self._decode_outcome = None
         self._initialization_outcome = "owner_rank_not_observed"
         self._initialization_decode_outcome = None
+        self._initialization_season_count = None
+        self._initialization_attempt = 0
+        self._sync_outcome = "owner_rank_sync_not_observed"
+        self._sync_roots = set()
+        self._sync_root_shapes = set()
+        self._sync_records = 0
+        self._unrelated_sync_records = 0
         self._events = 0
         self._bytes = 0
         self._bounded = False
@@ -155,6 +234,7 @@ class OwnerRankObserver:
         """Accept a trusted reader's typed lifecycle event, never raw reports."""
         if self._bounded:
             return
+        previous_attempt = self._initialization_attempt
         try:
             self._observe(event)
         except codec.PropertyCodecError as error:
@@ -166,13 +246,60 @@ class OwnerRankObserver:
             # Never stringify them or let this optional observer abort readers.
             self._invalidate("owner_rank_snapshot_invalid")
         finally:
-            if (type(event) is career.StartupEvent and event.kind == "create"
-                    and event.classname == ROOT_CLASS):
+            if self._initialization_attempt != previous_attempt:
                 # Diagnostic only: preserve the initial decoder result when a
                 # later unsupported sync invalidates it. This never preserves
                 # the old rows or promotes them back into available history.
                 self._initialization_outcome = self._outcome
                 self._initialization_decode_outcome = self._decode_outcome
+                self._initialization_season_count = (len(self._rows) if self._rows is not None
+                    and self._outcome == "owner_rank_snapshot_projected" else None)
+
+    def _begin_owner_initialization(self):
+        self._initialization_attempt += 1
+        self._sync_outcome = "owner_rank_sync_not_observed"
+        self._sync_roots.clear()
+        self._sync_root_shapes.clear()
+        self._sync_records = self._unrelated_sync_records = 0
+
+    def _observe_sync(self, data):
+        self._sync_records += 1
+        try:
+            changes = sync.decode_sync_paths(data).entries
+        except sync.PropertySyncError as error:
+            code = error.code if type(error.code) is str and error.code in sync.ERROR_CODES else "property_sync_input_invalid"
+            self._sync_outcome = code
+            self._invalidate("owner_rank_property_update_unhandled")
+            return
+        failure = None
+        for change in changes:
+            root = change.path[0]
+            known = root if type(root) is str and root in DIAGNOSTIC_ROOTS else "unreviewed_root"
+            self._sync_roots.add(known)
+            relevance = _sync_relevance(change)
+            if relevance is not None and len(self._sync_root_shapes) < 16:
+                # Schema diagnostics only: never expose an arbitrary received
+                # string/path or a large numeric identifier. Match the digest
+                # against public declarations during research, not by guessing.
+                kind = "str" if type(root) is str else "int"
+                digest = hashlib.sha256(root.encode("utf-8")).hexdigest() if kind == "str" else None
+                index = root if kind == "int" and 0 <= root <= 65535 else None
+                field_digest = (hashlib.sha256(change.path[1].encode("utf-8")).hexdigest()
+                    if len(change.path) > 1 and type(change.path[1]) is str else None)
+                self._sync_root_shapes.add((kind, digest, index, field_digest, len(change.path),
+                                           change.operation, change.value_kind))
+            if relevance == "owner_rank_sync_relevant":
+                failure = relevance
+            else:
+                failure = failure or relevance
+        if failure is not None:
+            self._sync_outcome = failure
+            self._invalidate("owner_rank_property_update_unhandled")
+            return
+        self._unrelated_sync_records += 1
+        if self._sync_outcome in ("owner_rank_sync_not_observed", "owner_rank_sync_unrelated"):
+            self._sync_outcome = "owner_rank_sync_unrelated"
+        # A later unrelated change does not restore an invalidated snapshot.
 
     def _observe(self, event):
         if (type(event) is not career.StartupEvent or type(event.kind) is not str
@@ -204,11 +331,14 @@ class OwnerRankObserver:
             return
         if event.kind == "property":
             if eid in self._owner_entities or eid == self._active_eid:
-                self._invalidate("owner_rank_property_update_unhandled")
+                self._observe_sync(event.data)
             return
         # Every same-EID creation begins a new generation, even when its new
         # class/identity/properties are unsupported. Do this BEFORE decoding.
+        initialization_started = False
         if eid in self._owner_entities or eid == self._active_eid:
+            self._begin_owner_initialization()
+            initialization_started = True
             self._owner_entities.discard(eid)
             if eid == self._active_eid:
                 self._active_eid = None
@@ -226,6 +356,8 @@ class OwnerRankObserver:
             if self._rows is None:
                 self._invalidate("owner_rank_owner_mismatch")
             return
+        if not initialization_started:
+            self._begin_owner_initialization()
         self._owner_entities.add(eid)
         if len(self._owner_entities) > MAX_OWNER_ENTITIES:
             self._bounded = True
@@ -255,6 +387,15 @@ class OwnerRankObserver:
         result = {"outcome": self._outcome, "decode_outcome": self._decode_outcome,
                   "initialization_outcome": self._initialization_outcome,
                   "initialization_decode_outcome": self._initialization_decode_outcome,
+                  "initialization_season_count": self._initialization_season_count,
+                  "sync_outcome": self._sync_outcome, "sync_roots": sorted(self._sync_roots),
+                  "sync_root_shapes": [{"kind": kind, "sha256": digest, "index": index,
+                      "field_sha256": field_digest, "segments": segments,
+                      "operation": operation, "value_kind": value_kind}
+                      for kind, digest, index, field_digest, segments, operation, value_kind in sorted(
+                          self._sync_root_shapes, key=repr)],
+                  "sync_records": self._sync_records,
+                  "unrelated_sync_records": self._unrelated_sync_records,
                   "uid": str(self._owner_uid), "platform": "pc", "owner_identity_verified": False,
                   "ranks_verified": False, "rank_data_present": False, "seasons": [], "season_count": 0,
                   "current_season": None, "current": None, "peak": None,

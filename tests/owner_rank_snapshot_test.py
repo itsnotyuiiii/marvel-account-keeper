@@ -1,6 +1,7 @@
 """Synthetic MessagePack property streams only; no game, account or network."""
 
 import copy
+import hashlib
 from dataclasses import replace
 import json
 from types import SimpleNamespace
@@ -51,6 +52,14 @@ def create(data=None, *, eid=EID, classname="GameServiceAvatar"):
 
 def event(kind, eid=EID, *, data=None):
     return career.StartupEvent(kind, eid, None, data)
+
+
+def sync_message(*entries, operation=1):
+    values = [operation]
+    for path, value in entries:
+        values.extend((len(path), *path, value))
+    return msgpack.packb([msgpack.ExtType(2, b"".join(
+        msgpack.packb(value, use_bin_type=True) for value in values))], use_bin_type=True)
 
 
 class OwnerRankSnapshotTest(unittest.TestCase):
@@ -394,6 +403,166 @@ class OwnerRankSnapshotTest(unittest.TestCase):
             self.assertEqual(result["seasons"], [])
             if expected == "owner_rank_properties_unavailable":
                 self.assertEqual(result["initialization_decode_outcome"], "property_numeric_key_unreviewed")
+
+    def test_reviewed_exact_scalar_changes_preserve_history(self):
+        for operation in (1, 2, 3):
+            self.observer = owner_rank.OwnerRankObserver(OWNER)
+            before = self.project()
+            self.observer.observe(event("property", data=sync_message(
+                (("name",), "fixture-private-name"), (("level",), 32),
+                (("score",), 1), (("exp",), 400), (("create_time",), 1700000000), operation=operation)))
+            result = self.snapshot()
+            self.assertTrue(result["ranks_verified"])
+            self.assertEqual(result["seasons"], before["seasons"])
+            self.assertEqual(result["sync_outcome"], "owner_rank_sync_unrelated")
+            self.assertEqual(result["unrelated_sync_records"], 1)
+
+    def test_tracked_unknown_alias_nested_or_wrong_kind_changes_invalidate(self):
+        for path, value, code in (
+            (("RankGame", "ranks", 1001019), {}, "owner_rank_sync_relevant"),
+            (("uid",), OWNER, "owner_rank_sync_relevant"),
+            (("zone_id",), ZONE, "owner_rank_sync_relevant"),
+            (("fixture-private-unknown-root",), 1, "owner_rank_sync_root_unreviewed"),
+            ((1,), 1, "owner_rank_sync_root_unreviewed"),
+            (("client_red_infos", "entity", "RankGame"), 1, "owner_rank_sync_root_unreviewed"),
+            (("level", "entity", "uid"), 1, "owner_rank_sync_path_unreviewed"),
+            (("score",), {"fixture-private-value": 1}, "owner_rank_sync_value_unreviewed"),
+            (("name",), msgpack.ExtType(0, b"fixture-private-ext"), "owner_rank_sync_value_unreviewed")):
+            self.observer = owner_rank.OwnerRankObserver(OWNER)
+            self.project()
+            self.observer.observe(event("property", data=sync_message((path, value))))
+            result = self.snapshot()
+            self.assertFalse(result["ranks_verified"])
+            self.assertEqual(result["sync_outcome"], code)
+            self.assertEqual(result["initialization_season_count"], 2)
+
+    def test_declared_component_field_replacements_leave_rank_history_intact(self):
+        examples = {"map": {"fixture-private-key": "fixture-private-value"},
+                    "array": ["fixture-private-value"], "str": "fixture-private-value"}
+        for operation in (1, 2, 3):
+            for path, kind in owner_rank.UNRELATED_COMPONENT_FIELDS.items():
+                self.observer = owner_rank.OwnerRankObserver(OWNER)
+                before = self.project()["seasons"]
+                self.observer.observe(event("property", data=sync_message((path, examples[kind]), operation=operation)))
+                result = self.snapshot()
+                self.assertTrue(result["ranks_verified"], path)
+                self.assertEqual(result["seasons"], before)
+                self.assertEqual(result["sync_root_shapes"], [])
+
+    def test_status_direct_dictionary_entries_not_arbitrary_component_paths(self):
+        for operation, value in ((1, {"fixture-private": True}), (3, {"fixture-private": False}), (2, None)):
+            self.observer = owner_rank.OwnerRankObserver(OWNER)
+            self.project()
+            self.observer.observe(event("property", data=sync_message(
+                (("Status", "state_infos", "fixture-private-key"), value), operation=operation)))
+            self.assertTrue(self.snapshot()["ranks_verified"])
+        for path, value in (
+            (("Status", "entity", "uid"), OWNER),
+            (("Career", "entity", "RankGame"), {}),
+            (("Traceroute", "rules", "entity", "RankGame"), {}),
+            (("Status", "state_infos", "key", "entity", "uid"), OWNER),
+            (("League", "__dict__"), {}), (("Status",), {}),
+            (("Career", "not_declared"), {}), (("League", "league_regions"), {}),
+            (("Status", "state_infos", "key"), msgpack.ExtType(0, b"fixture-private-ext"))):
+            self.observer = owner_rank.OwnerRankObserver(OWNER)
+            self.project()
+            self.observer.observe(event("property", data=sync_message((path, value))))
+            self.assertFalse(self.snapshot()["ranks_verified"], path)
+
+    def test_mixed_unrelated_and_rank_update_is_all_or_nothing(self):
+        self.project()
+        self.observer.observe(event("property", data=sync_message(
+            (("Traceroute", "rules"), {}), (("RankGame", "ranks"), {}),
+            (("League", "league_regions"), []))))
+        self.assertFalse(self.snapshot()["ranks_verified"])
+        self.assertEqual(self.snapshot()["sync_outcome"], "owner_rank_sync_relevant")
+
+    def test_auxiliary_traceroute_exception_is_exact_not_unknown_field_wildcard(self):
+        name = "fixture_auxiliary_field"
+        digest = hashlib.sha256(name.encode()).hexdigest()
+        with patch.object(owner_rank, "TRACEROUTE_AUX_MAP_FIELD_SHA256", digest):
+            self.project()
+            self.observer.observe(event("property", data=sync_message((("Traceroute", name), {"fixture-private": 1}))))
+            self.assertTrue(self.snapshot()["ranks_verified"])
+            for path, operation, value in (
+                (("Traceroute", "another_unknown"), 1, {}), (("League", name), 1, {}),
+                (("Traceroute", name, "entity"), 1, {}), (("Traceroute", name), 2, {}),
+                (("Traceroute", name), 3, {}), (("Traceroute", name), 1, []),
+                (("Traceroute", name), 1, msgpack.ExtType(0, b"fixture-private-ext"))):
+                self.observer = owner_rank.OwnerRankObserver(OWNER)
+                self.project()
+                self.observer.observe(event("property", data=sync_message((path, value), operation=operation)))
+                self.assertFalse(self.snapshot()["ranks_verified"], path)
+        for name in ("entity", "__dict__", "__class__"):
+            self.observer = owner_rank.OwnerRankObserver(OWNER)
+            with patch.object(owner_rank, "TRACEROUTE_AUX_MAP_FIELD_SHA256", hashlib.sha256(name.encode()).hexdigest()):
+                self.project()
+                self.observer.observe(event("property", data=sync_message((("Traceroute", name), {}))))
+                self.assertFalse(self.snapshot()["ranks_verified"])
+
+    def test_empty_sync_noop_and_unrelated_updates_cannot_restore_stale_rows(self):
+        self.project()
+        for data in (msgpack.packb([]), sync_message()):
+            self.observer.observe(event("property", data=data))
+            self.assertTrue(self.snapshot()["ranks_verified"])
+        self.observer.observe(event("property", data=sync_message((("RankGame",), {}))))
+        self.observer.observe(event("property", data=sync_message((("level",), 33))))
+        result = self.snapshot()
+        self.assertFalse(result["ranks_verified"])
+        self.assertEqual(result["sync_outcome"], "owner_rank_sync_relevant")
+
+    def test_complete_sync_is_checked_before_retaining_snapshot(self):
+        self.project()
+        data = sync_message((("level",), 32)) + b"fixture-private-trailing"
+        self.observer.observe(event("property", data=data))
+        self.assertFalse(self.snapshot()["ranks_verified"])
+        self.assertEqual(self.snapshot()["unrelated_sync_records"], 0)
+
+    def test_unreviewed_roots_are_hashed_or_bounded_indices_without_path_values(self):
+        self.project()
+        private_root = "fixture-private-root"
+        self.observer.observe(event("property", data=sync_message(
+            ((private_root, "fixture-private-field"), "fixture-private-value"),
+            ((1 << 40,), 1), ((123,), 2))))
+        result = self.snapshot()
+        self.assertNotIn(str(1 << 40), json.dumps(result))
+        self.assertEqual(result["sync_roots"], ["unreviewed_root"])
+        shapes = result["sync_root_shapes"]
+        string_shape = next(shape for shape in shapes if shape["kind"] == "str")
+        self.assertEqual(string_shape, {"kind": "str", "sha256": hashlib.sha256(private_root.encode()).hexdigest(),
+            "index": None, "field_sha256": hashlib.sha256(b"fixture-private-field").hexdigest(),
+            "segments": 2, "operation": 1, "value_kind": "str"})
+        self.assertEqual({shape["index"] for shape in shapes if shape["kind"] == "int"}, {None, 123})
+
+    def test_full_create_resets_prior_generation_diagnostics(self):
+        self.project()
+        self.observer.observe(event("property", data=sync_message((("fixture-private-root",), 1))))
+        self.assertTrue(self.snapshot()["sync_root_shapes"])
+        result = self.project()
+        self.assertTrue(result["ranks_verified"])
+        self.assertEqual(result["sync_roots"], [])
+        self.assertEqual(result["sync_root_shapes"], [])
+        self.assertEqual(result["sync_outcome"], "owner_rank_sync_not_observed")
+
+    def test_failed_recreate_starts_clean_diagnostic_generation(self):
+        self.project()
+        self.observer.observe(event("property", data=sync_message((("fixture-private-root",), 1))))
+        self.observer.observe(create(b"fixture-private-malformed"))
+        result = self.snapshot()
+        self.assertEqual(result["initialization_outcome"], "owner_rank_properties_unavailable")
+        self.assertEqual(result["sync_roots"], [])
+        self.assertEqual(result["sync_root_shapes"], [])
+        self.assertEqual(result["sync_records"], 0)
+        self.assertEqual(result["unrelated_sync_records"], 0)
+        self.assertEqual(result["sync_outcome"], "owner_rank_sync_not_observed")
+
+    def test_other_uid_create_does_not_overwrite_owner_initialization_evidence(self):
+        self.project()
+        self.observer.observe(event("property", data=sync_message((("fixture-private-root",), 1))))
+        self.observer.observe(create(root(uid=OWNER + 1), eid=EID + 1))
+        result = self.snapshot()
+        self.assertEqual(result["initialization_outcome"], "owner_rank_snapshot_projected")
+        self.assertEqual(result["initialization_season_count"], 2)
 
     def test_snapshot_is_independent_and_raw_records_are_not_retained(self):
         result = self.project()
