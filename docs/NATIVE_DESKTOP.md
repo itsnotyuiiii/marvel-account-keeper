@@ -133,3 +133,14 @@ previous executable. Failed output/work directories remain available for
 inspection. The final JSON reports the new executable path, size and SHA-256.
 Building alone is not proof of successful interactive desktop sign-in or live
 profile acceptance; those require separate checks of the resulting executable.
+
+The packaged build can also be checked without a real vault or login:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -B "scripts\check-native-desktop.py" "<full path to the new EXE>"
+```
+
+This headless smoke uses a disposable synthetic vault and localhost HTTP only,
+checks initialization/status/Add/assets/update-channel behavior, and shuts down
+only its fixture-bound child. It never signs in or refreshes NetEase. A headless
+instance correctly reports that native sign-in is unavailable.

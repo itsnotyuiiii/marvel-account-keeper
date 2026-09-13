@@ -38,7 +38,8 @@ def validate_inputs(root):
 
 def commit_id(root):
     try:
-        result = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=root,
+        result = subprocess.run(["git", "-c", "safe.directory=" + root.as_posix(),
+            "rev-parse", "--short=12", "HEAD"], cwd=root,
             capture_output=True, text=True, check=True, timeout=5)
         value = result.stdout.strip()
         if re.fullmatch(r"[0-9a-f]{12}", value):

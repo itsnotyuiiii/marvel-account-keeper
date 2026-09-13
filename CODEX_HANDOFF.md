@@ -41,8 +41,32 @@ have additional focused regression checks. New isolated builder
 bundles only the two3848703 public manifests. See `docs/NATIVE_DESKTOP.md`.
 Saved pending candidates have explicit recovery; an interrupted exchange with
 unknown rotation cannot currently be replaced through the desktop UI and is
-clearly labeled rather than replayed. Next: package/launch verification, then
-the user's normal sign-in with encrypted saving selected and a live UID refresh.
+clearly labeled rather than replayed.
+
+PACKAGED and checked: source `f9b0be8`; executable
+`dist/native-20260913-031028-9c8fd8f2e100443da2cca3d1e46cdbf2/MarvelRivalsAccountTracker-Native.exe`,
+23683318bytes, SHA256
+`d4bb19ae8551abce48b34e4fc4b852f371cc788eb82e6752b550223eb7911e41`.
+The embedded version uses `local-native-dev` because Git ownership blocked the
+builder's revision read; the builder now uses command-scoped safe.directory for
+future builds. Runtime app code is the committed f9b0be8 version.
+Archive checks found all required native modules, exactly the two pinned public
+manifests, and no vault/session/capture assets. Packaged HTTP smoke passed all6
+checks in a separate synthetic vault: initialization, native status, disabled
+standard update, UID Add's correct not-connected result and bundled assets;
+fixture-bound graceful shutdown passed and its temporary fixture was removed.
+Actual pywebview native window also rendered correctly in a separate empty
+fixture; it was shut down normally without touching the original running app.
+
+Copied the EXE and README to the new folder
+`C:/Users/kylep/OneDrive/Desktop/Marvel Tracker - Native Preview 2026-09-12`;
+copy hash matched. Existing desktop release and real vault were untouched.
+Final focused regression suite153passed and UI17passed after lifecycle/channel
+edits. No real NetEase call/session persistence happened this turn.
+Next: close the old tracker, open the new desktop preview, unlock the real
+vault, select encrypted saving and complete the normal official-store login.
+Then verify a live owner and other-player UID refresh and saved-session reopen.
+Do not claim live WebView2 Steam sign-in/persistence/restart acceptance yet.
 
 ## Earlier continuation — September 12: deployment awaiting host/credential destination
 
