@@ -3,7 +3,52 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: owner season history live-verified
+## Latest continuation — September 12: managed-host bind and process-exit recovery checked
+
+Previous goal turn was PROGRESS: committed3ba565e and live-verified final owner
+rank history. This turn prepares the real hosted end state without purchasing
+infrastructure or saving genuine credentials. scripts/serve-native-api.py now
+accepts serving-only --bind-host127.0.0.1(default) or0.0.0.0(explicit managed
+HTTPS-proxy opt-in). Existing --port remains explicit; HOST/PORT environment
+variables never override defaults. Bootstrap/recovery/check reject this bind
+option. The listening report matches the selected host; required private bearer,
+key and listener-close/worker-drain/unlock order remain unchanged. No actual
+nonloopback listener was started.
+
+New tests/standalone_session_process_test.py uses isolated real Python children,
+synthetic credentials and a child socket audit guard. Forced process exit at
+candidate_pending/verifying, uncertain refresh_in_flight and before actual
+SQLite CAS COMMIT verifies interprocess lock exclusion/release, transaction
+rollback, fresh-process candidate recovery without repeating SDK exchange and
+subsequent use of the latest saved refresh token. Uncertain exchange remains
+unreplayable. This is Windows forced-exit behavior, not graceful Linux signals,
+power-loss guarantees or real hosted renewal.
+
+Main verified118related CLI/HTTP/session/runtime/portability/package tests:
+116passed,2actual Windows symlink-privilege skips in28.824s. The5new process
+tests separately passed in3.249s. No Docker/Podman command is available and WSL
+reports not installed; Linux acceptance was not simulated or claimed.
+
+NATIVE_API_SERVER.md now records proxy/health-check/persistent-disk/egress/drain
+requirements and removes the superseded owner-history gap. Official Render
+docs confirm0.0.0.0 binding and runtime-only disk/bootstrap considerations;
+this is a reviewed candidate, not a selected or purchased provider.
+New ignored source ZIP (all older artifacts untouched):
+C:/CodexRepos/marvel-account-keeper/dist/marvel-native-api-3848703-host-bind-20260912.zip
+135439bytes,33files,SHA256
+b63b2980eb259f4cf81fe6986392a4a63c565b3d02c1a7985c5f6e3aca9bbec1.
+Isolated extracted offline Windows check passed,network_attempted=false.
+No interpreter,wheels,tests,genuine credentials or session database packaged.
+
+Remaining action still requires an approved independent host and explicit real
+credential/bootstrap destination. The user was asked whether an existing VPS
+is available and has not answered. Do not purchase hosting, store real tokens,
+open laptop ports or silently use a local bridge. Then verify Linux/runtime,
+live cloud-IP/bootstrap/restart/renewal, and connect the private website's native
+provider. No new NetEase call, website change, publication or network-setting
+change occurred. Goal remains ACTIVE/incomplete; this was concrete PROGRESS.
+
+## Earlier continuation — September 12: owner season history live-verified
 
 The final owner-history gap is fixed for the observed normal startup/panel
 window. New game_property_sync.py parses complete bounded array/ext2 updates,

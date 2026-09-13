@@ -90,9 +90,52 @@ do not show or generate credentials. The first command requires the encryption
 key. Normal serving also requires the API bearer token. The database stores
 AES-GCM encrypted credentials; only owner UID and revision metadata are plain.
 
-The listener binds only `127.0.0.1`. Put the approved host's HTTPS reverse proxy
-in front of it. Forward `Authorization` privately and avoid logging its value.
-Do not point the website at the user's laptop or create a laptop tunnel.
+The listener defaults to `127.0.0.1`. Put the approved host's HTTPS reverse
+proxy in front of it. Forward `Authorization` privately and avoid logging its
+value. Do not point the website at the user's laptop or create a laptop tunnel.
+
+For a managed host whose proxy requires an all-interface listener, serving can
+explicitly use `--bind-host 0.0.0.0` and the host-assigned `--port`. For example,
+Render requires that bind address and recommends its `PORT` value; its proxy
+terminates HTTPS before forwarding to the service. See the official
+[Render port-binding documentation](https://render.com/docs/web-services#port-binding).
+No Render service is selected or configured by this option.
+
+Only `127.0.0.1` and `0.0.0.0` are accepted; the bind option is rejected for
+`--check`, bootstrap and recovery because those commands have no listener.
+`HOST`/`PORT` environment variables never silently override the defaults.
+Pass the assigned port explicitly in the approved host's start command. Both
+bind modes still require the encryption key and private API bearer. Do not
+run the all-interface option on the user's laptop or without the intended
+host's managed proxy/network boundary.
+
+## Host/proxy acceptance checklist
+
+- Use one persistent service process and one replica, with an existing writable
+  database parent directory on persistent storage. SQLite journal and OS lock
+  semantics must work there; an ephemeral filesystem or multiple independently
+  restored copies is not a session store. Keep the same separately stored
+  encryption key after restart.
+- Permit direct outbound HTTPS for normal SDK/public-list operations and native
+  TCP to the officially returned LOGIN/gateway/Social endpoints. The reviewed
+  clients do not use environment HTTP proxies; an HTTP-only egress proxy is not
+  equivalent to the required TCP connectivity. Verify cloud-IP acceptance live.
+- Preserve `Authorization`, the exact request path and lookup query, JSON error
+  bodies, `lookupId` and `Retry-After`. Do not replace native `503` pending replies
+  with a proxy error page. Allow more than the service's 15-second HTTP wait so
+  the browser receives the pending job reference instead of a proxy timeout.
+- `/health` requires the bearer and proves only listener readiness. Use an
+  authenticated HTTP health check or a TCP port probe; an unauthenticated HTTP
+  check will receive `401`. Neither probe proves valid NetEase authentication.
+- Bootstrap only on the actual mounted runtime volume, never in a build image
+  or a separate pre-deploy filesystem. Render's pre-deploy command, for example,
+  cannot access the attached persistent disk; see its official
+  [deploy-command documentation](https://render.com/docs/deploys#pre-deploy-command).
+- Configure termination to let the current worker drain before forced kill.
+  Validate this on the chosen host. Unknown interrupted rotation is handled as
+  uncertain, not repaired by replaying an older refresh token or restoring an
+  older database backup. No zero-downtime/replica assumption applies to this
+  single-owner session service.
 
 ## HTTP contract
 
@@ -178,16 +221,28 @@ Synthetic tests cover the real encrypted SQLite store, fresh-instance restart,
 CAS and exclusive ownership, token ordering, classified failures, HTTP
 singleflight/cache/timeouts/disconnects, exact UID projection and CLI shutdown.
 The portability smoke test blocks desktop and research-only imports. These
-checks ran on Windows; Linux and real terminated-process recovery are not yet
-verified. Previously captured, live-verified owner/other profile bundles pass
+checks ran on Windows; Linux acceptance is not yet verified. Live-verified,
+projected owner/other profile bundles pass
 the new Python envelope and the website's TypeScript parser without new
 NetEase calls or deployed snapshots.
 
+Five additional real-process tests in `tests/standalone_session_process_test.py`
+use only synthetic credentials and block child socket operations. On Windows,
+the parent force-terminates a live child holding the actual owner lock at
+`candidate_pending`, `candidate_verifying`, uncertain `refresh_in_flight`, and
+an uncommitted SQLite CAS. A fresh child can recover the committed candidate
+without another SDK exchange; an uncommitted write rolls back and both locks
+become usable. A later normal lookup uses the latest saved refresh token.
+Uncertain exchange without a saved candidate remains blocked from replay.
+This verifies Windows process-exit recovery, not power-loss durability, graceful
+Linux signals, cloud-volume behavior or real SDK expiry. No genuine credentials
+were persisted by these tests.
+
 Still required: approved independent hosting and real credential bootstrap,
 live server restart/refresh verification, connection to the prepared website,
-hosted multi-UID/visibility checks, and owner season-history investigation.
-The bounded owner startup decoder now works in a live authorized session,
-but a later incremental property update invalidates its snapshot; that section
-remains unavailable pending sync-protocol handling and final live verification.
+hosted multi-UID/visibility checks. The bounded owner startup decoder plus
+reviewed unrelated-sync handling returned 12 verified owner season rows through
+the final live startup/panel window. The same result passed the website parser;
+this establishes the decoder/contract, not production hosting.
 Passing offline tests is not proof of live session expiry/renewal or completion
 of the standalone hosted goal.

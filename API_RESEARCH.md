@@ -1,6 +1,35 @@
 # Live API research checkpoints
 
-## September 12, 2026: final owner season history live-verified
+## September 12, 2026: managed-host preparation and real process recovery
+
+No new live NetEase call. The serving CLI now has an explicit serving-only
+--bind-host choice127.0.0.1(default) or0.0.0.0 for an approved managed HTTPS
+proxy. Required bearer/key and orderly shutdown remain; HOST/PORT environment
+variables do not silently configure listeners. No nonloopback socket was opened.
+Official Render web-service/deploy docs were checked for binding and persistent
+disk bootstrap placement; no host was chosen, purchased or configured.
+
+New5test real-process suite uses synthetic credentials, actual encrypted SQLite
+and interprocess locks, with socket creation blocked in every child. Forced
+Windows termination at committed candidate_pending/verifying, uncertain exchange,
+and a pre-COMMIT CAS is followed by recovery in fresh children. Candidates are
+reverified with zero SDK exchanges; the next normal lookup uses the latest saved
+refresh token. The unfinished transaction rolls back and locks are released.
+Unknown rotation never replays the old token. Main5passed3.249s; related118test
+CLI/HTTP/session/runtime/package group116passed+2symlink skips in28.824s.
+These results do not prove live expiry, graceful Linux handling or cloud-volume
+durability. No Linux runtime was available (Docker/Podman absent,WSL uninstalled).
+
+Updated source archive dist/marvel-native-api-3848703-host-bind-20260912.zip:
+135439bytes,33files,SHA256
+b63b2980eb259f4cf81fe6986392a4a63c565b3d02c1a7985c5f6e3aca9bbec1;
+isolated offline extracted Windows check passed. No older artifact overwritten.
+NATIVE_API_SERVER.md documents the remaining host/proxy acceptance checklist
+and correctly records the now-verified12owner seasons. Independent host choice,
+authorized durable bootstrap, hosted restart/renewal and actual website wiring
+remain pending. Website and punishment-source status are unchanged.
+
+## Earlier September 12, 2026: final owner season history live-verified
 
 Added game_property_sync.py: complete bounded MessagePack array/ext2 parsing,
 reviewed operations1/2/3, ordinary literal/integer path segments and value-kind

@@ -179,9 +179,30 @@ class StandaloneNativeCliTest(unittest.TestCase):
             self.assertIn(b"error:", completed.stderr)
             self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_bind_host_is_an_exact_serving_only_option(self):
+        cases = (("--check", "--bind-host", "0.0.0.0"),
+                 ("--check", "--bind-host", "127.0.0.1"),
+                 ("--database", self.database, "--initialize-from-stdin", "--bind-host", "0.0.0.0"),
+                 ("--database", self.database, "--recover-pending", "--bind-host", "127.0.0.1"))
+        cases += tuple(("--database", self.database, "--bind-host", host)
+                       for host in ("localhost", "::", "192.0.2.1", "https://example.test", ""))
+        for args in cases:
+            with self.subTest(args=args):
+                completed = self.cli(*args, stdin=b"PRIVATE_CLI_INPUT", token="t" * 32)
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(completed.stdout, b"")
+                self.assertIn(b"error:", completed.stderr)
+                self.assertEqual(list(self.root.iterdir()), [])
+
     def test_serve_configuration_requires_valid_private_bearer_before_database_or_listener(self):
         for token in (None, "short", "PRIVATE_CLI_INPUT\n" + "x" * 32):
             completed = self.cli("--database", self.database, token=token)
+            self.report(completed, {"outcome": "native_service_configuration_invalid"})
+            self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_nonloopback_opt_in_still_requires_key_and_private_bearer(self):
+        for key, token in ((None, "t" * 32), (KEY_TEXT, None), (KEY_TEXT, "short")):
+            completed = self.cli("--database", self.database, "--bind-host", "0.0.0.0", key=key, token=token)
             self.report(completed, {"outcome": "native_service_configuration_invalid"})
             self.assertEqual(list(self.root.iterdir()), [])
 
@@ -232,8 +253,10 @@ class NativeCliTerminationTest(unittest.TestCase):
         self.assertEqual(installed, previous)
         self.assertEqual(events, ["install", "install", "drain", "restore", "restore"])
 
-    def test_main_closes_listener_then_drains_worker_before_unlock_and_signal_restore(self):
+    def exercise_serve_binding(self, host_args, expected_host, *, port=12345):
         kinds, previous, installed, events, register = self.signals()
+        port_args = [] if port is None else ["--port", str(port)]
+        expected_port = 8080 if port is None else port
         class Store:
             @contextmanager
             def exclusive_owner(inner):
@@ -250,7 +273,7 @@ class NativeCliTerminationTest(unittest.TestCase):
                     installed[kind](kind, None)
                     installed[kind](kind, None)
         class Server:
-            server_port = 12345
+            server_port = expected_port
             def handle_request(inner):
                 events.append("request")
                 installed[kinds[1]](kinds[1], None)
@@ -262,16 +285,32 @@ class NativeCliTerminationTest(unittest.TestCase):
              patch.object(self.cli, "EncryptedSqliteSessionStore", return_value=Store()), \
              patch("standalone_session_manager.OwnerSessionManager", return_value=object()), \
              patch("standalone_http_api.ProfileLookupService", return_value=Service()), \
-             patch("standalone_http_api.make_http_server", return_value=Server()), \
-             patch.dict(os.environ, {"NETEASE_SESSION_KEY": KEY_TEXT, "NETEASE_API_TOKEN": "t" * 32}), \
+             patch("standalone_http_api.make_http_server", return_value=Server()) as make_server, \
+             patch.dict(os.environ, {"NETEASE_SESSION_KEY": KEY_TEXT, "NETEASE_API_TOKEN": "t" * 32,
+                                     "HOST": "0.0.0.0", "PORT": "9999"}), \
              patch("sys.stdout", output):
-            exit_code = self.cli.main(["--database", "synthetic-not-created.sqlite3", "--port", "12345"])
+            exit_code = self.cli.main(["--database", "synthetic-not-created.sqlite3", *port_args, *host_args])
         self.assertEqual(exit_code, 0)
         self.assertEqual(events, ["install", "install", "lock", "request", "server_close", "drain",
                                   "unlock", "restore", "restore"])
         self.assertEqual(installed, previous)
-        self.assertEqual(json.loads(output.getvalue()), {"outcome": "native_http_listening", "host": "127.0.0.1",
-                                                       "port": 12345, "tls_proxy_required": True})
+        self.assertEqual(make_server.call_count, 1)
+        self.assertEqual(make_server.call_args.kwargs,
+                         {"bearer_token": "t" * 32, "host": expected_host, "port": expected_port})
+        self.assertEqual(json.loads(output.getvalue()), {"outcome": "native_http_listening", "host": expected_host,
+                                                       "port": expected_port, "tls_proxy_required": True})
+
+    def test_main_closes_listener_then_drains_worker_before_unlock_and_signal_restore(self):
+        self.exercise_serve_binding([], "127.0.0.1")
+
+    def test_explicit_managed_proxy_binding_retains_shutdown_order(self):
+        self.exercise_serve_binding(["--bind-host", "0.0.0.0"], "0.0.0.0")
+
+    def test_explicit_loopback_binding_retains_shutdown_order(self):
+        self.exercise_serve_binding(["--bind-host", "127.0.0.1"], "127.0.0.1")
+
+    def test_host_and_port_environment_do_not_override_defaults(self):
+        self.exercise_serve_binding([], "127.0.0.1", port=None)
 
 
 if __name__ == "__main__":

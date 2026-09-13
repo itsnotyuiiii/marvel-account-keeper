@@ -4,7 +4,9 @@
 No credential discovery: the encryption key/API token are supplied by the host
 secret manager; bootstrap consumes one explicitly supplied JSON document on stdin.
 There are no HTTP login/configuration/credential endpoints. Default operation is
-loopback-only behind that host's HTTPS proxy, not a laptop bridge.
+loopback-only behind that host's HTTPS proxy, not a laptop bridge. Managed-host
+proxies can explicitly opt in to an all-interface listener; no environment
+variable silently widens the bind address.
 """
 import argparse
 import base64
@@ -62,13 +64,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Validate packaged runtime inputs only; no keys, persistence or network.")
     parser.add_argument("--database", help="Explicit encrypted session SQLite path; parent directory must already exist.")
-    parser.add_argument("--port", type=int, default=8080, help="Loopback port behind the independent host's HTTPS proxy (default8080).")
+    parser.add_argument("--port", type=int, default=8080, help="Port behind the independent host's HTTPS proxy (default8080).")
+    parser.add_argument("--bind-host", choices=("127.0.0.1", "0.0.0.0"),
+                        help="Serving only: default127.0.0.1; explicitly use0.0.0.0 only behind an approved managed HTTPS proxy.")
     parser.add_argument("--initialize-from-stdin", action="store_true", help="Persist one explicitly authorized SDK bootstrap bundle from stdin, then exit.")
     parser.add_argument("--recover-pending", action="store_true", help="Under exclusive ownership, reverify a persisted candidate without replaying SDK rotation.")
     args = parser.parse_args(argv)
     if args.check:
-        if args.initialize_from_stdin or args.recover_pending or args.database is not None:
-            parser.error("--check cannot access session state")
+        if args.initialize_from_stdin or args.recover_pending or args.database is not None or args.bind_host is not None:
+            parser.error("--check cannot access session state or configure a listener")
         try:
             NativeProfileQuery()
             print(json.dumps({"outcome": "native_public_inputs_verified", "reviewed_build": "3848703", "network_attempted": False, "credentials_read": False}))
@@ -78,6 +82,9 @@ def main(argv=None):
             return 1
     if not args.database or not 1 <= args.port <= 65535 or args.initialize_from_stdin and args.recover_pending:
         parser.error("Choose an explicit database and one valid operation")
+    if args.bind_host is not None and (args.initialize_from_stdin or args.recover_pending):
+        parser.error("--bind-host is only valid when serving")
+    bind_host = args.bind_host or "127.0.0.1"
     # Importing does not read credentials or start networking.
     from standalone_session_manager import OwnerSessionManager
     from standalone_http_api import ProfileLookupService, make_http_server
@@ -110,9 +117,9 @@ def main(argv=None):
                 return 0 if result.owner_authenticated else 1
             service = ProfileLookupService(manager)
             stack.callback(service.close)
-            server = make_http_server(service, bearer_token=token, host="127.0.0.1", port=args.port)
+            server = make_http_server(service, bearer_token=token, host=bind_host, port=args.port)
             stack.callback(server.server_close)
-            print(json.dumps({"outcome": "native_http_listening", "host": "127.0.0.1", "port": server.server_port, "tls_proxy_required": True}), flush=True)
+            print(json.dumps({"outcome": "native_http_listening", "host": bind_host, "port": server.server_port, "tls_proxy_required": True}), flush=True)
             server.timeout = 0.25
             while not stopped.is_set():
                 server.handle_request()
