@@ -3,7 +3,38 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: managed-host bind and process-exit recovery checked
+## Latest continuation — September 12: deployment awaiting host/credential destination
+
+Deployment audit after62d2054: native and website worktrees were clean; website
+HEAD is0bef2d05a2b707de3785c8d1892b911179f4454a. Live read-only Sites inspection
+confirmed projectappgprj_6aa103c328fc8191abc05fb743cfcbe6 remains active,latest
+version5,currentURLhttps://yui-rivals-stats.kbj311.chatgpt.site,access_modecustom.
+Production environment revision0 has entries[]: neither NETEASE_API_ORIGIN nor
+NETEASE_API_TOKEN is configured. Current stats-service.sourceMode returns
+identity mode when both are absent. No external configuration was changed.
+
+The same required user choice has now persisted across three consecutive goal
+turns: (1) final owner-history verification, (2) managed-host/process-recovery
+preparation, (3) this live deployment audit. The first two made real progress;
+their successful checks do not supply hosting authority or a credential-storage
+destination. No host has been selected, no paid service authorized, and no real
+server bootstrap destination approved. There is no live deployment job to wait
+for. Repeating offline tests or login probes cannot establish hosted acceptance.
+
+The goal is being marked BLOCKED, not complete, on this concrete dependency.
+Resume when the user supplies an existing server/VPS or chooses a hosting path.
+Then obtain destination-specific approval for real credential bootstrap, verify
+the runtime and live NetEase access/renewal/restart on that host, and connect the
+website. Do not purchase hosting, persist genuine tokens, open laptop ports,
+use a laptop tunnel or substitute a local-only result. On user resumption, the
+blocked audit starts fresh; preserve the full original objective.
+
+Punishment-source research remains documented in PUNISHMENT_RESEARCH.md:
+current restriction/report-feedback code is not authoritative public history,
+and no punishment feed is enabled. This is a stated limitation, not evidence
+of a clean record or a newly verified moderation source.
+
+## Earlier continuation — September 12: managed-host bind and process-exit recovery checked
 
 Previous goal turn was PROGRESS: committed3ba565e and live-verified final owner
 rank history. This turn prepares the real hosted end state without purchasing
