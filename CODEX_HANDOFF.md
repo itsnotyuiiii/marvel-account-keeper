@@ -3,7 +3,55 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: portable server package and owner-history decoder research
+## Latest continuation — September 12: owner startup decoding works; incremental sync remains
+
+The owner-only startup reader is now integrated into standalone_profile_bundle.
+New game_property_codec.py parses the source-confirmed standard MessagePack
+ext0 class-name/field-pair stream, retaining only selected literal fields.
+owner_rank_snapshot.py binds GameServiceAvatar.uid/zone_id and the nested
+RankGameComponent.ranks field; it rejects numeric property indices and
+unsupported rank map/row representations. It does not run remote code.
+game_career_probe.StartupEvent hooks span read_social_token and the same
+connection's read_rank_panel_once. Observer errors, destroy/reset/recreate or
+unsupported selected-entity updates discard owner history only; other
+independently verified profile sections survive. No owner Social reply flags
+are fabricated, and engineeid is never used as the owner UID.
+
+Two ephemeral authorized official-store -> loopback -> normal saved-Steam
+SDK refresh/AUTH/gateway/profile tests succeeded for owner1370598422.
+The second reports initialization_outcome=owner_rank_snapshot_projected,
+then final owner_rank_property_update_unhandled. Thus the initial named
+property decoder works live, but subsequent main65534/sub120 sync invalidates
+it. No final owner history or initial nonempty season count was verified.
+Fixed initialization diagnostics are retained without retaining stale rows.
+Next research is the actual incremental sync framing/path operations; a
+source-backed unrelated-path classifier may be enough for this bounded read,
+but never ignore rank/identity/unknown changes or silently apply guessed ops.
+
+Fresh result remains IGNゆいᶻᶻᶻ,level32,Career273/149/4165/1609/3145,
+current season20/level14/raw4350,50matches/50rank deltas. Helpers77582 and87785
+are terminal. No raw init/sync, credentials or browser storage changes were
+saved. Current official-store browser tab5 was opened using the existing
+signed-in session; no game launch, capture or memory read occurred.
+
+395 focused tests passed; another34 package/portability/CLI/runtime tests
+completed with32passed and2actual-symlink privilege skips. New package
+allowlist is27modules/32files. See API_RESEARCH.md and
+OWNER_RANK_RESEARCH.md for the source trace and exact limitations.
+
+Built ignored updated source ZIP without overwriting the previous artifact:
+C:/CodexRepos/marvel-account-keeper/dist/marvel-native-api-3848703-owner-startup-20260912.zip
+127968bytes,32files,SHA256
+406a1cf46a12ac0ec64b190a27921361f3afc5ecd07c70fc8b4cd7690ea22acb.
+Its isolated extracted --check passed on Windows with network disabled.
+No interpreter, wheels, real credentials, database or hosted service included.
+
+Hosted goal remains ACTIVE and incomplete. Site deployment is unchanged in
+official-store identity mode. Hosting choice/real persistent bootstrap still
+require user selection; do not purchase a host, save credentials, mark the
+goal complete, or classify ongoing sync research as a repeated impasse.
+
+## Earlier continuation — September 12: portable server package and owner-history decoder research
 
 Added scripts/package-native-api.py and tests/pack_native_api_test.py. The
 explicit 30-file allowlist contains 25 runtime modules, serve-native-api.py,

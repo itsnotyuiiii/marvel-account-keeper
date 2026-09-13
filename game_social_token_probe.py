@@ -43,7 +43,7 @@ def _report():
     }
 
 
-def read_social_token(connection, transport, zone, *, token_rpc_index, on_token=None):
+def read_social_token(connection, transport, zone, *, token_rpc_index, on_token=None, on_startup=None):
     """Read one normal token push, then return fixed metadata only.
 
     Only a trusted local callback can receive the transient parsed session.
@@ -57,7 +57,8 @@ def read_social_token(connection, transport, zone, *, token_rpc_index, on_token=
             or not 0 < zone["zone_id"] < 2**31
             or type(zone.get("role_uid")) is not int
             or zone["role_uid"] != login.EXPECTED_OWN_UID
-            or (on_token is not None and not callable(on_token))):
+            or (on_token is not None and not callable(on_token))
+            or (on_startup is not None and not callable(on_startup))):
         report["outcome"] = "social_token_reader_inputs_invalid"
         return report
     try:
@@ -73,9 +74,15 @@ def read_social_token(connection, transport, zone, *, token_rpc_index, on_token=
             # 8865 assigns it separately from decoded entity properties; entry
             # 8793 dispatches incoming RPCs to this connection's PlayerAvatar.
             # Retain bounded lifecycle parsing, never use eid==uid as an auth
-            # gate or decode the unrelated entity initialization properties.
+            # gate. An optional owner-only observer sees validated envelopes.
             telemetry = {"own_entity_created": False, "startup_record_count": 0}
-            if career.consume_startup_record(record, telemetry):
+            try:
+                startup = career.consume_startup_record(record, telemetry,
+                    **({"on_startup": on_startup} if on_startup is not None else {}))
+            finally:
+                if telemetry.get("startup_observer_failed") is True:
+                    report["startup_observer_failed"] = True
+            if startup:
                 report["startup_record_count"] += 1
                 if record.sub_cmd == 113:
                     report["entity_create_records"] += 1
@@ -141,7 +148,7 @@ def read_social_token(connection, transport, zone, *, token_rpc_index, on_token=
 
 
 def run_social_token_once(sauth, configuration, server, *, client_version, on_token=None,
-                          on_game_connection=None):
+                          on_game_connection=None, on_startup=None):
     """One current-build owner login, then passive token delivery.
 
     Public configuration is an explicit input. The exact RPC index is pinned
@@ -159,6 +166,7 @@ def run_social_token_once(sauth, configuration, server, *, client_version, on_to
     if (type(client_version) is not str
             or client_version != REVIEWED_BUILD
             or (on_token is not None and not callable(on_token))
+            or (on_startup is not None and not callable(on_startup))
             or (on_game_connection is not None
                 and (not callable(on_game_connection) or not callable(on_token)))):
         return web_auth._report("social_token_reader_inputs_invalid")
@@ -172,7 +180,8 @@ def run_social_token_once(sauth, configuration, server, *, client_version, on_to
         if collected is not None:
             raise ValueError("social_token_reader_already_consumed")
         collected = read_social_token(connection, transport, zone,
-                                      token_rpc_index=REVIEWED_TOKEN_RPC_INDEX, on_token=on_token)
+                                      token_rpc_index=REVIEWED_TOKEN_RPC_INDEX, on_token=on_token,
+                                      **({"on_startup": on_startup} if on_startup is not None else {}))
         if (on_game_connection is not None
                 and collected.get("outcome") == "social_token_claims_validated"
                 and all(collected.get(key) is True for key in (

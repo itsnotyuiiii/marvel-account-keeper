@@ -56,18 +56,45 @@ RPC_ENVELOPE = login.fields((1, "rpc_index", 6), (2, "args", 10))
 MAX_REPLY_BYTES = 4 * 1024 * 1024
 
 
-def consume_startup_record(record, report):
+@dataclass(frozen=True, repr=False)
+class StartupEvent:
+    """Transient validated lifecycle data; never include payloads in reports."""
+
+    kind: str
+    entity_id: int | None = None
+    classname: str | None = None
+    data: bytes | None = None
+
+
+def _observe_startup(event, report, on_startup):
+    if on_startup is not None:
+        try:
+            on_startup(event)
+        except Exception:
+            # An optional projection must not break working token or panel
+            # reads. Callers must discard its snapshot after this diagnostic.
+            report["startup_observer_failed"] = True
+
+
+def consume_startup_record(record, report, *, on_startup=None):
     """Read only known data/lifecycle envelopes, never execute server code.
 
     Entry5053: destruction/creation synchronizes the local representation of
     an existing server entity; it does NOT request creation of an account role.
     An ACK is informational. A buffer-reset signal is not silently ignored.
     Initial own-entity data is not a source of other-player card statistics.
+    A trusted optional observer may project owner data without retaining the
+    entity or running its class. Incremental sync is not interpreted here.
     """
+    if on_startup is not None and not callable(on_startup):
+        raise CareerError("startup_observer_inputs_invalid")
     if record.main_cmd != 65534:
         return False
     if record.sub_cmd == 112:
-        login.decode_body(MSG_RESET, record.body)
+        value = login.decode_body(MSG_RESET, record.body)
+        if set(value) != {item.name for item in MSG_RESET}:
+            raise CareerError("startup_entity_shape")
+        _observe_startup(StartupEvent("reset"), report, on_startup)
         raise CareerError("server_sequence_reset_requires_handling")
     schema = {111: MSG_ACK, 113: ENTITY_CREATE, 114: ENTITY_DESTROY, 120: ENTITY_PROP}.get(record.sub_cmd)
     if schema is None:
@@ -82,6 +109,16 @@ def consume_startup_record(record, report):
             if not 0 < len(value["classname"]) <= 128:
                 raise CareerError("startup_entity_class_shape")
             report["own_entity_created"] |= value["eid"] == login.EXPECTED_OWN_UID
+    if record.sub_cmd == 113:
+        event = StartupEvent("create", value["eid"], value["classname"], value["initdata"])
+    elif record.sub_cmd == 114:
+        event = StartupEvent("destroy", value["eid"])
+    elif record.sub_cmd == 120:
+        event = StartupEvent("property", value["entity_id"], data=value["sync_msg"])
+    else:
+        event = None
+    if event is not None:
+        _observe_startup(event, report, on_startup)
     report["startup_record_count"] += 1
     return True
 

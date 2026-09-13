@@ -150,7 +150,8 @@ def _report():
     }
 
 
-def read_rank_panel_once(connection, transport, zone, *, client_version=REVIEWED_BUILD, deadline=None):
+def read_rank_panel_once(connection, transport, zone, *, client_version=REVIEWED_BUILD, deadline=None,
+                         on_startup=None):
     """Send exactly one normal C_OPEN_PANEL(1), then return only fixed/numeric data.
 
     `zone` is the trusted normal AUTH-selected owner context passed by the
@@ -164,7 +165,8 @@ def read_rank_panel_once(connection, transport, zone, *, client_version=REVIEWED
     if (type(client_version) is not str or client_version != REVIEWED_BUILD
             or type(zone) is not dict or type(zone.get("zone_id")) is not int
             or not 0 < zone["zone_id"] < 2**31 or type(zone.get("role_uid")) is not int
-            or zone["role_uid"] != login.EXPECTED_OWN_UID):
+            or zone["role_uid"] != login.EXPECTED_OWN_UID
+            or (on_startup is not None and not callable(on_startup))):
         report["outcome"] = "rank_panel_inputs_invalid"
         return report
     report.update(owner_context_valid=True, uid=str(zone["role_uid"]))
@@ -203,7 +205,13 @@ def read_rank_panel_once(connection, transport, zone, *, client_version=REVIEWED
             if report["bytes_received"] > MAX_BYTES:
                 raise RankPanelError("rank_panel_receive_bound")
             telemetry = {"own_entity_created": False, "startup_record_count": 0}
-            if career.consume_startup_record(record, telemetry):
+            try:
+                startup = career.consume_startup_record(record, telemetry,
+                    **({"on_startup": on_startup} if on_startup is not None else {}))
+            finally:
+                if telemetry.get("startup_observer_failed") is True:
+                    report["startup_observer_failed"] = True
+            if startup:
                 # Engine eid is independent of account uid; never compare them.
                 report["startup_record_count"] += 1
                 if record.sub_cmd == 113:

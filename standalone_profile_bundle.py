@@ -21,7 +21,9 @@ import game_login_probe as login
 from game_career_probe import CareerMethods
 from game_rank_panel_probe import ERROR_CODES as PANEL_ERRORS, read_rank_panel_once
 from game_social_token_probe import run_social_token_once
+from game_property_codec import ERROR_CODES as PROPERTY_ERRORS
 from game_transport_probe import PublicConfiguration, PARAMETER_SHA256, PUBLIC_KEY_SHA256
+from owner_rank_snapshot import OUTCOMES as OWNER_RANK_OUTCOMES, OwnerRankObserver
 from portable_social_runtime import PARAMETER_SHA256 as SOCIAL_PARAMETER_SHA256
 from standalone_career_query import ERROR_CODES as CAREER_ERRORS
 from standalone_match_query import ERROR_CODES as MATCH_ERRORS
@@ -241,6 +243,35 @@ def _ranks(raw, target_uid):
         return _failure(raw, "profile_ranks_not_verified")
     if raw.get("rank_data_present") is not True:
         return _section("unknown", "profile_rank_data_not_returned")
+    return _rank_data(raw, target_uid)
+
+
+def _owner_ranks(raw, target_uid):
+    """Separate owner startup provenance; never invent Social reply flags."""
+    if (type(raw) is not dict or target_uid != login.EXPECTED_OWN_UID
+            or raw.get("uid") != str(target_uid) or raw.get("platform") != "pc"
+            or raw.get("identity_basis") != "owner_initial_properties"):
+        return _section(outcome="profile_owner_ranks_not_verified")
+    if any(raw.get(key) is not True for key in (
+            "ranks_verified", "owner_identity_verified", "rank_data_present")):
+        outcome = raw.get("outcome")
+        result = _section(outcome=outcome if type(outcome) is str and outcome in OWNER_RANK_OUTCOMES
+                          else "profile_owner_ranks_not_verified")
+        decode = raw.get("decode_outcome")
+        if type(decode) is str and decode in PROPERTY_ERRORS:
+            result["decode_outcome"] = decode
+        initial = raw.get("initialization_outcome")
+        if type(initial) is str and initial in OWNER_RANK_OUTCOMES:
+            result["initialization_outcome"] = initial
+        initial_decode = raw.get("initialization_decode_outcome")
+        if type(initial_decode) is str and initial_decode in PROPERTY_ERRORS:
+            result["initialization_decode_outcome"] = initial_decode
+        return result
+    return _rank_data(raw, target_uid)
+
+
+def _rank_data(raw, target_uid):
+    """Shared numeric projection only, after source-specific binding checks."""
     rows = raw.get("seasons")
     if type(rows) is not list or len(rows) > 1000:
         return _section(outcome="profile_ranks_projection_invalid")
@@ -330,6 +361,8 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
     consumed, game_consumed, session_zone = False, False, None
     reusable, native_outcome = False, "profile_native_not_completed"
     own = target_uid == login.EXPECTED_OWN_UID
+    owner_ranks = OwnerRankObserver(target_uid, client_version=client_version) if own else None
+    startup_options = {"on_startup": owner_ranks.observe} if own else {}
 
     def on_token(session):
         nonlocal setup, consumed, session_zone
@@ -360,7 +393,8 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
             return
         deadline = started + NATIVE_SECONDS
         try:
-            panel = read_rank_panel_once(connection, transport, zone, client_version=client_version, deadline=deadline)
+            panel = read_rank_panel_once(connection, transport, zone, client_version=client_version,
+                                         deadline=deadline, **startup_options)
         except Exception:
             native_outcome = "profile_panel_read_failed"
             return
@@ -395,7 +429,7 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
 
     try:
         auth = run_social_token_once(sauth, configuration, server, client_version=client_version,
-                                    on_token=on_token, on_game_connection=on_game_connection)
+                                    on_token=on_token, on_game_connection=on_game_connection, **startup_options)
     except Exception:
         return report
     if type(auth) is not dict:
@@ -430,7 +464,7 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
     if own:
         report["career"] = (_career(setup.get("career_lookup"), target_uid, own=True)
                             if setup.get("career_reply_bound") is True else _section(outcome="profile_career_not_verified"))
-        report["ranks"] = _section(outcome="profile_owner_rank_history_not_implemented")
+        report["ranks"] = _section(outcome="profile_owner_rank_stream_unverified")
         report["matches"] = (_matches(setup.get("match_lookup"), target_uid, own=True)
             if setup.get("own_match_reply_bound") is True
             else _failure(setup.get("match_lookup"), "profile_matches_not_verified"))
@@ -448,6 +482,13 @@ def run_profile_bundle(sauth, configuration, server, *, parameter, career_method
             else panel_code if type(panel_code) is str and panel_code in PANEL_ERRORS else "profile_panel_not_verified")
         if season is not None:
             report.update(current_season=season, current_season_verified=True)
+        if own and season is not None and reusable:
+            # Read only after the entire startup/panel window, so destruction,
+            # reset or unsupported incremental updates cannot leave old ranks.
+            if token.get("startup_observer_failed") is True or panel.get("startup_observer_failed") is True:
+                report["ranks"] = _section(outcome="profile_owner_rank_observer_failed")
+            else:
+                report["ranks"] = _owner_ranks(owner_ranks.snapshot(zone_id=session_zone), target_uid)
         if own and season is not None and type(panel.get("current")) is dict:
             current = panel["current"]
             level = _integer(current.get("level"), 0, 65535)

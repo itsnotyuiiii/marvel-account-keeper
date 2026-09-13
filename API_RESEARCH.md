@@ -1,6 +1,47 @@
 # Live API research checkpoints
 
-## September 12, 2026: owner-history initialization decoder located
+## September 12, 2026: owner startup decoder integrated; live update gap isolated
+
+Implemented game_property_codec.py, owner_rank_snapshot.py and optional typed
+startup hooks spanning pre-token startup and the same gateway's rank-panel
+read. Native component construction/attribute lookup, zero-index registration
+and standard MessagePack wire tags are now source-bound in
+OWNER_RANK_RESEARCH.md. Numeric property indices remain unsupported rather
+than inferred; the candidate rank projection accepts integer keys/plain maps.
+Destroy, reset, recreation and unsupported selected-entity updates invalidate
+history without dropping separately verified Career/matches/current rank.
+
+Two normal saved-Steam SDK exchanges and owner profile bundles were tested
+through the authorized official-store session, using the existing one-use
+loopback helper. Both authenticated owner1370598422 and verified mesh identity,
+Career, current panel and matches. The second fixed diagnostic confirms
+initialization_outcome=owner_rank_snapshot_projected, followed by
+owner_rank_property_update_unhandled. Therefore initial named decoding works
+on this connection, but final history is correctly unavailable; a nonempty
+initial season count and final season rows were NOT retained or verified.
+Do not turn this initial diagnostic into an available or stale history result.
+
+Fresh projected owner result: IGNゆいᶻᶻᶻ,PC,level32;273matches/149wins/
+4165kills/1609deaths/3145assists;panel season20,level14,raw4350points;
+50first-page matches with50verified rank deltas. No raw initialization/sync,
+credentials or browser storage were saved or changed. Both one-use helpers
+exited normally. Website source/configuration/deployment are unchanged.
+
+395 focused integration/reader/HTTP/session/handoff tests passed. Separately,
+34 packaging/portability/CLI/runtime tests completed:32passed,2actual Windows
+symlink cases skipped for missing link privilege. The expanded package
+allowlist includes27modules/32files; this is not hosted acceptance.
+Updated ignored source archive marvel-native-api-3848703-owner-startup-20260912.zip
+is127968bytes/32files, SHA256
+406a1cf46a12ac0ec64b190a27921361f3afc5ecd07c70fc8b4cd7690ea22acb;
+its extracted offline Windows --check passed, network_attempted=false.
+
+Next: source the incremental sync protocol and classify unrelated named paths
+without ignoring rank/identity/unknown changes, then live-verify final owner
+history. Independent hosting choice, authorized durable bootstrap and hosted
+restart/renewal acceptance remain pending. No punishment feed was added.
+
+## Earlier September 12, 2026: owner-history initialization decoder located
 
 See OWNER_RANK_RESEARCH.md for the pinned current-build source investigation.
 The owner GameServiceAvatar alias, separate synchronized UID, RankGame Python

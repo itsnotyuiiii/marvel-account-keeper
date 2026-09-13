@@ -180,5 +180,8 @@ NetEase calls or deployed snapshots.
 Still required: approved independent hosting and real credential bootstrap,
 live server restart/refresh verification, connection to the prepared website,
 hosted multi-UID/visibility checks, and owner season-history investigation.
+The bounded owner startup decoder now works in a live authorized session,
+but a later incremental property update invalidates its snapshot; that section
+remains unavailable pending sync-protocol handling and final live verification.
 Passing offline tests is not proof of live session expiry/renewal or completion
 of the standalone hosted goal.

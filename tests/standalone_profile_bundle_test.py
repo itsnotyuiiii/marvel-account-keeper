@@ -5,6 +5,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+import msgpack
+
+from game_career_probe import StartupEvent
 import portable_game_runtime as runtime
 import standalone_profile_bundle as bundle
 from standalone_social_session import GatewaySocialToken, SocialRoute
@@ -78,6 +81,23 @@ def auth():
             "on_game_connection_completed")}}, "sauth": "PRIVATE_AUTH"}
 
 
+def owner_create(*, uid=OWNER, zone_id=11001, eid=98765, rank_map=None):
+    def properties(class_name, fields):
+        data = msgpack.packb(class_name, use_bin_type=True)
+        for name, value in fields.items():
+            data += msgpack.packb(name, use_bin_type=True) + msgpack.packb(value, use_bin_type=True)
+        return msgpack.ExtType(0, data)
+
+    if rank_map is None:
+        rank_map = {1001019: {"rank_game_id": 19, "level": 14, "rank_score": 4350.5,
+            "max_level": 15, "max_rank_score": 4500.25, "battle_count": 100, "win_count": 60,
+            "private": "PRIVATE_ROW"}}
+    component = properties("RankGameComponent", {"ranks": rank_map, "private": "PRIVATE_COMPONENT"})
+    root = properties("GameServiceAvatar", {"uid": uid, "zone_id": zone_id,
+        "RankGame": component, "private": ["PRIVATE_ROOT", {"key": "PRIVATE_VALUE"}]})
+    return StartupEvent("create", eid, "GameServiceAvatar", msgpack.packb(root, use_bin_type=True))
+
+
 class StandaloneProfileBundleTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -88,13 +108,14 @@ class StandaloneProfileBundleTest(unittest.TestCase):
 
     def run_case(self, *, uid=TARGET, accepted=None, rank_panel=None, career_result=None, match_result=None,
                  auth_result=None, zone=None, clock=None, token=None, invoke_game=True,
-                 twice_token=False, twice_game=False):
+                 twice_token=False, twice_game=False, startup_events=(), panel_events=()):
         accepted = setup(uid) if accepted is None else accepted
         rank_panel = panel() if rank_panel is None else rank_panel
         career_result = career(uid) if career_result is None else career_result
         match_result = matches(uid) if match_result is None else match_result
         auth_result = auth() if auth_result is None else auth_result
         conn, transport, calls = object(), object(), []
+        observer = None
         selected_zone = ZONE if zone is None else zone
 
         def social_lookup(session, **options):
@@ -108,6 +129,10 @@ class StandaloneProfileBundleTest(unittest.TestCase):
             self.assertIs(connection, conn)
             self.assertIs(cipher, transport)
             self.assertIs(received_zone, selected_zone)
+            if uid == OWNER:
+                self.assertIs(options.pop("on_startup"), observer)
+                for event in panel_events:
+                    observer(event)
             self.assertEqual(options, {"client_version": "3848703", "deadline": 115})
             if isinstance(rank_panel, Exception):
                 raise rank_panel
@@ -129,11 +154,19 @@ class StandaloneProfileBundleTest(unittest.TestCase):
             return read
 
         def run(given_sauth, configuration, server, **options):
+            nonlocal observer
             calls.append("login")
             self.assertEqual(given_sauth, sauth())
             self.assertIs(configuration, self.public.configuration)
             self.assertIs(server, self.server)
             self.assertEqual(options["client_version"], "3848703")
+            if uid == OWNER:
+                observer = options["on_startup"]
+                self.assertTrue(callable(observer))
+                for event in startup_events:
+                    observer(event)
+            else:
+                self.assertNotIn("on_startup", options)
             current_token = token_session() if token is None else token
             options["on_token"](current_token)
             if twice_token:
@@ -210,7 +243,7 @@ class StandaloneProfileBundleTest(unittest.TestCase):
         self.assertTrue(result["career_verified"])
         self.assertEqual(result["current_rank"]["level"], 5)
         self.assertEqual(result["current_rank_source"], "owner_panel")
-        self.assertEqual(result["ranks"]["outcome"], "profile_owner_rank_history_not_implemented")
+        self.assertEqual(result["ranks"]["outcome"], "owner_rank_not_observed")
         self.assertEqual(result["matches"]["outcome"], "profile_matches_verified")
         self.assertFalse(result["ranks_verified"])
         self.assertTrue(result["matches_verified"])
@@ -218,6 +251,62 @@ class StandaloneProfileBundleTest(unittest.TestCase):
         self.assertEqual(result["matches"]["data"]["history_completeness"], "first_page_only")
         mocks[3].assert_not_called()
         mocks[4].assert_not_called()
+
+    def test_owner_startup_ranks_bind_decoded_uid_zone_not_engine_id(self):
+        result, calls, _ = self.run_case(uid=OWNER, startup_events=[owner_create()])
+        self.assertEqual(result["outcome"], "profile_bundle_verified")
+        self.assertEqual(calls, ["login", "social", "panel"])
+        self.assertTrue(result["ranks_verified"])
+        self.assertEqual(result["ranks"]["data"]["seasons"][0]["points"], 4350.5)
+        self.assertEqual(result["current_rank"]["points"], 1234.5)
+        self.assertEqual(result["current_rank_source"], "owner_panel")
+
+    def test_owner_entity_can_arrive_during_panel_read(self):
+        result, _, _ = self.run_case(uid=OWNER, panel_events=[owner_create()])
+        self.assertTrue(result["ranks_verified"])
+
+    def test_owner_lifecycle_after_snapshot_cannot_leave_stale_ranks(self):
+        for event in (StartupEvent("destroy", 98765), StartupEvent("property", 98765, data=b"PRIVATE_SYNC"),
+                      StartupEvent("reset"), StartupEvent("create", 98765, "OtherClass", b"PRIVATE")):
+            with self.subTest(event=event):
+                result, _, _ = self.run_case(uid=OWNER, startup_events=[owner_create()], panel_events=[event])
+                self.assertFalse(result["ranks_verified"])
+                self.assertEqual(result["ranks"]["initialization_outcome"], "owner_rank_snapshot_projected")
+                self.assertTrue(result["career_verified"])
+                self.assertTrue(result["matches_verified"])
+                self.assertIsNotNone(result["current_rank"])
+
+    def test_owner_identity_shape_and_zone_fail_without_breaking_other_sections(self):
+        for event in (owner_create(uid=TARGET), owner_create(zone_id=11002),
+                      owner_create(rank_map={"1001019": {}}),
+                      StartupEvent("create", 98765, "GameServiceAvatar", b"PRIVATE_BAD_WIRE")):
+            result, _, _ = self.run_case(uid=OWNER, startup_events=[event])
+            self.assertFalse(result["ranks_verified"])
+            self.assertTrue(result["career_verified"])
+            self.assertTrue(result["matches_verified"])
+
+    def test_owner_optional_observer_failure_never_exposes_prior_snapshot(self):
+        value = auth()
+        value["social_token"]["startup_observer_failed"] = True
+        for options in ({"auth_result": value}, {"rank_panel": {**panel(), "startup_observer_failed": True}}):
+            result, _, _ = self.run_case(uid=OWNER, startup_events=[owner_create()], **options)
+            self.assertEqual(result["ranks"]["outcome"], "profile_owner_rank_observer_failed")
+            self.assertTrue(result["career_verified"])
+
+    def test_owner_snapshot_not_exposed_after_unverified_stream_or_authentication(self):
+        failed_auth = auth()
+        failed_auth["game_login_verified"] = False
+        for options in ({"rank_panel": {"outcome": "rank_panel_timeout", "connection_reuse_allowed": False}},
+                        {"rank_panel": RuntimeError("PRIVATE")}, {"invoke_game": False},
+                        {"auth_result": failed_auth}):
+            result, _, _ = self.run_case(uid=OWNER, startup_events=[owner_create()], **options)
+            self.assertFalse(result["ranks_verified"])
+            self.assertIsNone(result["ranks"]["data"])
+
+    def test_owner_empty_rank_map_is_available_not_missing(self):
+        result, _, _ = self.run_case(uid=OWNER, startup_events=[owner_create(rank_map={})])
+        self.assertTrue(result["ranks_verified"])
+        self.assertEqual(result["ranks"]["data"]["seasons"], [])
 
     def test_owner_match_failure_preserves_identity_career_and_current_panel(self):
         value = setup(OWNER)
