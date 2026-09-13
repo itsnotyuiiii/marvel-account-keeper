@@ -3,7 +3,48 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: deployment awaiting host/credential destination
+## Latest continuation — September 12: hosted checkpoint, local native desktop
+
+User explicitly parked hosted deployment and requested the normal local Marvel
+Tracker application. Hosted code is preserved on
+`codex/hosted-backend-checkpoint-20260912` at `3ea22dd`; the active local branch is
+`codex/local-native-stats`. The hosted goal remains BLOCKED, not completed or
+redefined. The website repository and deployment were not changed.
+
+User explicitly approved saving the NetEase login locally encrypted with the
+unlocked Marvel Tracker vault key. `local_native_session.py` lazily opens the
+separate app-data `netease-session.sqlite3`, uses the reviewed normal saved-SDK
+renewal manager in-process, and drains active work before releasing the key on
+lock/exit. The optional memory-only mode creates no session file. No genuine
+session was persisted during implementation/tests; interactive acceptance is
+still required. No game, capture, installed archive, or admin command is needed
+for the new provider.
+
+`local_native_login.py` opens a user-driven official-store child window without
+a Python JS API. It hands only the validated minimal SDK context to the local
+controller, never account/frontend fields. Native WebView2 Steam popup handling
+has not yet been live-verified. A collected context is not owner AUTH proof;
+the first uncached card lookup verifies owner1370598422 normally.
+
+Add/Refresh/Refresh All now support PC UID cards through the native provider.
+Cards show IGN, unfiltered Career totals, numeric rank levels/raw scores and
+available season history. Up to50 first-page matches and verified deltas are
+read-only memory snapshots, never auto-imported into the separate match index.
+English rank labels, complete match history, IGN-only lookup and punishment
+history are not implemented by this path. Manual peaks stay separate. Native
+preview builds do not self-update to the standard Tracker release channel.
+
+Verification: full Python suite1317tests (1315passed,2Windows privilege skips),
+17reproducible Node UI tests passed; final small lifecycle/update-channel edits
+have additional focused regression checks. New isolated builder
+`scripts/build-native-desktop.py` preserves all prior build/dist artifacts and
+bundles only the two3848703 public manifests. See `docs/NATIVE_DESKTOP.md`.
+Saved pending candidates have explicit recovery; an interrupted exchange with
+unknown rotation cannot currently be replaced through the desktop UI and is
+clearly labeled rather than replayed. Next: package/launch verification, then
+the user's normal sign-in with encrypted saving selected and a live UID refresh.
+
+## Earlier continuation — September 12: deployment awaiting host/credential destination
 
 Deployment audit after62d2054: native and website worktrees were clean; website
 HEAD is0bef2d05a2b707de3785c8d1892b911179f4454a. Live read-only Sites inspection

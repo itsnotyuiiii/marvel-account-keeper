@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import copy
 import hashlib
 import hmac
 import json
@@ -136,6 +137,7 @@ ACCOUNT_FIELD_DEFAULTS: dict[str, Any] = {
     "netease_rank": None,         # explicit season/placement/source metadata for displayed ranks
     "netease_profile_note": None, # explicit missing/stale detailed Career stats, separate from rank success
     "netease_visibility": None,
+    "netease_native": None,       # projected native card snapshot; match rows stay in memory
 }
 
 # Keep refresh-all deliberately slow so a local vault never hammers the
@@ -195,7 +197,8 @@ def _load_build_info() -> dict[str, Any]:
 
 
 _BUILD_INFO = _load_build_info()
-_netease_only = _BUILD_INFO.get("stats_provider") == "netease"
+_netease_only = _BUILD_INFO.get("stats_provider") in {"netease", "netease-native"}
+_local_native_mode = _BUILD_INFO.get("stats_provider") == "netease-native"
 APP_COMMIT = (_BUILD_INFO.get("commit") or "").strip() or "dev"
 APP_BUILT_AT = _BUILD_INFO.get("built_at")  # ISO 8601 string or None
 
@@ -1265,7 +1268,7 @@ def _try_remembered_unlock(vault: dict[str, Any]) -> bool:
 
 # ---------- session ----------
 
-def _current_key() -> bytes | None:
+def _current_key(*, touch=True) -> bytes | None:
     with _state_lock:
         key = _state["key"]
         if key is None:
@@ -1274,15 +1277,26 @@ def _current_key() -> bytes | None:
         if timeout is not None and time.time() - _state["last_activity"] > timeout:
             _state["key"] = None
             return None
-        _state["last_activity"] = time.time()
+        if touch:
+            _state["last_activity"] = time.time()
         return key
 
 
 def _require_key():
     key = _current_key()
     if key is None:
+        _suspend_native_connection()
         return None, (jsonify({"error": "locked"}), 401)
     return key, None
+
+
+def _suspend_native_connection(*, close=False):
+    """Release native session keys after admitted rotation work has drained."""
+    if _local_native_mode and _career_provider is not None:
+        if close:
+            _career_provider.close()
+        else:
+            _career_provider.suspend()
 
 
 def _touch_activity() -> None:
@@ -1969,6 +1983,34 @@ def _try_netease(acct: dict[str, Any]) -> dict[str, Any]:
         result["in_game_name"] = snapshot["in_game_name"]
     if acct.get("rivals_platform") in {None, "", "unknown"}:
         result["rivals_platform"] = snapshot["platform"]
+    if "native_profile" in snapshot:
+        try:
+            profile = _native_card_profile(snapshot)
+        except Exception:
+            return {"last_refresh_source": "netease", "last_refresh_status": "error",
+                    "last_refresh_code": "career_identity_unavailable",
+                    "last_refresh_error": "NetEase's profile response could not be verified. Saved values were kept."}
+        persisted = copy.deepcopy(profile)
+        # Live native history is a read-only, in-memory view. The separate
+        # authorized import index is never populated by an ordinary refresh.
+        persisted["matches"] = {"status": "unavailable", "data": None}
+        persisted["matches_verified"] = False
+        result["netease_native"] = {"fetched_at": snapshot["fetched_at"], "profile": persisted,
+                                    "matches_memory_only": True}
+        career = profile["career"]
+        result["netease_profile"] = ({"season": None, "request_scope": "unfiltered",
+            "fetched_at": snapshot["fetched_at"], **career["data"]["statistics"]}
+            if career["status"] == "available" else None)
+        result["netease_profile_note"] = (None if career["status"] == "available" else
+            "Career totals are " + career["status"] + ". Other profile sections are checked independently.")
+        result["netease_visibility"] = {name: permission["state"]
+            for name, permission in profile["identity"]["visibility"].items()}
+        result["netease_rank"] = None
+        # Numeric native ranks have no verified English label/normalized peak.
+        # Keep manual fields as saved values; render the native snapshot apart.
+        result.update(last_refresh_status="ok", last_refresh_code=None, last_refresh_error=None,
+                      tracker_history_private=False, rivals_synced_at=None)
+        return result
     result["netease_profile_note"] = snapshot.get("profile_error")
     result["netease_visibility"] = snapshot.get("visibility")
     if isinstance(snapshot.get("profile"), dict):
@@ -1995,6 +2037,13 @@ def _try_netease(acct: dict[str, Any]) -> dict[str, Any]:
         result.update(last_refresh_status="ok", last_refresh_code=None, last_refresh_error=None,
                       tracker_history_private=False, rivals_synced_at=None)
     return result
+
+
+def _native_card_profile(snapshot):
+    """Reapply the shared public allowlist before an account/API boundary."""
+    from standalone_web_contract import project_profile_envelope
+    return project_profile_envelope(snapshot["native_profile"], int(snapshot["uid"]),
+        datetime.fromtimestamp(snapshot["fetched_at"], timezone.utc))["nativeProfile"]
 
 
 def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | None = None) -> dict[str, Any]:
@@ -2047,6 +2096,7 @@ def _account_from_payload(payload: dict[str, Any], key: bytes, existing: dict | 
             acct["netease_profile"] = None
             acct["netease_profile_note"] = None
             acct["netease_visibility"] = None
+            acct["netease_native"] = None
         if identity_changed or ranks_edited:
             acct["netease_rank"] = None
     if "password" in payload:
@@ -2485,6 +2535,39 @@ def _match_status_payload(account: dict[str, Any], status=None) -> dict[str, Any
 
 # ---------- routes ----------
 
+@app.route("/api/netease/connect", methods=["POST"])
+def connect_native_netease():
+    _, err = _require_key()
+    if err:
+        return err
+    if not _local_native_mode or _career_provider is None:
+        return jsonify({"error": "career_not_configured", "message": "Open the native NetEase desktop build."}), 409
+    body = request.get_json(silent=True)
+    if type(body) is not dict or set(body) != {"persist"} or type(body["persist"]) is not bool:
+        return jsonify({"error": "career_invalid_request", "message": "Choose whether to save the encrypted local session."}), 400
+    try:
+        return jsonify(_career_provider.connect(persist=body["persist"]))
+    except CareerUnavailable as exc:
+        return jsonify({"error": exc.code, "message": exc.message}), exc.status
+
+
+@app.route("/api/netease/recover", methods=["POST"])
+def recover_native_netease():
+    key, err = _require_key()
+    if err:
+        return err
+    if not _local_native_mode or _career_provider is None:
+        return jsonify({"error": "career_not_configured", "message": "Open the native NetEase desktop build."}), 409
+    body = request.get_json(silent=True)
+    if body not in (None, {}):
+        return jsonify({"error": "career_invalid_request", "message": "Recovery does not accept login credentials."}), 400
+    try:
+        result = _career_provider.recover()
+    except CareerUnavailable as exc:
+        return jsonify({"error": exc.code, "message": exc.message}), exc.status
+    current, err = _require_key()
+    return err if err else (jsonify(result) if current == key else (jsonify({"error": "locked"}), 401))
+
 @app.route("/api/career/status", methods=["GET"])
 def career_status():
     _, err = _require_key()
@@ -2545,6 +2628,8 @@ def status():
             lock_in_s = max(0, int(timeout - elapsed))
         else:
             lock_in_s = 0
+    if not unlocked:
+        _suspend_native_connection()
     return jsonify({
         "initialized": vault.get("initialized", False),
         "unlocked": unlocked,
@@ -2674,6 +2759,7 @@ def lock():
     remember-me blob, so the next boot lands on the unlock screen."""
     with _state_lock:
         _state["key"] = None
+    _suspend_native_connection()
     _clear_remembered_key()
     return jsonify({"ok": True})
 
@@ -2871,6 +2957,14 @@ def _public_account(acct: dict[str, Any], key: bytes) -> dict[str, Any]:
         item.setdefault(field, default)
     item["stats_provider"] = "netease" if _using_netease() else "tracker"
     item["netease_connected"] = _career_provider.can_refresh_account(acct) if _career_provider is not None else False
+    if _local_native_mode and _career_provider is not None:
+        snapshot = _career_provider.cached_account(acct)
+        if snapshot is not None:
+            try:
+                item["netease_native"] = {"fetched_at": snapshot["fetched_at"],
+                    "profile": _native_card_profile(snapshot), "matches_memory_only": True}
+            except Exception:
+                pass  # Never expose an unprojected provider object.
     try:
         item["password"] = _decrypt(key, acct["password_enc"]) if acct.get("password_enc") else ""
     except Exception:
@@ -3445,6 +3539,10 @@ def check_update():
     """Compare the running version against the latest GitHub release.
     Always returns 200 — a transient network failure shows as
     `{has_update: false}` so the UI stays quiet."""
+    if _local_native_mode:
+        return jsonify({"current": APP_VERSION, "latest": None, "has_update": False,
+            "checked_at": int(time.time()), "packaged": _is_packaged(),
+            "channel": "native-preview", "message": "This native preview uses separate builds, not the standard Tracker release channel."})
     release = _fetch_latest_release()
     if not release:
         return jsonify({
@@ -3490,6 +3588,9 @@ def apply_update():
     _, err = _require_key()
     if err:
         return err
+    if _local_native_mode:
+        return jsonify({"error": "native_preview_channel",
+            "message": "Install a new native preview build; the standard release would replace this NetEase mode."}), 409
     if not _is_packaged():
         return jsonify({"error": "not_packaged",
                         "message": "Self-update only works from the packaged .exe. "
@@ -3616,7 +3717,7 @@ def apply_update():
     if relaunching:
         # End this process once the HTTP response has flushed, so the successor
         # (already waiting on our PID) can grab the lock and open its window.
-        threading.Timer(0.8, lambda: os._exit(0)).start()
+        threading.Timer(0.8, lambda: _shutdown("Restarting after update")).start()
         msg = f"v{ver} installed — restarting…"
     else:
         msg = (f"v{ver} installed. Close the app and reopen it to run the new "
@@ -3690,6 +3791,7 @@ def _default_port() -> int:
 
 def _shutdown(reason: str) -> None:
     """Print a parting line and end the process."""
+    _suspend_native_connection(close=True)
     print(f"\n  {reason} — Marvel Rivals Account Tracker stopped. Your vault is saved.")
     os._exit(0)
 
@@ -3810,12 +3912,19 @@ def _run_native_window(url: str, port: int) -> bool:
     _wait_until_serving(port)
 
     try:
-        webview.create_window(
+        main_window = webview.create_window(
             WINDOW_TITLE, url,
             width=1240, height=860, min_size=(900, 640),
         )
-        webview.start()  # blocks until the window is closed
+        if _local_native_mode and _career_provider is not None:
+            _career_provider.enable_browser(webview.create_window)
+            # pywebview waits for every child window. Closing the main app must
+            # also cancel sign-in and drain an admitted renewal before exit.
+            main_window.events.closed += lambda: _suspend_native_connection(close=True)
+        webview.start(private_mode=True, debug=False)  # blocks until all windows close
     except Exception as e:  # no webview backend (e.g. Linux w/o WebKitGTK)
+        if _local_native_mode and _career_provider is not None:
+            _career_provider.enable_browser(None)
         print(f"  Native window unavailable ({e}) — opening in your browser.")
         # The server is already up on the daemon thread; just point a browser
         # at it and fall back to the heartbeat/idle lifecycle.
@@ -3866,6 +3975,7 @@ def _focus_existing_window() -> None:
 
 
 def main() -> None:
+    global _career_provider, _netease_only, _local_native_mode
     # Zero arguments is the intended path — a double-clicked .exe just works.
     # The flags below exist only for the rare headless / power-user case.
     parser = argparse.ArgumentParser(
@@ -3882,6 +3992,7 @@ def main() -> None:
     parser.add_argument("--career-capture", help="experimental: approved local Netsh ETL with own Career startup")
     parser.add_argument("--career-archive", help="experimental: matching locally installed script.uep")
     parser.add_argument("--career-own-uid", help="experimental: your confirmed game UID")
+    parser.add_argument("--native-stats", action="store_true", help="use the normal NetEase desktop login; no game capture or hosted backend")
     parser.add_argument("--await-pid", type=int, default=0, metavar="PID",
                         help=argparse.SUPPRESS)  # internal: set on self-restart
     parser.add_argument("--selftest-spawn", metavar="FILE", default=None,
@@ -3894,6 +4005,8 @@ def main() -> None:
     career_args = (args.career_capture, args.career_archive, args.career_own_uid)
     if any(career_args) and not all(career_args):
         parser.error("Career mode needs --career-capture, --career-archive and --career-own-uid together.")
+    if all(career_args) and (args.native_stats or _local_native_mode):
+        parser.error("Choose either native NetEase login or the legacy captured-session mode.")
 
     # Hidden update-restart regression harness (see _run_update_selftest).
     if args.selftest_spawn:
@@ -3929,7 +4042,10 @@ def main() -> None:
             _focus_existing_window()
             sys.exit(0)
 
-    global _career_provider
+    if args.native_stats or _local_native_mode:
+        from local_native_session import LocalNativeConnection
+        _local_native_mode = _netease_only = True
+        _career_provider = LocalNativeConnection(DATA_DIR, RESOURCE_DIR, lambda: _current_key(touch=False))
     if all(career_args):
         from game_career_client import GameCareerClient
         _career_provider = CapturedCareerProvider(*career_args,
@@ -3999,6 +4115,7 @@ def main() -> None:
         print(f"\n  Could not start on port {port}: {e}")
         print("  Try a different --port, or omit it to pick one automatically.")
         return
+    _suspend_native_connection(close=True)
     print("\n  Marvel Rivals Account Tracker stopped. Your vault is saved.")
 
 

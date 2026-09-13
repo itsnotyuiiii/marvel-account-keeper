@@ -31,6 +31,93 @@ function rankDisplay(rank, points, opts) {
   return `${rank} · ${points}`;
 }
 
+// Native scores are not the legacy display scale. Never derive a tier label,
+// an overall peak or division progress from these numeric values.
+function hasNativeSnapshot(acct) {
+  return acct?.netease_native != null;
+}
+
+function nativeProfileFor(acct) {
+  const profile = acct?.netease_native?.profile;
+  return profile?.uid === String(acct?.rivals_uid || "")
+    && profile.identity_verified === true && profile.owner_authentication_verified === true
+    && profile.game_login_verified === true ? profile : null;
+}
+
+function nativeRankFor(acct) {
+  const profile = nativeProfileFor(acct);
+  const rank = profile?.current_rank;
+  return profile?.current_season_verified === true && rank?.season === profile.current_season
+    && Number.isInteger(rank?.level) && rank.level >= 0 ? rank : null;
+}
+
+function nativeRankDisplay(rank) {
+  if (!rank || !Number.isInteger(rank.level) || rank.level < 0) return "Unavailable";
+  return `Level ${rank.level} · ${typeof rank.points === "number" && Number.isFinite(rank.points)
+    ? `${rank.points} raw` : "raw score unavailable"}`;
+}
+
+function accountRankDisplay(acct, field, opts) {
+  if (hasNativeSnapshot(acct) && field === "current") return nativeRankDisplay(nativeRankFor(acct));
+  return rankDisplay(acct[field + "_rank"], acct[field + "_points"],
+    hasNativeSnapshot(acct) ? undefined : opts);
+}
+
+function nativeSectionLabel(section) {
+  return ({ restricted: "Restricted by this player's visibility settings", unknown: "Visibility or data availability unknown",
+    unavailable: "Unavailable for this read" })[section?.status] || "Unavailable for this read";
+}
+
+function nativeDate(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? new Date(value * 1000).toLocaleString() : "Unknown";
+}
+
+function NativeProfileDetails({ account }) {
+  if (!hasNativeSnapshot(account)) return null;
+  const profile = nativeProfileFor(account);
+  if (!profile) return <section className="drawer-section"><p className="career-live-note">Native profile unavailable for this UID. Refresh the card to try again.</p></section>;
+  const stats = profile.career?.status === "available" ? profile.career.data?.statistics : null;
+  const seasons = profile.ranks?.status === "available" && Array.isArray(profile.ranks.data?.seasons) ? profile.ranks.data.seasons : null;
+  const matches = profile.matches?.status === "available" && Array.isArray(profile.matches.data?.matches) ? profile.matches.data.matches : null;
+  return <section className="drawer-section" aria-label="NetEase profile details">
+    <div className="drawer-section-lbl">NetEase profile · read only</div>
+    <p className="career-live-note">UID {profile.uid} · PC{profile.identity?.level != null && ` · Account level ${profile.identity.level}`} · Read {nativeDate(account.netease_native.fetched_at)}</p>
+    <p>Current: <b>{nativeRankDisplay(nativeRankFor(account))}</b>{profile.current_season_verified && ` · Season ${profile.current_season}`}</p>
+    <p className="career-live-note">Numeric rank levels and raw server scores; rank names and an overall peak are not verified. Saved ranks below remain separate.</p>
+    <h3>Career totals · unfiltered</h3>
+    {stats ? <div className="career-live-stats" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))" }}>
+      {[["Matches", "matches"], ["Wins", "wins"], ["Kills", "kills"], ["Deaths", "deaths"], ["Assists", "assists"]].map(([label, key]) =>
+        <div key={key}><span>{label}</span><strong>{stats[key]?.toLocaleString() ?? "Unknown"}</strong></div>)}
+    </div> : <p className="career-live-note">{nativeSectionLabel(profile.career)}</p>}
+    <p className="career-live-note">These totals are not filtered to the panel's current season. Complete lifetime coverage is not established.</p>
+    <h3>Season ranks{seasons && ` · ${seasons.length} returned`}</h3>
+    {seasons ? seasons.length ? <div className="career-live-table-wrap"><table className="career-live-table">
+      <thead><tr><th>Season</th><th>Rank level</th><th>Raw score</th><th>Season peak level</th><th>Raw peak score</th><th>Record</th><th>Updated</th></tr></thead>
+      <tbody>{seasons.map((row) => <tr key={row.season}>
+        <td>{row.season}{profile.current_season_verified && row.season === profile.current_season ? " · Current" : ""}</td>
+        <td>{row.level}</td><td>{row.points}</td><td>{row.peak_level}</td><td>{row.peak_points}</td>
+        <td>{row.record ? `${row.record.wins} wins / ${row.record.matches} matches` : "Unknown"}</td><td>{nativeDate(row.updated_at)}</td>
+      </tr>)}</tbody>
+    </table></div> : <p className="career-live-note">No season rows returned; this does not establish an unranked or complete history.</p>
+      : <p className="career-live-note">{nativeSectionLabel(profile.ranks)}</p>}
+    <h3>Recent matches{matches && ` · ${matches.length} returned`}</h3>
+    <p className="career-live-note">At most the first 50 matches, not complete match history. Details stay in this app session only and are not added to the imported match index.</p>
+    {matches ? matches.length ? <div className="career-live-table-wrap"><table className="career-live-table">
+      <thead><tr><th>Played</th><th>Season</th><th>Mode ID</th><th>Result</th><th>K / D / A</th><th>Duration</th><th>Raw rank change</th></tr></thead>
+      <tbody>{matches.map((match, index) => <tr key={`${match.match_uid || "match"}-${index}`}>
+        <td>{nativeDate(match.played_at)}</td><td>{match.season}</td><td>{match.mode_id}</td><td>{match.result}</td>
+        <td>{match.kills} / {match.deaths} / {match.assists}</td>
+        <td>{Math.floor(match.duration_seconds / 60)}:{String(match.duration_seconds % 60).padStart(2, "0")}</td>
+        <td>{match.rank_change_verified === true && match.rank_change
+          ? `${match.rank_change.points_before} → ${match.rank_change.points_after} (${match.rank_change.points_delta > 0 ? "+" : ""}${match.rank_change.points_delta})`
+          : "Unknown"}</td>
+      </tr>)}</tbody>
+    </table></div> : <p className="career-live-note">No recent matches returned.</p>
+      : <p className="career-live-note">{nativeSectionLabel(profile.matches)}.{profile.matches?.status === "unavailable" && " Refresh this card to fetch current in-memory match details."}</p>}
+  </section>;
+}
+
 // True when the vault entry's Steam username matches the currently signed-in
 // Steam user on this PC (case-insensitive). Drives the "ACTIVE NOW" badge.
 function isActiveSteamMatch(acct, activeSteam) {
@@ -111,7 +198,7 @@ function labelFor(acct) {
   // Colors are theme tokens (see styles.css) so the labels stay legible in
   // both dark and light mode — gold "main", red "oaa", slate-blue "alt".
   if (acct.pinned) return { kind: "main", text: "MAIN ACCOUNT", color: "var(--label-main)" };
-  if (acct.peak_rank === "One Above All") return { kind: "oaa", text: "PEAKED OAA", color: "var(--label-oaa)" };
+  if (acct.peak_rank === "One Above All") return { kind: "oaa", text: hasNativeSnapshot(acct) ? "SAVED OAA" : "PEAKED OAA", color: "var(--label-oaa)" };
   return { kind: "alt", text: "ALT", color: "var(--label-alt)" };
 }
 
@@ -335,6 +422,14 @@ const SOURCE_LABEL = {
   netease: "NetEase",
 };
 
+function syncMetaFor(acct, state) {
+  if (acct.stats_provider === "netease" && ["missing_handle", "missing_identity"].includes(state)) {
+    return { sym: "?", cls: "muted", text: "PC UID needed — refresh skipped",
+      long: "Enter a numeric PC UID. The native connection does not resolve in-game names yet." };
+  }
+  return SYNC_META[state] || null;
+}
+
 // How long (ms) the server enforces between refreshes of the same account.
 // Mirrors PER_ACCOUNT_REFRESH_COOLDOWN_S in app.py — keep in sync.
 const PER_ACCOUNT_COOLDOWN_MS = 20 * 1000;
@@ -354,7 +449,7 @@ function refreshCooldownLeft(acct) {
 function RefreshBtn({ acct, refreshing, onRefresh,
                      size = "sm", showLabel = false }) {
   const state = syncState(acct);
-  let meta = SYNC_META[state] || null;  // null for none / fresh
+  let meta = syncMetaFor(acct, state);  // null for none / fresh
   const cooldownLeft = refreshCooldownLeft(acct);
   // 1s tick while the per-account cooldown is counting down so the tooltip
   // updates live and the button re-enables the moment it expires.
@@ -413,7 +508,7 @@ function SyncChip({ acct }) {
       <div className="sync-chip sync-chip-muted" data-state="none">
         <span className="sync-chip-i" aria-hidden="true">○</span>
         <span className="sync-chip-t">{acct.stats_provider === "netease" && !acct.netease_connected
-          ? "Enter a UID or IGN to look up" : "Not synced yet — hit ↻ to refresh"}</span>
+          ? "Enter a PC UID to look up" : "Not synced yet — hit ↻ to refresh"}</span>
       </div>
     );
   }
@@ -432,7 +527,7 @@ function SyncChip({ acct }) {
     text = synced ? `Rank synced ${fmtRelative(synced)}${srcSuffix}`
                   : `Rank synced${srcSuffix}`;
   } else {
-    const m = SYNC_META[state] || SYNC_META.error;
+    const m = syncMetaFor(acct, state) || SYNC_META.error;
     cls = m.cls;
     icon = m.sym;
     text = m.text;
@@ -450,7 +545,9 @@ function SyncChip({ acct }) {
   }
   if (acct.last_refresh_source === "netease" && (state === "current" || state === "fresh")) {
     text = `NetEase synced ${fmtRelative(synced)}`;
-    longText = "Authenticated NetEase read; displayed rank may be an estimate until placements finish. The profile's own update time is separate from this fetch time.";
+    longText = hasNativeSnapshot(acct)
+      ? "Authenticated NetEase profile read. Numeric rank values are separate from saved rank labels; unavailable sections remain unknown. This is fetch time, not last played."
+      : "Authenticated NetEase read; displayed rank may be an estimate until placements finish. The profile's own update time is separate from this fetch time.";
   }
 
   return (
@@ -466,6 +563,19 @@ function SyncChip({ acct }) {
 // B. CARDS  (refined trading-card)
 // ─────────────────────────────────────────────────────────────────────────────
 function NetEaseCardDetails({ acct, compact = false }) {
+  if (hasNativeSnapshot(acct)) {
+    const profile = nativeProfileFor(acct);
+    const stats = profile?.career?.status === "available" ? profile.career.data?.statistics : null;
+    const rank = nativeRankFor(acct);
+    return <div className={"netease-card-details" + (compact ? " is-compact" : "")}>
+      {profile?.identity?.level != null && <span>Account level {profile.identity.level} · PC</span>}
+      <span>{rank ? `Rank season ${rank.season} · Numeric rank; labels unverified` : "Current native rank unavailable"}</span>
+      {stats ? <span>Unfiltered Career · {stats.matches} matches · {stats.wins} wins{!compact && ` · K/D/A ${stats.kills}/${stats.deaths}/${stats.assists}`}</span>
+        : <span>Career · {nativeSectionLabel(profile?.career)}</span>}
+      <span>Season history · {profile?.ranks?.status === "available" ? `${profile.ranks.data.season_count} rows` : nativeSectionLabel(profile?.ranks)}</span>
+      {acct.peak_rank && <span>Saved peak is not newly verified by this read</span>}
+    </div>;
+  }
   const stats = acct.netease_profile;
   const rank = acct.netease_rank;
   if (!stats && !rank && !acct.netease_profile_note) return null;
@@ -486,7 +596,7 @@ function NetEaseCardDetails({ acct, compact = false }) {
 }
 
 function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, activeSteam, localRivalsUids }) {
-  const cur = themeFor(acct.current_rank);
+  const cur = hasNativeSnapshot(acct) ? null : themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
 
@@ -549,18 +659,18 @@ function CardRefined({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing,
       <div className="rcard-ranks">
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: cur?.fg }} />
-          <span className="rcard-rlbl" title={acct.netease_rank?.qualification === "estimated" ? "Estimated rank; placements unfinished" : undefined}>{acct.netease_rank?.qualification === "estimated" ? "EST." : "CURRENT"}</span>
+          <span className="rcard-rlbl" title={!hasNativeSnapshot(acct) && acct.netease_rank?.qualification === "estimated" ? "Estimated rank; placements unfinished" : undefined}>{!hasNativeSnapshot(acct) && acct.netease_rank?.qualification === "estimated" ? "EST." : "CURRENT"}</span>
           <span className="rcard-rval" style={rankInk(cur)}
-                title={rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}>
-            {rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}
+                title={accountRankDisplay(acct, "current", { tierRelative: opts.srTierRelative })}>
+            {accountRankDisplay(acct, "current", { tierRelative: opts.srTierRelative })}
           </span>
         </div>
         <div className="rcard-rank">
           <span className="rcard-rdot" style={{ background: peak?.fg }} />
-          <span className="rcard-rlbl">PEAK</span>
+          <span className="rcard-rlbl">{hasNativeSnapshot(acct) ? "SAVED PEAK" : "PEAK"}</span>
           <span className="rcard-rval" style={rankInk(peak)}
-                title={rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}>
-            {rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}
+                title={accountRankDisplay(acct, "peak", { tierRelative: opts.srTierRelative })}>
+            {accountRankDisplay(acct, "peak", { tierRelative: opts.srTierRelative })}
           </span>
         </div>
       </div>
@@ -617,7 +727,7 @@ function TableView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshin
 }
 
 function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, activeSteam, localRivalsUids }) {
-  const cur = themeFor(acct.current_rank);
+  const cur = hasNativeSnapshot(acct) ? null : themeFor(acct.current_rank);
   const peak = themeFor(acct.peak_rank);
   const lab = labelFor(acct);
   const [open, setOpen] = React.useState(false);
@@ -655,19 +765,20 @@ function TableRow({ acct, opts, onOpen, onCopy, onPin, onRefresh, refreshing, ac
             {acct.in_game_name || (acct.rivals_uid ? `UID ${acct.rivals_uid}` : "No IGN set")}
           </span>
           {lab.kind === "main" && <span className="tbl-tag">main</span>}
-          {lab.kind === "oaa"  && <span className="tbl-tag tbl-tag-oaa">peak oaa</span>}
+          {lab.kind === "oaa"  && <span className="tbl-tag tbl-tag-oaa">{hasNativeSnapshot(acct) ? "saved oaa" : "peak oaa"}</span>}
           <TagPill acct={acct} />
         </div>
 
         <div className="tbl-rank-cell tbl-rank-current">
           <span className="tbl-rdot" style={{ background: cur?.fg }} />
-          <span className="tbl-rank-value" style={rankInk(cur)}>{rankDisplay(acct.current_rank, acct.current_points, { tierRelative: opts.srTierRelative })}</span>
-          {acct.netease_rank?.qualification === "estimated" && <small title="Estimated rank; placements unfinished">est.</small>}
+          <span className="tbl-rank-value" style={rankInk(cur)}>{accountRankDisplay(acct, "current", { tierRelative: opts.srTierRelative })}</span>
+          {!hasNativeSnapshot(acct) && acct.netease_rank?.qualification === "estimated" && <small title="Estimated rank; placements unfinished">est.</small>}
         </div>
 
         <div className="tbl-rank-cell tbl-rank-peak">
           <span className="tbl-rdot" style={{ background: peak?.fg }} />
-          <span className="tbl-rank-value" style={rankInk(peak)}>{rankDisplay(acct.peak_rank, acct.peak_points, { tierRelative: opts.srTierRelative })}</span>
+          <span className="tbl-rank-value" style={rankInk(peak)}>{accountRankDisplay(acct, "peak", { tierRelative: opts.srTierRelative })}</span>
+          {hasNativeSnapshot(acct) && <small>saved peak · not reverified</small>}
         </div>
 
         <div className="tbl-time" title={updatedTitle(acct)}>{fmtRelative(acct.updated_at)}</div>
@@ -761,7 +872,8 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
     for (const t of TIER_ORDER) m.set(t, []);
     m.set("Unranked", []);
     for (const a of accounts) {
-      const t = tierOf(a[field]) || (a.stats_provider === "netease" ? "No verified rank" : "Unranked");
+      const t = hasNativeSnapshot(a) ? (field === "peak_rank" ? "Saved peaks" : "NetEase numeric ranks")
+        : tierOf(a[field]) || (a.stats_provider === "netease" ? "No verified rank" : "Unranked");
       if (!m.has(t)) m.set(t, []);
       m.get(t).push(a);
     }
@@ -770,7 +882,7 @@ function LadderView({ accounts, opts, onOpen, onCopy, onPin, onRefresh, refreshi
 
   return (
     <div className="ladder">
-      <RankCheckpoints />
+      {accounts.some((account) => !hasNativeSnapshot(account)) && <RankCheckpoints />}
       {groups.map(([tier, list]) => (
         <LadderGroup key={tier} tier={tier} list={list} rankField={field}
                      opts={opts} onOpen={onOpen} onCopy={onCopy} onPin={onPin}
@@ -807,15 +919,17 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, activeSt
   // Ladder can be grouped by current or peak rank; the chosen field is the
   // card's primary line, the other becomes the small sub-line.
   const byPeak = rankField === "peak_rank";
+  const native = hasNativeSnapshot(acct);
   const primaryRank   = byPeak ? acct.peak_rank   : acct.current_rank;
   const primaryPoints = byPeak ? acct.peak_points : acct.current_points;
   const secRank   = byPeak ? acct.current_rank   : acct.peak_rank;
   const secPoints = byPeak ? acct.current_points : acct.peak_points;
-  const secLabel  = byPeak ? "now" : "peak";
-  const primaryTheme = themeFor(primaryRank);
-  const secTheme = themeFor(secRank);
+  const secLabel  = byPeak ? "now" : native ? "saved peak" : "peak";
+  const primaryTheme = native && !byPeak ? null : themeFor(primaryRank);
+  const secTheme = native && byPeak ? null : themeFor(secRank);
   const lab = labelFor(acct);
   const division = (() => {
+    if (native) return byPeak ? `Saved peak: ${accountRankDisplay(acct, "peak")}` : nativeRankDisplay(nativeRankFor(acct));
     if (!primaryRank) return "";
     if (primaryRank === "Eternity" || primaryRank === "One Above All") {
       return primaryPoints ? String(primaryPoints) : "";
@@ -850,12 +964,12 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, activeSt
           )}
         </div>
       </div>
-      <div className="lad-sub">
+      <div className="lad-sub" style={native ? { flexWrap: "wrap" } : undefined}>
         {division && <span className="lad-div">{division}</span>}
         {division && <span className="lad-sep">·</span>}
         <span className="lad-peak-lbl">{secLabel}</span>
         <span className="lad-peak-val" style={rankInk(secTheme)}>
-          {rankDisplay(secRank, secPoints, { tierRelative: opts.srTierRelative })}
+          {accountRankDisplay(acct, byPeak ? "current" : "peak", { tierRelative: opts.srTierRelative })}
         </span>
       </div>
       <NetEaseCardDetails acct={acct} compact />
@@ -864,6 +978,6 @@ function LadderCard({ acct, opts, onOpen, onPin, onRefresh, refreshing, activeSt
 }
 
 Object.assign(window, {
-  CardRefined, TableView, LadderView, labelFor, PresenceBadge,
+  CardRefined, TableView, LadderView, labelFor, PresenceBadge, NativeProfileDetails,
   splitTags, tagColorFor,
 });

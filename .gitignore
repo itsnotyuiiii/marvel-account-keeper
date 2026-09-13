@@ -8,6 +8,7 @@ backups/
 # independent host's private persistent volume, outside the source checkout.
 .native-state/
 native-session.sqlite*
+netease-session.sqlite*
 
 # ── Build output ─────────────────────────────────────────────────────────────
 build/

@@ -102,20 +102,42 @@ const LADDER_SORT_OPTIONS = [
 function sortAccounts(items, mode) {
   const arr = items.slice();
   const idx = (r) => r && RANK_INDEX[r] != null ? RANK_INDEX[r] : -1;
+  const currentKey = (account) => {
+    if (account.netease_native != null) {
+      const profile = account.netease_native.profile;
+      const rank = profile?.current_rank;
+      const bound = profile?.uid === String(account.rivals_uid || "")
+        && profile.identity_verified === true && profile.owner_authentication_verified === true
+        && profile.game_login_verified === true && profile.current_season_verified === true
+        && rank?.season === profile.current_season && Number.isInteger(rank?.level) && rank.level >= 0;
+      // An unavailable native current rank never borrows the saved manual rank.
+      return bound ? [2, rank.level, typeof rank.points === "number" && Number.isFinite(rank.points)
+        ? rank.points : -Infinity] : [0, -1, -Infinity];
+    }
+    const level = idx(account.current_rank);
+    return [level >= 0 ? 1 : 0, level, -Infinity];
+  };
+  const byCurrent = (a, b) => {
+    const left = currentKey(a), right = currentKey(b);
+    // Keep native numbers and saved English labels in separate groups: their
+    // scales are not interchangeable. Within native ranks, retain raw scores.
+    return right[0] - left[0] || right[1] - left[1]
+      || (right[2] === left[2] ? 0 : right[2] > left[2] ? 1 : -1);
+  };
   const byName = (a, b) =>
   (a.in_game_name || a.username || "").localeCompare(
     b.in_game_name || b.username || "", undefined, { sensitivity: "base" }
   );
   switch (mode) {
     case "ign":arr.sort(byName);break;
-    case "current_desc":arr.sort((a, b) => idx(b.current_rank) - idx(a.current_rank));break;
+    case "current_desc":arr.sort(byCurrent);break;
     case "peak_desc":arr.sort((a, b) => idx(b.peak_rank) - idx(a.peak_rank));break;
     case "recent":arr.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));break;
     case "pinned":
     default:
       arr.sort((a, b) =>
       (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) ||
-      idx(b.current_rank) - idx(a.current_rank) ||
+      byCurrent(a, b) ||
       idx(b.peak_rank) - idx(a.peak_rank));
       break;
   }
@@ -779,13 +801,13 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
               <span className="dr-field-lbl">Platform</span>
               <select value={form.rivals_platform}
                       onChange={(e) => set("rivals_platform", e.target.value)}>
-                <option value="unknown">{statsProvider === "netease" ? "Auto-detect" : "Unknown"}</option>
+                <option value="unknown">{statsProvider === "netease" ? "PC lookup (default)" : "Unknown"}</option>
                 <option value="pc">PC</option>
                 <option value="playstation">PlayStation</option>
                 <option value="xbox">Xbox</option>
               </select>
               <span className="dr-field-hint">
-                {statsProvider === "netease" ? "Auto-detect uses NetEase’s returned login platform. Select one to view a different platform’s rank." : "Required for exact UID matching in the local match index."}
+                {statsProvider === "netease" ? "The native NetEase connection currently supports PC UID lookups. Other saved platforms remain available for the local match index." : "Required for exact UID matching in the local match index."}
               </span>
             </label>
             {isNew && (
@@ -797,7 +819,7 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
                 }} />
             )}
             <p className="dr-field-note">
-              {statsProvider === "netease" ? <>Enter a UID or exact in-game name, then save. NetEase fills the canonical name, UID, platform, available ranks and public PC Career stats automatically. The player does not need to have logged in on this PC. Private or unavailable stats are labeled separately.</> : <>
+              {statsProvider === "netease" ? <>Enter a PC UID, then save. The normal NetEase connection fills the canonical name and available profile data. In-game-name search is not supported by this connection yet. The player does not need to have logged in on this PC. Private or unavailable sections remain labeled separately.</> : <>
               <strong>A UID is the preferred way to link an account.</strong> It's
               stable across renames and enables a direct RivalsData profile link.
               A successful public stats refresh can also fill the exact in-game
@@ -846,8 +868,10 @@ function Drawer({ open, acct, view, onClose, onSave, onDelete,
             onChange={(v) => set("email", v)} type="email" />
           </section>
 
+          <window.NativeProfileDetails account={acct} />
+
           <section className="drawer-section">
-            <div className="drawer-section-lbl">Rank</div>
+            <div className="drawer-section-lbl">{acct?.netease_native ? "Saved rank labels · separate from NetEase" : "Rank"}</div>
             <div className="drawer-rank-grid">
               <div className="dr-rank-pair">
                 <RankPicker label="Current rank" value={form.current_rank}
@@ -1196,7 +1220,7 @@ const SYNC_LEGEND = [
 function InfoRail({ open, onToggle, statsProvider }) {
   const legend = statsProvider === "netease" ? [
     { icon: "✓", tone: "ok", name: "Rank synced", desc: "Direct NetEase identity/rank read; public PC Career stats use the shared connection too. Missing detailed stats are labeled separately. Sync time is our fetch time, not last played." },
-    { icon: "~", tone: "muted", name: "Estimated", desc: "The API marks placements unfinished. The displayed tier and points are a prediction, not a final placement." },
+    { icon: "~", tone: "muted", name: "Numeric rank", desc: "Native rank levels and raw server scores are shown without guessed rank names, division progress or an overall peak. Saved rank labels stay separate." },
     { icon: "○", tone: "muted", name: "Session needed", desc: "The app needs one shared NetEase connection, not a local login for every target player. No third-party fallback is used." },
     { icon: "!", tone: "err", name: "Unavailable", desc: "Expired session, failed read or unfamiliar data. Previously saved ranks are kept." },
   ] : SYNC_LEGEND;
@@ -1222,7 +1246,7 @@ function InfoRail({ open, onToggle, statsProvider }) {
           </ul>
           <p className="sync-legend-foot">
             {statsProvider === "netease"
-              ? "Add a UID or exact IGN and save. Identity, available ranks and public PC Career stats load using the shared NetEase connection. Restricted profiles stay restricted; no Tracker fallback."
+              ? "Add a PC UID and save. Identity and available profile sections load using the normal NetEase connection. Restricted profiles stay restricted; no Tracker fallback."
               : "Rank refresh uses Tracker.gg. RivalsData profiles are opened only when you click their link in an account drawer."}
           </p>
         </div>
@@ -1702,7 +1726,7 @@ function App() {
       }
       await loadAccounts();
       setDrawer({ open: false, acct: null });
-      showToast(next.id ? (refreshNote ? `Saved · ${refreshNote}` : "Saved") : saved?.account?.last_refresh_status === "ok" ? "Account added · ranks loaded"
+      showToast(next.id ? (refreshNote ? `Saved · ${refreshNote}` : "Saved") : saved?.account?.last_refresh_status === "ok" ? "Account added · profile loaded"
         : saved?.account?.last_refresh_error ? `Account added · ${saved.account.last_refresh_error}` : "Account created");
       return true;
     } catch (e) {
@@ -1786,7 +1810,7 @@ function App() {
   const REFRESH_LABEL = {
     ok: "Refreshed",
     not_found: "Player not found",
-    missing_handle: "No in-game name set on this account",
+    missing_handle: "No player identity set on this account",
     error: "Refresh failed",
   };
   const REFRESH_CODE_LABEL = {
@@ -2146,7 +2170,7 @@ function App() {
 
         <TweakSection label="Marvel Rivals stats">
           <div className="stats-source-card">
-            <p><b>Rank refresh:</b> {statsProvider === "netease" ? "NetEase only — enter a UID or exact IGN. One shared connection loads identity, available ranks and public PC Career stats for other players; targets need no local login. Private or unavailable stats are labeled separately." : "Tracker.gg."}</p>
+            <p><b>Rank refresh:</b> {statsProvider === "netease" ? "NetEase only — enter a PC UID. One normal SDK connection loads the available profile; targets need no local login. Native numeric ranks and raw scores stay separate from saved labels. Private or unavailable sections are labeled separately." : "Tracker.gg."}</p>
             <p><b>Detailed profiles:</b> a RivalsData link appears when an account has a UID. RivalsData receives nothing until you open that link.</p>
           </div>
         </TweakSection>
