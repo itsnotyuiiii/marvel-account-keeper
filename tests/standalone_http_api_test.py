@@ -86,6 +86,18 @@ def raw_request(server, header_lines, *, first="GET /v1/players/123 HTTP/1.1"):
         return response.status, response.read()
 
 
+def completed_job(service, lookup_id):
+    """Wait for the completion callback before advancing a synthetic clock."""
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        with service._lock:
+            job = service._jobs.get(lookup_id)
+            if job is not None and job.completed is not None:
+                return job
+        time.sleep(0.001)
+    raise AssertionError("synthetic job callback did not finish")
+
+
 class ProfileLookupServiceTest(unittest.TestCase):
     def test_exact_uid_validation_before_manager_and_fixed_errors(self):
         manager = Manager()
@@ -98,6 +110,184 @@ class ProfileLookupServiceTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "lookup_wait_invalid"):
                     service.lookup(123, wait_seconds=wait)
         self.assertEqual(manager.calls, [])
+
+    def test_resume_ids_are_strict_and_unknown_ids_never_submit(self):
+        manager = Manager()
+        with service_for(manager) as service:
+            for lookup_id in (True, 1, b"a" * 32, "", "a" * 31, "a" * 33, "A" * 32,
+                              "g" * 32, "a" * 32 + "\n", " " + "a" * 32):
+                reply = service.lookup(123, lookup_id=lookup_id)
+                self.assertEqual(reply.status_code, 400)
+                self.assertEqual(reply.body, {"error": {"code": "invalid_lookup"}})
+            reply = service.lookup(123, lookup_id="a" * 32)
+            self.assertEqual(reply.status_code, 410)
+            self.assertEqual(reply.body, {"error": {"code": "lookup_expired"}})
+        self.assertEqual(manager.calls, [])
+
+    def test_initial_and_resume_callers_coalesce_to_one_opaque_id(self):
+        entered, release = threading.Event(), threading.Event()
+        def blocked(uid):
+            entered.set()
+            release.wait(2)
+            return result(uid)
+        manager = Manager(blocked)
+        with service_for(manager) as service, ThreadPoolExecutor(max_workers=8) as callers:
+            try:
+                pending = service.lookup(123, wait_seconds=0)
+                lookup_id = pending.body["lookupId"]
+                self.assertRegex(lookup_id, r"\A[0-9a-f]{32}\Z")
+                self.assertEqual(set(pending.body), {"error", "lookupId"})
+                self.assertTrue(entered.wait(1))
+                futures = [callers.submit(service.lookup, 123, wait_seconds=0,
+                           **({"lookup_id": lookup_id} if n % 2 else {})) for n in range(8)]
+                for future in futures:
+                    reply = future.result(1)
+                    self.assertEqual(reply, pending)
+                self.assertEqual(len(service._jobs), 1)
+                release.set()
+                self.assertEqual(service.lookup(123, lookup_id=lookup_id).status_code, 200)
+            finally:
+                release.set()
+        self.assertEqual(manager.calls, [123])
+
+    def test_resume_preserves_original_failure_even_after_new_initial_success(self):
+        release = threading.Event()
+        calls = [0]
+        def first_fails(uid):
+            calls[0] += 1
+            if calls[0] == 1:
+                release.wait(2)
+                raise RuntimeError("PRIVATE_REFRESH_FAILURE")
+            return result(uid)
+        manager = Manager(first_fails)
+        with service_for(manager) as service:
+            try:
+                lookup_id = service.lookup(123, wait_seconds=0).body["lookupId"]
+                release.set()
+                original = service.lookup(123, lookup_id=lookup_id)
+                self.assertEqual(original.status_code, 502)
+                self.assertEqual(original.body, {"error": {"code": "lookup_failed"}})
+                job = completed_job(service, lookup_id)
+                self.assertIsNone(job.future)
+                self.assertNotIn("PRIVATE", repr(job))
+                self.assertNotIn("PRIVATE", job.completed.payload.decode())
+                for _ in range(3):
+                    self.assertEqual(service.lookup(123, lookup_id=lookup_id), original)
+                self.assertEqual(manager.calls, [123])
+                # Only an explicit fresh lookup may start another operation.
+                self.assertEqual(service.lookup(123).status_code, 200)
+                self.assertEqual(service.lookup(123, lookup_id=lookup_id), original)
+                self.assertEqual(manager.calls, [123, 123])
+            finally:
+                release.set()
+
+    def test_resume_preserves_fixed_unavailable_outcome_without_resubmission(self):
+        release = threading.Event()
+        def unavailable(uid):
+            release.wait(2)
+            return result(uid, outcome="session_recovery_required", profile=None)
+        manager = Manager(unavailable)
+        with service_for(manager) as service:
+            try:
+                lookup_id = service.lookup(123, wait_seconds=0).body["lookupId"]
+                release.set()
+                reply = service.lookup(123, lookup_id=lookup_id)
+                self.assertEqual(reply.status_code, 503)
+                self.assertEqual(reply.body, {"error": {"code": "lookup_unavailable"}})
+                for _ in range(3):
+                    self.assertEqual(service.lookup(123, lookup_id=lookup_id), reply)
+            finally:
+                release.set()
+        self.assertEqual(manager.calls, [123])
+
+    def test_job_ttl_starts_after_completion_and_outlives_success_cache(self):
+        clock, release = [100.0], threading.Event()
+        def blocked(uid):
+            release.wait(2)
+            return result(uid)
+        manager = Manager(blocked)
+        with service_for(manager, monotonic=lambda: clock[0]) as service:
+            try:
+                pending = service.lookup(123, wait_seconds=0)
+                lookup_id = pending.body["lookupId"]
+                clock[0] = 1000.0
+                self.assertEqual(service.lookup(123, lookup_id=lookup_id, wait_seconds=0), pending)
+                # A wrong target cannot observe or enqueue this owner's job.
+                wrong = service.lookup(124, lookup_id=lookup_id, wait_seconds=0)
+                self.assertEqual((wrong.status_code, wrong.body),
+                                 (410, {"error": {"code": "lookup_expired"}}))
+                release.set()
+                original = service.lookup(123, lookup_id=lookup_id)
+                self.assertEqual(original.status_code, 200)
+                job = completed_job(service, lookup_id)
+                self.assertEqual(job.expires_at, 1300.0)
+                clock[0] = 1030.0
+                reply = service.lookup(123, lookup_id=lookup_id)
+                self.assertEqual(reply, original)
+                self.assertNotIn(123, service._cache)
+                reply.body["nativeProfile"]["name"] = "CHANGED_COPY"
+                clock[0] = 1299.999
+                self.assertEqual(service.lookup(123, lookup_id=lookup_id), original)
+                clock[0] = 1300.0
+                expired = service.lookup(123, lookup_id=lookup_id)
+                self.assertEqual(expired.status_code, 410)
+                self.assertEqual(expired.body, {"error": {"code": "lookup_expired"}})
+                self.assertNotIn(lookup_id, service._jobs)
+                self.assertEqual(manager.calls, [123])
+            finally:
+                release.set()
+
+    def test_registry_is_bounded_to_100_and_evicts_completed_jobs_not_pending(self):
+        release = threading.Event()
+        def block_last(uid):
+            if uid >= 100:
+                release.wait(2)
+            return result(uid)
+        manager = Manager(block_last)
+        ids = [f"{n:032x}" for n in range(1, 105)]
+        with service_for(manager) as service, patch.object(api.uuid, "uuid4",
+                side_effect=[SimpleNamespace(hex=value) for value in ids]):
+            try:
+                for uid in range(1, 100):
+                    self.assertEqual(service.lookup(uid).status_code, 200)
+                    completed_job(service, ids[uid - 1])
+                pending_ids = []
+                for uid in range(100, 104):
+                    pending_ids.append(service.lookup(uid, wait_seconds=0).body["lookupId"])
+                    self.assertLessEqual(len(service._jobs), 100)
+                self.assertEqual(len(service._jobs), 100)
+                self.assertTrue(all(service._jobs[key].completed is None for key in pending_ids))
+                for lookup_id in ids[:3]:
+                    self.assertNotIn(lookup_id, service._jobs)
+                # Even if the short UID cache still contains this success, an
+                # evicted ID never falls back to cache or starts another job.
+                self.assertIn(1, service._cache)
+                reply = service.lookup(1, lookup_id=ids[0])
+                self.assertEqual(reply.status_code, 410)
+                self.assertEqual(service.lookup(104, wait_seconds=0).body,
+                                 {"error": {"code": "lookup_busy"}})
+                self.assertEqual(len(service._pending), 4)
+                release.set()
+                for uid, lookup_id in zip(range(100, 104), pending_ids):
+                    self.assertEqual(service.lookup(uid, lookup_id=lookup_id).status_code, 200)
+            finally:
+                release.set()
+        self.assertEqual(manager.calls, list(range(1, 104)))
+
+    def test_completed_failure_registry_expires_without_new_work(self):
+        clock = [10.0]
+        manager = Manager(lambda uid: result(uid, owner_authenticated=False))
+        lookup_id = "a" * 32
+        with service_for(manager, monotonic=lambda: clock[0]) as service, patch.object(
+                api.uuid, "uuid4", return_value=SimpleNamespace(hex=lookup_id)):
+            self.assertEqual(service.lookup(123).status_code, 502)
+            completed_job(service, lookup_id)
+            clock[0] = 309.999
+            self.assertEqual(service.lookup(123, lookup_id=lookup_id).status_code, 502)
+            clock[0] = 310.0
+            self.assertEqual(service.lookup(123, lookup_id=lookup_id).status_code, 410)
+            self.assertEqual(service._jobs, {})
+        self.assertEqual(manager.calls, [123])
 
     def test_only_exact_authenticated_manager_result_enters_projector(self):
         outcomes = [SimpleNamespace(**result(123).__dict__), result(123, owner_authenticated=1),
@@ -354,20 +544,109 @@ class PrivateHTTPTest(unittest.TestCase):
                 with patch.object(api, "MAX_WAIT_SECONDS", 0.01):
                     status, headers, body = request(server)
                 self.assertEqual(status, 503)
-                self.assertEqual(body, {"error": {"code": "lookup_pending"}})
+                self.assertEqual(body["error"], {"code": "lookup_pending"})
+                self.assertEqual(set(body), {"error", "lookupId"})
+                self.assertRegex(body["lookupId"], r"\A[0-9a-f]{32}\Z")
                 self.assertEqual(headers["Retry-After"], "2")
                 self.assertTrue(entered.wait(1))
                 release.set()
-                self.assertEqual(request(server)[0], 200)
+                self.assertEqual(request(server, "/v1/players/123?lookup=" + body["lookupId"])[0], 200)
                 self.assertEqual(request(server)[0], 200)
             finally:
                 release.set()
         self.assertEqual(manager.calls, [123])
 
+    def test_polling_pending_failure_returns_same_result_and_never_rotates_again(self):
+        entered, release = threading.Event(), threading.Event()
+        def blocked_failure(uid):
+            entered.set()
+            release.wait(2)
+            raise RuntimeError("PRIVATE_REFRESH_FAILURE")
+        manager = Manager(blocked_failure)
+        with service_for(manager) as service, server_for(service) as server:
+            try:
+                with patch.object(api, "MAX_WAIT_SECONDS", 0.01):
+                    status, headers, body = request(server)
+                    self.assertEqual(status, 503)
+                    self.assertEqual(headers["Retry-After"], "2")
+                    lookup_id = body["lookupId"]
+                    self.assertTrue(entered.wait(1))
+                    path = "/v1/players/123?lookup=" + lookup_id
+                    self.assertEqual(request(server, path)[2], body)
+                    self.assertEqual(request(server)[2], body)
+                release.set()
+                for _ in range(4):
+                    status, headers, failure = request(server, path)
+                    self.assertEqual(status, 502)
+                    self.assertEqual(failure, {"error": {"code": "lookup_failed"}})
+                    self.assertNotIn("Retry-After", headers)
+                    self.assertNotIn("PRIVATE", json.dumps(failure))
+                self.assertEqual(manager.calls, [123])
+            finally:
+                release.set()
+
+    def test_http_polling_success_survives_uid_cache_expiry_and_job_expiry_is_410(self):
+        clock, release = [100.0], threading.Event()
+        def blocked(uid):
+            release.wait(2)
+            return result(uid)
+        manager = Manager(blocked)
+        with service_for(manager, monotonic=lambda: clock[0]) as service, server_for(service) as server:
+            try:
+                with patch.object(api, "MAX_WAIT_SECONDS", 0.01):
+                    body = request(server)[2]
+                lookup_id = body["lookupId"]
+                path = "/v1/players/123?lookup=" + lookup_id
+                for invalid_path in ("/v1/players/124?lookup=" + lookup_id,
+                                     "/v1/players/123?lookup=" + "0" * 32):
+                    status, _, body = request(server, invalid_path)
+                    self.assertEqual(status, 410)
+                    self.assertEqual(body, {"error": {"code": "lookup_expired"}})
+                release.set()
+                status, _, original = request(server, path)
+                self.assertEqual(status, 200)
+                completed_job(service, lookup_id)
+                clock[0] = 131.0
+                self.assertEqual(request(server, path)[2], original)
+                self.assertNotIn(123, service._cache)
+                clock[0] = 400.0
+                status, _, body = request(server, path)
+                self.assertEqual(status, 410)
+                self.assertEqual(body, {"error": {"code": "lookup_expired"}})
+                self.assertEqual(manager.calls, [123])
+            finally:
+                release.set()
+
+    def test_http_lookup_query_is_sole_exact_lowercase_hex_and_never_submits_on_invalid(self):
+        manager = Manager()
+        value = "a" * 32
+        queries = ("", "lookup", "lookup=", "lookup=" + value.upper(),
+                   "lookup=" + value + "a", "lookup=" + value[:-1],
+                   "lookup=" + value + "&lookup=" + value,
+                   "lookup=" + value + "&", "lookup=" + value + "&x=1",
+                   "x=1&lookup=" + value, "Lookup=" + value,
+                   "%6cookup=" + value, "lookup=%61" + value[1:],
+                   "lookup=" + value + "+", "lookup=" + value + "?",
+                   "lookup=" + value + "#fragment", "x=PRIVATE_QUERY")
+        with service_for(manager) as service, server_for(service) as server:
+            for query in queries:
+                with self.subTest(query=query):
+                    status, _, body = request(server, "/v1/players/123?" + query)
+                    self.assertEqual(status, 400)
+                    self.assertEqual(body, {"error": {"code": "invalid_lookup"}})
+            # Resume endpoints have the same authorization gate as initial GET.
+            self.assertEqual(request(server, "/v1/players/123?lookup=" + value, auth=None)[0], 401)
+            self.assertEqual(request(server, "/v1/players/123?lookup=" + value)[0], 410)
+            self.assertEqual(manager.calls, [])
+
     def test_http_wait_is_explicitly_capped_at_fifteen_seconds(self):
         with service_for() as service, server_for(service) as server, patch.object(service, "lookup", return_value=api.LookupResponse(503, {"error": {"code": "lookup_pending"}}, 2)) as lookup:
             self.assertEqual(request(server)[0], 503)
             lookup.assert_called_once_with(123, wait_seconds=15)
+            lookup.reset_mock()
+            lookup_id = "a" * 32
+            self.assertEqual(request(server, "/v1/players/123?lookup=" + lookup_id)[0], 503)
+            lookup.assert_called_once_with(123, lookup_id=lookup_id, wait_seconds=15)
 
     def test_disconnect_does_not_stop_manager_completion(self):
         entered, release, persisted = threading.Event(), threading.Event(), threading.Event()

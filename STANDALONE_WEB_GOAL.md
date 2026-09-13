@@ -15,8 +15,10 @@ strict web projection and standalone server CLI are now implemented. Synthetic
 restart and shutdown tests verify token persistence/ownership without real
 credential storage or NetEase calls. Previously verified live bundles pass
 both the new Python envelope and the website parser. See NATIVE_API_SERVER.md.
-Goal remains incomplete: approve independent hosting/bootstrap, integrate
-pending-response handling, live-verify hosted restart/refresh and visibility,
+Website pending-response handling now uses opaque UID-bound job references,
+bounded automatic waiting, cancellation, and terminal-failure preservation.
+Goal remains incomplete: approve independent hosting/bootstrap, connect and
+live-verify hosted restart/refresh and visibility,
 and continue owner season-history research. No real durable secret is saved.
 
 ## Required outcome

@@ -8,7 +8,7 @@ credential loader, CORS, public listener default, or sensitive access log.
 from __future__ import annotations
 
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -21,6 +21,7 @@ import socket
 from socketserver import ThreadingMixIn
 import threading
 import time
+import uuid
 
 from standalone_session_manager import SessionLookupResult
 
@@ -28,11 +29,15 @@ from standalone_session_manager import SessionLookupResult
 MAX_PENDING = 4
 MAX_CACHE = 100
 CACHE_SECONDS = 30
+MAX_JOBS = 100
+JOB_SECONDS = 300
 MAX_WAIT_SECONDS = 15
 MAX_RESPONSE_BYTES = 65536
 MAX_HEADER_BYTES = 16 * 1024
 RETRY_SECONDS = 2
 _UID_PATH = re.compile(r"/v1/players/([0-9]{1,19})\Z")
+_LOOKUP_ID = re.compile(r"[0-9a-f]{32}\Z")
+_LOOKUP_QUERY = re.compile(r"lookup=([0-9a-f]{32})\Z")
 _SESSION_UNAVAILABLE = frozenset({
     "session_unconfigured", "session_candidate_pending", "session_verification_in_flight",
     "session_rotation_unknown", "session_store_unavailable", "session_store_record_invalid",
@@ -85,11 +90,22 @@ def _error(code, status=503, *, retry=False):
     return _Completed(status, _encoded({"error": {"code": code}}), RETRY_SECONDS if retry else None)
 
 
+@dataclass(repr=False)
+class _Job:
+    uid: int
+    future: Future | None
+    completed: _Completed | None = None
+    expires_at: float | None = None
+
+
 class ProfileLookupService:
     """Serialized singleflight lookups; the manager alone owns credentials.
 
     clock returns an aware datetime for projected fetchedAt; monotonic controls
-    cache expiry. manager.lookup(uid) returns owner_authenticated/profile fields.
+    cache/job expiry. Resume IDs only observe the original UID-bound job; they
+    never submit/retry. Completed successes AND failures remain for up to 300s
+    in a separate 100-job registry, with completed-only capacity eviction.
+    manager.lookup(uid) returns owner_authenticated/profile fields.
     Arbitrary manager outcome text, status dictionaries and errors are ignored.
     """
 
@@ -100,6 +116,7 @@ class ProfileLookupService:
         self._manager, self._projector, self._clock, self._monotonic = manager, projector, clock, monotonic
         self._lock = threading.Lock()
         self._pending = {}
+        self._jobs = OrderedDict()
         self._cache = OrderedDict()
         self._closed = False
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="owner-profile")
@@ -139,7 +156,7 @@ class ProfileLookupService:
         except Exception:
             return _error("lookup_failed", 502)
 
-    def _complete(self, uid, future):
+    def _complete(self, lookup_id, future):
         # The worker catches external failures; still never propagate callback
         # exception text (Future callback logging could otherwise expose it).
         try:
@@ -147,22 +164,39 @@ class ProfileLookupService:
         except BaseException:
             result = _error("lookup_failed", 502)
         with self._lock:
-            if self._pending.get(uid) is not future:
+            job = self._jobs.get(lookup_id)
+            if job is None or job.future is not future:
                 return
-            del self._pending[uid]
-            if not self._closed and type(result) is _Completed and result.status_code == 200:
-                try:
-                    expires = self._now() + CACHE_SECONDS
-                except Exception:
-                    return
-                self._cache[uid] = (expires, result)
+            if self._pending.get(job.uid) == lookup_id:
+                del self._pending[job.uid]
+            if type(result) is not _Completed:
+                result = _error("lookup_failed", 502)
+            # Retain only the fixed projected outcome, not a Future that could
+            # hold an internal exception traceback or worker-local arguments.
+            job.future, job.completed = None, result
+            if self._closed:
+                del self._jobs[lookup_id]
+                return
+            try:
+                completed_at = self._now()
+            except Exception:
+                del self._jobs[lookup_id]
+                return
+            job.expires_at = completed_at + JOB_SECONDS
+            self._jobs.move_to_end(lookup_id)
+            if result.status_code == 200:
+                uid = job.uid
+                self._cache[uid] = (completed_at + CACHE_SECONDS, result)
                 self._cache.move_to_end(uid)
                 while len(self._cache) > MAX_CACHE:
                     self._cache.popitem(last=False)
 
-    def lookup(self, uid, *, wait_seconds=MAX_WAIT_SECONDS):
+    def lookup(self, uid, *, lookup_id=None, wait_seconds=MAX_WAIT_SECONDS):
+        """Start/coalesce without an ID; with an ID, observe only that job."""
         if not _valid_uid(uid):
             return _error("invalid_uid", 400).response()
+        if lookup_id is not None and (type(lookup_id) is not str or _LOOKUP_ID.fullmatch(lookup_id) is None):
+            return _error("invalid_lookup", 400).response()
         if (type(wait_seconds) not in (int, float) or not 0 <= wait_seconds <= MAX_WAIT_SECONDS
                 or not math.isfinite(wait_seconds)):
             raise ValueError("lookup_wait_invalid")
@@ -176,25 +210,52 @@ class ProfileLookupService:
                 return _error("lookup_unavailable").response()
             for key in [key for key, (expires, _) in self._cache.items() if expires <= now]:
                 del self._cache[key]
-            cached = self._cache.get(uid)
-            if cached is not None:
-                self._cache.move_to_end(uid)
-                return cached[1].response()
-            future = self._pending.get(uid)
-            if future is None:
-                if len(self._pending) >= MAX_PENDING:
-                    return _error("lookup_busy", retry=True).response()
-                future = self._executor.submit(self._work, uid)
-                self._pending[uid] = future
-                created = True
+            for key in [key for key, job in self._jobs.items()
+                        if job.expires_at is not None and job.expires_at <= now]:
+                del self._jobs[key]
+            if lookup_id is not None:
+                job = self._jobs.get(lookup_id)
+                if job is None or job.uid != uid:
+                    return _error("lookup_expired", 410).response()
+            else:
+                cached = self._cache.get(uid)
+                if cached is not None:
+                    self._cache.move_to_end(uid)
+                    return cached[1].response()
+                lookup_id = self._pending.get(uid)
+                if lookup_id is None:
+                    if len(self._pending) >= MAX_PENDING:
+                        return _error("lookup_busy", retry=True).response()
+                    # Never evict active/queued work to make room for a new
+                    # request, and never reuse a former job as a new operation.
+                    while len(self._jobs) >= MAX_JOBS:
+                        oldest = next((key for key, job in self._jobs.items() if job.completed is not None), None)
+                        if oldest is None:
+                            return _error("lookup_busy", retry=True).response()
+                        del self._jobs[oldest]
+                    for _ in range(4):
+                        candidate = uuid.uuid4().hex
+                        if candidate not in self._jobs:
+                            lookup_id = candidate
+                            break
+                    if lookup_id is None:
+                        return _error("lookup_busy", retry=True).response()
+                    future = self._executor.submit(self._work, uid)
+                    self._jobs[lookup_id] = _Job(uid, future)
+                    self._pending[uid] = lookup_id
+                    created = True
+                job = self._jobs[lookup_id]
+            if job.completed is not None:
+                return job.completed.response()
+            future = job.future
         if created:
             # Register outside the lock: an already-completed future invokes
             # callbacks synchronously, which must not deadlock this caller.
-            future.add_done_callback(lambda completed: self._complete(uid, completed))
+            future.add_done_callback(lambda completed: self._complete(lookup_id, completed))
         try:
             return future.result(timeout=wait_seconds).response()
         except FutureTimeout:
-            return _error("lookup_pending", retry=True).response()
+            return LookupResponse(503, {"error": {"code": "lookup_pending"}, "lookupId": lookup_id}, RETRY_SECONDS)
         except BaseException:
             # No cancellation: the sole worker can finish rotation/persistence.
             return _error("lookup_failed", 502).response()
@@ -203,6 +264,8 @@ class ProfileLookupService:
         with self._lock:
             self._closed = True
             self._cache.clear()
+            for key in [key for key, job in self._jobs.items() if job.completed is not None]:
+                del self._jobs[key]
         self._executor.shutdown(wait=wait, cancel_futures=False)
 
 
@@ -267,12 +330,20 @@ class _Handler(BaseHTTPRequestHandler):
             ready = self.server.service.ready
             self._reply(LookupResponse(200 if ready else 503, {"status": "ready" if ready else "unavailable"}))
             return
-        match = _UID_PATH.fullmatch(self.path)
+        path, separator, query = self.path.partition("?")
+        match = _UID_PATH.fullmatch(path)
         if match is None:
             code = "invalid_uid" if self.path.startswith("/v1/players/") else "not_found"
             self._reply(_error(code, 400 if code == "invalid_uid" else 404).response())
             return
-        self._reply(self.server.service.lookup(int(match[1]), wait_seconds=MAX_WAIT_SECONDS))
+        options = {}
+        if separator:
+            parsed = _LOOKUP_QUERY.fullmatch(query)
+            if parsed is None:
+                self._reply(_error("invalid_lookup", 400).response())
+                return
+            options["lookup_id"] = parsed[1]
+        self._reply(self.server.service.lookup(int(match[1]), wait_seconds=MAX_WAIT_SECONDS, **options))
 
     def _unsupported(self):
         if self._request_allowed():

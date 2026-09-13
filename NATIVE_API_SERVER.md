@@ -82,14 +82,21 @@ become unknown, not a fabricated date. No punishments feed is enabled; see
 One worker serializes session use. Concurrent requests for the same UID share
 one operation. Up to four distinct UIDs may be pending. Successful projected
 results are cached for 30 seconds, bounded to 100 entries. HTTP handlers wait
-at most 15 seconds, then return `503`, code `lookup_pending`, and
-`Retry-After: 2`. Retrying the same UID joins that operation; a browser leaving
-or timing out does not cancel credential persistence. `lookup_busy` also has
+at most 15 seconds, then return `503`, code `lookup_pending`, an opaque
+`lookupId`, and `Retry-After: 2`. Resume with
+`GET /v1/players/{uid}?lookup={lookupId}`. That request observes only the
+original UID-bound operation, including its terminal failure; it never starts
+another lookup or token exchange. Successes and failures remain available for
+up to 300 seconds after completion in a separate 100-job bounded registry;
+completed entries may be evicted for capacity. Missing/expired/wrong-UID IDs
+return `410 lookup_expired`, never fall back to a new operation or UID cache.
+A browser leaving or timing out does not cancel credential persistence. `lookup_busy` also has
 a retry hint. Other fixed failures must not be treated as an invalid player
 or automatically retried indefinitely.
 
-The current website adapter accepts the success envelope. Automatic handling
-of pending responses still needs integration before hosted end-to-end launch.
+The website now automatically observes these job references for up to 90 seconds
+after one submission. Editing the UID or choosing Stop waiting cancels only the
+browser wait. Terminal failures/expiry never silently initialize another job.
 There is no whole-lookup time SLA: network stages have their existing bounded
 timeouts, and HTTP wait time is not a native-work cancellation deadline.
 
@@ -141,7 +148,7 @@ the new Python envelope and the website's TypeScript parser without new
 NetEase calls or deployed snapshots.
 
 Still required: approved independent hosting and real credential bootstrap,
-live server restart/refresh verification, website pending-response integration,
+live server restart/refresh verification, connection to the prepared website,
 hosted multi-UID/visibility checks, and owner season-history investigation.
 Passing offline tests is not proof of live session expiry/renewal or completion
 of the standalone hosted goal.

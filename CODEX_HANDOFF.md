@@ -3,7 +3,65 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: durable native HTTP server implemented
+## Latest continuation — September 12: one-submit lookup waiting published
+
+The website now waits automatically for long native lookups after one UID
+submission. Native standalone_http_api.py issues an opaque lowercase-hex32
+lookupId when a job is pending. GET /v1/players/{uid}?lookup={id} ONLY observes
+that original UID-bound job, including terminal failures; it never starts a
+replacement login/refresh. Safe projected completions are retained300seconds,
+bounded100jobs with completed-only eviction; missing/expired/wrongUID returns
+410lookup_expired. Existing30second success cache/four pending limits remain.
+This fixes the concrete failure-replay risk of merely repeating bare UID GETs.
+
+Website stats-service maps only native pending/busy503 to normalized202, passes
+the job ID through, and bypasses UID cache/older-response substitution on resume.
+Unknown errors and410 are terminal; native404 no longer claims invalid UID.
+lookup-client.ts observes the same ID for up to90seconds, with abortable waits.
+Editing UID/unmount/Stop waiting cancels the browser wait; global upstream429
+pause survives editing. No browser cancellation interrupts server persistence.
+
+Website50 tests, TypeScript and build passed. Backend96 related tests passed;
+main's HTTP/CLI/restart run passed51 tests. Browser-only synthetic checks showed
+pending->success from ONE submit with exactly initial+ID-resume calls, stale
+result suppression after UID edit, and60second source pause remaining disabled
+after input edit. All browser fetch overrides were removed by navigation; no
+production fixtures or real NetEase queries were used in this checkpoint.
+
+Website commit0bef2d05a2b707de3785c8d1892b911179f4454a pushed to Sites source/main.
+Version5 saved as
+appgprj_6aa103c328fc8191abc05fb743cfcbe6~appgver_30d2d47247c881918312a4fdd32e3377;
+private deployment appgdep_6aa5ffbcfaa08191a152dfe19b08e723 SUCCEEDED at
+2026-09-13T01:43:50Z. Literal URL https://yui-rivals-stats.kbj311.chatgpt.site .
+Owner-only access preserved, runtime env revision0 unchanged. Full native stats
+are still NOT enabled in production. No real credentials saved or host acquired.
+
+Windows build/packaging helper wrappers again could not launch their shim/Bash;
+unchanged node --run build passed. The actual official prepare-site-build.cjs
+prepared a verified-new Temp stage; source/built/staged manifests had identical
+hashes and no migrations. Windows tar packaged only validated build output;
+Sites saved the exact pushed revision/archive. No global/OS changes were made.
+Source write credential was cleared from transient tool storage after publishing.
+Local preview helper11642 was stopped with Ctrl-C and is terminal(exit1).
+tab3 is the deliverable (production URL queued via open_in_codex) and tab2
+remains the authorized-store handoff.
+
+Next: approved independent host/authorized bootstrap, hosted connection and live
+restart/refresh/visibility acceptance; owner season-history research remains.
+Hosting preference is pending; do not purchase resources or save real SDK
+credentials without a specified approved destination. Goal remains ACTIVE;
+this turn is concrete implementation/deployment PROGRESS, not an impasse.
+
+Read-only hosting comparison: official current baseline DigitalOcean Basic
+Regular1GiB/1vCPU/25GiB is$6/month; paid Render0.5c-512mb$7 +1GBdisk$0.25 is
+$7.25/month (Hobby workspace$0), before tax/overages. Render includes managed
+HTTPS; requires0.0.0.0:$PORT, runtime-mounted bootstrap, one instance and a
+configured shutdown grace (30s default, up to300s). VPS requires our own HTTPS
+proxy/OS upkeep. These are candidate hosts only, not confirmed NetEase cloud-IP
+acceptance or an approved selection. Official sources: digitalocean.com/pricing/
+droplets; render.com/pricing, /docs/disks, /docs/web-services, /docs/deploys.
+
+## Earlier continuation — September 12: durable native HTTP server implemented
 
 New standalone_session_manager.py owns the normal SDK refresh-on-use lifecycle;
 standalone_session_store.py provides AES-GCM encrypted SQLite/CAS and an OS
