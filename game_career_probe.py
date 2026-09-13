@@ -14,6 +14,7 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import mmap
 import secrets
 import struct
@@ -51,6 +52,8 @@ ENTITY_DESTROY = login.fields((1, "eid", 12))
 ENTITY_PROP = login.fields((1, "entity_id", 12), (2, "sync_msg", 10))
 MSG_ACK = login.fields((1, "ack", 6))
 MSG_RESET = login.fields((1, "reset", 6))
+RPC_ENVELOPE = login.fields((1, "rpc_index", 6), (2, "args", 10))
+MAX_REPLY_BYTES = 4 * 1024 * 1024
 
 
 def consume_startup_record(record, report):
@@ -127,8 +130,10 @@ def verify_career_args(args, requested, nonce):
     if not isinstance(args, list) or len(args) != 5 or args[0] != "query_player_career":
         raise CareerError("career_reply_shape")
     context, code, _, data = args[1:]
+    echoed = context.get("career_req") if isinstance(context, dict) else None
     if (not isinstance(context, dict) or context.get("is_career") is not True
-            or context.get("mak_request_id") != nonce or context.get("career_req") != requested):
+            or context.get("mak_request_id") != nonce or not isinstance(echoed, dict)
+            or echoed != requested or any(type(echoed[key]) is not type(value) for key, value in requested.items())):
         raise CareerError("career_request_context_mismatch")
     if type(code) is not int:
         raise CareerError("career_result_code_missing")
@@ -204,15 +209,16 @@ def verify_match_summary_args(args, requested, nonce):
 
 
 def read_one_career(connection, transport, zone, methods, uid, season, *, on_verified=None,
-                    own_uid=login.EXPECTED_OWN_UID):
+                    own_uid=login.EXPECTED_OWN_UID, deadline=None):
+    """One aggregate; optional deadline is an absolute monotonic upper bound."""
     nonce = secrets.token_hex(16)
     request, requested = make_request(methods, uid, zone.get("zone_id"), season, nonce, own_uid=own_uid)
     return _read_one_reply(connection, transport, methods, request, requested, nonce,
-                           verify_career_args, "career", on_verified)
+                           verify_career_args, "career", on_verified, deadline)
 
 
 def read_one_match_summary(connection, transport, zone, methods, uid, *, on_verified=None,
-                          own_uid=login.EXPECTED_OWN_UID):
+                          own_uid=login.EXPECTED_OWN_UID, deadline=None):
     """Read one bounded first page after normal login and match-history permission.
 
     The caller must have independently verified global
@@ -220,42 +226,96 @@ def read_one_match_summary(connection, transport, zone, methods, uid, *, on_veri
     No authentication, permission default, retry or next-page fetch is performed.
     Only the trusted callback receives transient, request/UID-bound raw rows;
     individual statistic fields still require the caller's normal projection.
+    Optional deadline is an absolute monotonic upper bound, never an extension
+    of this reader's existing15-second budget.
     """
     nonce = secrets.token_hex(16)
     request, requested = make_match_summary_request(methods, uid, zone.get("zone_id"), nonce, own_uid=own_uid)
     return _read_one_reply(connection, transport, methods, request, requested, nonce,
-                           verify_match_summary_args, "match_summary", on_verified)
+                           verify_match_summary_args, "match_summary", on_verified, deadline)
 
 
-def _read_one_reply(connection, transport, methods, request, requested, nonce, verify, kind, on_verified):
+def _query_deadline(deadline, kind):
+    """A caller's absolute monotonic deadline may shorten the default15s only."""
+    current = time.monotonic()
+    if deadline is None:
+        return current + 15
+    if type(deadline) not in (int, float):
+        raise CareerError(kind + "_deadline_invalid")
+    try:
+        if not math.isfinite(deadline):
+            raise CareerError(kind + "_deadline_invalid")
+    except OverflowError:
+        raise CareerError(kind + "_deadline_invalid") from None
+    effective = min(current + 15, deadline)
+    if effective <= current:
+        raise TimeoutError
+    return effective
+
+
+def _read_one_reply(connection, transport, methods, request, requested, nonce, verify, kind, on_verified,
+                    caller_deadline=None):
     verified_key = kind + "_verified"
     report = {"outcome": kind + "_not_sent", verified_key: False, "bytes_received": 0,
               "application_bytes_sent": 0, "records_received": 0, "other_rpc_count": 0,
               "startup_record_count": 0, "own_entity_created": False,
+              "request_attempted": False, "request_sent": False, "reply_context_verified": False,
+              "connection_reuse_allowed": True,
               "remote_code_executed": False, "secrets_saved": False}
     try:
-        connection.sendall(transport.encrypt(request))
-        report["application_bytes_sent"] = len(request)
-        deadline = time.monotonic() + 15
+        deadline = _query_deadline(caller_deadline, kind)
+        # Encryption can advance the stream even if a send never happens.
+        report["connection_reuse_allowed"] = False
+        encrypted = transport.encrypt(request)
+        remaining_time = deadline - time.monotonic()
+        if remaining_time <= 0:
+            raise TimeoutError
+        connection.settimeout(remaining_time)
+        report.update(request_attempted=True, request_sent=None, application_bytes_sent=None)
+        connection.sendall(encrypted)
+        report.update(request_sent=True, application_bytes_sent=len(request))
         for _ in range(128):
-            record = login.receive_record(connection, transport, deadline, report, max_size=4 * 1024 * 1024)
+            remaining = MAX_REPLY_BYTES - report["bytes_received"]
+            if remaining < 7:
+                raise CareerError(kind + "_receive_bound")
+            try:
+                record = login.receive_record(connection, transport, deadline, report, max_size=remaining)
+            except login.LoginError:
+                size = report.get("unrecognized_record_size")
+                if type(size) is int and size > remaining:
+                    raise CareerError(kind + "_receive_bound") from None
+                raise
             report["records_received"] += 1
-            if report["bytes_received"] > 4 * 1024 * 1024:
+            if report["bytes_received"] > MAX_REPLY_BYTES:
                 raise CareerError(kind + "_receive_bound")
             if consume_startup_record(record, report):
                 continue
             if (record.main_cmd, record.sub_cmd) != (3, 101):
                 report.update(unexpected_main=record.main_cmd, unexpected_sub=record.sub_cmd)
                 raise CareerError("unrecognized_" + kind + "_startup_command")
-            rpc = decode_avatar_rpc(record, direction="in")
-            if rpc.index != methods.reply:
+            # Current5113: validate the RPC envelope before decoding args.
+            # Unrelated initialization/credential blobs remain uninterpreted.
+            envelope = login.decode_body(RPC_ENVELOPE, record.body, max_body=MAX_REPLY_BYTES)
+            if set(envelope) != {"rpc_index", "args"}:
+                raise CareerError(kind + "_reply_shape")
+            if envelope["rpc_index"] != methods.reply:
                 report["other_rpc_count"] += 1
-                continue  # Do not execute unrelated own-avatar initialization RPCs.
+                continue
+            rpc = decode_avatar_rpc(record, direction="in")
             report.update(verify(rpc.args, requested, nonce))
+            # verify validates method/context/nonce/status and, on success, all
+            # required target UIDs. A correlated service error still completes
+            # the request; it need not poison an otherwise synchronized stream.
+            report.update(reply_context_verified=True, connection_reuse_allowed=True)
             if report[verified_key] and on_verified is not None:
                 # Raw replies stay transient; only this trusted local projector
                 # receives the UID/context-verified payload. CLI remains redacted.
-                on_verified(rpc.args[4])
+                try:
+                    on_verified(rpc.args[4])
+                except Exception:
+                    # A local projection error is not a partial native reply.
+                    # Contain callback text, retaining only verified correlation.
+                    report.update(outcome=kind + "_reply_unvalidated", **{verified_key: False})
             return report
         raise CareerError(kind + "_record_bound")
     except (CareerError, login.LoginError) as exc:
@@ -266,7 +326,7 @@ def _read_one_reply(connection, transport, methods, request, requested, nonce, v
         report["outcome"] = kind + "_connection_closed"
     except OSError:
         report["outcome"] = kind + "_network_error"
-    except ValueError:
+    except (ValueError, TypeError, OverflowError, RecursionError):
         report["outcome"] = kind + "_reply_unvalidated"
     report[verified_key] = False
     return report

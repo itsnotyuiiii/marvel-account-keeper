@@ -1,5 +1,47 @@
 # Live API research checkpoints
 
+## September 12, 2026: combined UID request, owner partial support and no-row diagnosis
+
+standalone_profile_bundle.run_profile_bundle now performs one normal owner
+login and Social setup, target mesh/namecard or own Career, then one sequential
+gateway panel/Career/matches sequence. Shared native deadline covers sends and
+receives; explicit reuse eligibility distinguishes no-I/O skips/full correlated
+service responses from uncertain stream state. Per-section projections preserve
+independent overview/history visibility and unavailable data. Neither raw RPCs
+nor credentials leave the library. --profile-bundle is explicit/research-only;
+default application and production site remain unchanged.
+
+LIVE otherUID1822797559: KovaaksKid2008,PC,level63; Career1271 matches/850 wins/
+25687 kills/6239 deaths/19527 assists,19 seasons1..19,43 first-page matches and
+43 rank deltas. Actual panel season20 is verified separately; current_rank is
+null because this target's returned history has no20 row. No owner score or
+max-history inference fills it. Latest match5517291_1789002579_1245095_11001_12
+at1789003855, season19, mode2, duration993s, win23/5/36, rank delta+15 from5545
+to5560, level_after23; old level and placements unknown. Helper57024 terminal.
+
+LIVE ownerUID1370598422: ゆいᶻᶻᶻ/PC/level32; own Career273 matches/149 wins/4165
+kills/1609 deaths/3145 assists and current season20 level14/raw score4350.
+Own rank history and matches explicitly unavailable, not empty. Helper95960
+terminal. Both combined attempts used newly exchanged SDK SAUTH, not fallback.
+
+Earlier numeric10826896958: combined identity unavailable; separate same-owner
+normal mesh request diagnosed data=[] with row_count0. AUTH/gateway and Social
+setup all accepted, exact mesh RPC bound, reply command0, no server error.
+Mesh198 application bytes within Social14 handshake+909 application sent,
+719 received; payload56 base64 chars/41 decoded bytes. This proves a no-row
+lookup in this context, not a generally invalid UID or a replay-code identity.
+Helpers61498/82276 terminal. Await clarification of where the number was copied.
+Bundle diagnostic fields now preserve the fixed token/setup/identity stage
+outcomes; social_session_accepted no longer depends on target identity success.
+
+Standalone direct dependencies are separated from desktop/research packages.
+Windows subprocess imports/public-artifact smoke test passed with desktop and
+analysis dependencies prohibited. Linux remains unverified; no local Docker or
+installed WSL environment was available. No software/OS/network change made.
+Final full regression:961 tests passed in150.576s. The updated29 bundle tests
+passed separately, including five diagnostic cases added after full discovery;
+current discovered total966. All test and live helper processes are terminal.
+
 ## September 12, 2026: returned refresh chain and actual current season
 
 LIVE two-round sdk_token chain passed: first returned refresh token became the

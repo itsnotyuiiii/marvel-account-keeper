@@ -357,5 +357,218 @@ class GameCareerProbeTest(unittest.TestCase):
         self.assertNotIn("fixture-", json.dumps(result))
 
 
+class NativeReaderReuseTest(unittest.TestCase):
+    def read(self, kind, *, args=None, incoming=None, callback=None, deadline=None, sock=None, transport=None):
+        if incoming is None:
+            args = (reply()[0] if kind == "career" else match_reply()[0]) if args is None else args
+            incoming = rpc_record(METHODS.reply, args)
+        sock = FakeSocket(incoming) if sock is None else sock
+        wire = (SimpleNamespace(encrypt=lambda value: value, decrypt=lambda value: value)
+                if transport is None else transport)
+        with patch.object(career.secrets, "token_hex", return_value="fixture-nonce"):
+            if kind == "career":
+                report = career.read_one_career(sock, wire, {"zone_id": 11001}, METHODS, TARGET, 19,
+                                                on_verified=callback, deadline=deadline)
+            else:
+                report = career.read_one_match_summary(sock, wire, {"zone_id": 11001}, METHODS, TARGET,
+                                                       on_verified=callback, deadline=deadline)
+        self.assertNotIn("PRIVATE", json.dumps(report))
+        return report, sock
+
+    def test_exact_success_service_error_and_projection_failure_have_reusable_complete_context(self):
+        for kind in ("career", "match_summary"):
+            for status in (0, 429):
+                args = reply()[0] if kind == "career" else match_reply()[0]
+                args[2] = status
+                if status:
+                    args[3:] = ["PRIVATE_SERVICE_TEXT", {"token": "PRIVATE_DATA"}]
+                report, sock = self.read(kind, args=args)
+                for key in ("request_attempted", "request_sent", "reply_context_verified", "connection_reuse_allowed"):
+                    self.assertIs(report[key], True)
+                self.assertEqual(report[kind + "_verified"], status == 0)
+                self.assertEqual(report["application_bytes_sent"], len(sock.sent[0]))
+            for error in (ValueError("PRIVATE_PROJECTION"), RuntimeError("PRIVATE_PROJECTION"),
+                          career.CareerError("PRIVATE_PROJECTION")):
+                def reject(_data):
+                    raise error
+                report, sock = self.read(kind, callback=reject)
+                self.assertFalse(report[kind + "_verified"])
+                self.assertEqual(report["outcome"], kind + "_reply_unvalidated")
+                self.assertTrue(report["reply_context_verified"])
+                self.assertTrue(report["connection_reuse_allowed"])
+                self.assertEqual(len(sock.sent), 1)
+
+    def test_wrong_context_status_or_target_never_allow_connection_reuse(self):
+        for kind in ("career", "match_summary"):
+            for change in ("method", "nonce", "request", "status", "uid"):
+                args = reply()[0] if kind == "career" else match_reply()[0]
+                if change == "method":
+                    args[0] = "PRIVATE_METHOD"
+                elif change == "nonce":
+                    args[1]["mak_request_id"] = "PRIVATE_NONCE"
+                elif change == "request":
+                    args[1]["career_req"]["player_uid"] += 1
+                elif change == "status":
+                    args[2] = False
+                elif kind == "career":
+                    args[4]["career"]["player_uid"] += 1
+                else:
+                    args[4]["match_info"][0]["match_player"]["player_uid"] += 1
+                report, sock = self.read(kind, args=args)
+                self.assertTrue(report["request_sent"])
+                self.assertFalse(report["reply_context_verified"])
+                self.assertFalse(report["connection_reuse_allowed"])
+                self.assertFalse(report[kind + "_verified"])
+                self.assertEqual(len(sock.sent), 1)
+
+    def test_career_echo_requires_exact_types_not_numeric_dictionary_equality(self):
+        for key in ("player_uid", "zone_id", "match_season"):
+            args = reply()[0]
+            args[1]["career_req"][key] = float(args[1]["career_req"][key])
+            report, _ = self.read("career", args=args)
+            self.assertEqual(report["outcome"], "career_request_context_mismatch")
+            self.assertFalse(report["reply_context_verified"])
+            self.assertFalse(report["connection_reuse_allowed"])
+
+    def test_expired_and_invalid_deadlines_do_not_touch_cipher_socket_or_reply_context(self):
+        for kind in ("career", "match_summary"):
+            for deadline in (99, 100, True, "110", float("nan"), float("inf"), 10**1000):
+                def forbidden(_value):
+                    self.fail("cipher must not run")
+                with patch.object(career.time, "monotonic", return_value=100), \
+                        patch.object(career.login, "receive_record") as receive:
+                    report, sock = self.read(kind, deadline=deadline,
+                        transport=SimpleNamespace(encrypt=forbidden, decrypt=forbidden))
+                self.assertFalse(report["request_attempted"])
+                self.assertFalse(report["request_sent"])
+                self.assertFalse(report["reply_context_verified"])
+                self.assertTrue(report["connection_reuse_allowed"])
+                self.assertEqual(report["application_bytes_sent"], 0)
+                self.assertFalse(sock.sent)
+                receive.assert_not_called()
+                expected = "_reply_timeout" if type(deadline) is int and deadline in (99, 100) else "_deadline_invalid"
+                self.assertEqual(report["outcome"], kind + expected)
+
+    def test_caller_deadline_can_shorten_but_never_extend_fifteen_second_budget(self):
+        original = career.login.receive_record
+        for kind in ("career", "match_summary"):
+            for supplied, expected in ((None, 115), (110, 110), (1000, 115)):
+                seen = []
+                def receive(connection, transport, deadline, report, **kwargs):
+                    seen.append(deadline)
+                    return original(connection, transport, deadline, report, **kwargs)
+                with patch.object(career.time, "monotonic", return_value=100), \
+                        patch.object(career.login, "receive_record", side_effect=receive):
+                    report, _ = self.read(kind, deadline=supplied)
+                self.assertTrue(report["connection_reuse_allowed"])
+                self.assertEqual(seen, [expected])
+
+    def test_partial_send_and_cipher_failure_are_distinct_but_both_terminal(self):
+        class Partial(FakeSocket):
+            def sendall(self, value):
+                super().sendall(value)
+                raise OSError("PRIVATE_PARTIAL")
+        for kind in ("career", "match_summary"):
+            report, sock = self.read(kind, sock=Partial(b""))
+            self.assertTrue(report["request_attempted"])
+            self.assertIsNone(report["request_sent"])
+            self.assertIsNone(report["application_bytes_sent"])
+            self.assertFalse(report["reply_context_verified"])
+            self.assertFalse(report["connection_reuse_allowed"])
+            self.assertEqual(len(sock.sent), 1)
+            def failed(_value):
+                raise ValueError("PRIVATE_CIPHER")
+            report, sock = self.read(kind, transport=SimpleNamespace(encrypt=failed))
+            self.assertFalse(report["request_attempted"])
+            self.assertFalse(report["request_sent"])
+            self.assertFalse(report["connection_reuse_allowed"])
+            self.assertFalse(sock.sent)
+
+    def test_send_uses_shared_remaining_timeout_and_expiry_after_encrypt_sends_nothing(self):
+        class Timed(FakeSocket):
+            def __init__(self, incoming):
+                super().__init__(incoming)
+                self.timeouts = [120]  # A prior operation left a longer timeout.
+            def settimeout(self, value):
+                self.timeouts.append(value)
+        for kind in ("career", "match_summary"):
+            for after_encrypt in (107, 110):
+                clock = [100]
+                def encrypt(value):
+                    clock[0] = after_encrypt
+                    return value
+                args = reply()[0] if kind == "career" else match_reply()[0]
+                sock = Timed(rpc_record(METHODS.reply, args))
+                wire = SimpleNamespace(encrypt=encrypt, decrypt=lambda value: value)
+                with patch.object(career.time, "monotonic", side_effect=lambda: clock[0]):
+                    report, _ = self.read(kind, sock=sock, transport=wire, deadline=110)
+                if after_encrypt == 107:
+                    self.assertTrue(report["reply_context_verified"])
+                    self.assertEqual(sock.timeouts[1], 3)
+                    self.assertTrue(all(0 < value <= 3 for value in sock.timeouts[1:]))
+                else:
+                    self.assertFalse(report["request_attempted"])
+                    self.assertFalse(report["request_sent"])
+                    self.assertEqual(report["application_bytes_sent"], 0)
+                    self.assertFalse(report["reply_context_verified"])
+                    self.assertFalse(report["connection_reuse_allowed"])
+                    self.assertEqual(report["outcome"], kind + "_reply_timeout")
+                    self.assertEqual(sock.timeouts, [120])
+                    self.assertFalse(sock.sent)
+
+    def test_timeout_partial_read_reset_and_unknown_hotfix_do_not_allow_reuse(self):
+        reset = career.login.encode_body(career.MSG_RESET, {"reset": 1})
+        reset = struct.pack("<IHB", len(reset) + 7, 65534, 112) + reset
+        unknown_hotfix = struct.pack("<IHB", 7, 4, 102)
+        for kind in ("career", "match_summary"):
+            for incoming in (b"", b"\x00", reset, unknown_hotfix):
+                report, sock = self.read(kind, incoming=incoming)
+                self.assertTrue(report["request_sent"])
+                self.assertFalse(report["reply_context_verified"])
+                self.assertFalse(report["connection_reuse_allowed"])
+                self.assertEqual(len(sock.sent), 1)
+            with patch.object(career.login, "receive_record", side_effect=TimeoutError("PRIVATE_TIMEOUT")):
+                report, _ = self.read(kind)
+            self.assertEqual(report["outcome"], kind + "_reply_timeout")
+            self.assertFalse(report["connection_reuse_allowed"])
+
+    def test_unrelated_argument_blobs_are_not_decoded_and_remaining_byte_budget_is_enforced(self):
+        packed = b"PRIVATE_NOT_MESSAGEPACK"
+        body = b"\xe2" + struct.pack("<I", len(packed)) + packed + b"\x61" + struct.pack("<I", 999)
+        unrelated = struct.pack("<IHB", len(body) + 7, 3, 101) + body
+        for kind in ("career", "match_summary"):
+            args = reply()[0] if kind == "career" else match_reply()[0]
+            incoming = unrelated + rpc_record(METHODS.reply, args)
+            with patch.object(career, "decode_avatar_rpc", wraps=decode_avatar_rpc) as decode:
+                report, _ = self.read(kind, incoming=incoming)
+            self.assertTrue(report["reply_context_verified"])
+            self.assertEqual(report["other_rpc_count"], 1)
+            self.assertEqual(decode.call_count, 1)
+            with patch.object(career, "MAX_REPLY_BYTES", len(unrelated) + 20):
+                report, sock = self.read(kind, incoming=incoming)
+            self.assertEqual(report["outcome"], kind + "_receive_bound")
+            self.assertEqual(report["bytes_received"], len(unrelated) + 4)
+            self.assertFalse(report["connection_reuse_allowed"])
+            self.assertEqual(sock.incoming, rpc_record(METHODS.reply, args)[4:])
+
+    def test_two_normal_sections_reuse_same_stream_after_service_error_or_local_projection_failure(self):
+        for service_error in (False, True):
+            first, second = reply()[0], match_reply([])[0]
+            if service_error:
+                first[2:5] = [429, "PRIVATE", None]
+            sock = FakeSocket(rpc_record(METHODS.reply, first) + rpc_record(METHODS.reply, second))
+            def reject(_data):
+                raise ValueError("PRIVATE")
+            result, _ = self.read("career", sock=sock, callback=reject)
+            self.assertFalse(result["career_verified"])
+            self.assertTrue(result["reply_context_verified"])
+            self.assertTrue(result["connection_reuse_allowed"])
+            result, _ = self.read("match_summary", sock=sock)
+            self.assertTrue(result["match_summary_verified"])
+            self.assertTrue(result["connection_reuse_allowed"])
+            self.assertEqual(len(sock.sent), 2)
+            self.assertFalse(sock.incoming)
+
+
 if __name__ == "__main__":
     unittest.main()

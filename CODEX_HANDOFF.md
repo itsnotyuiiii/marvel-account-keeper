@@ -3,7 +3,66 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
-## Latest continuation — September 12: returned-token chain and current rank panel verified
+## Latest continuation — September 12: single-request profile bundle verified
+
+After checkpoint24ad3f6, one combined UID request is now LIVE verified for
+other1822797559. --profile-bundle --lookup-uid 1822797559 with the normal saved
+SDK login returned KovaaksKid2008/PC/level63, unfiltered Career1271 matches,
+850 wins,25687 kills,6239 deaths,19527 assists,19 rank seasons1..19 and43 recent
+matches with43 verified per-match rank changes. Current panel season20 is
+independent; this target has no returned season20 row, so current_rank=null,
+not the owner's rank and not the latest historical rank. First match is a
+season19 win,23/5/36,+15 (5545->5560). Helper57024 is terminal.
+
+The owner's combined lookup also passed: UID1370598422/IGNゆいᶻᶻᶻ/level32,
+Career273/149/4165/1609/3145 (matches/wins/kills/deaths/assists), current season20,
+numeric rank level14/raw score4350. Owner season-history and own-match routes
+are NOT implemented yet and return explicit unavailable outcomes. Do not use
+the other-player operation with the owner UID. Helper95960 is terminal.
+
+The older supplied number10826896958 did not return a player row. Individual
+authenticated mesh diagnosis proved accepted Social setup, bound mesh RPC,
+reply command0, no service error, and data=[]/row_count0. This is
+uid_lookup_no_data, not an AUTH failure or proof of globally invalid identity.
+Helpers61498(bundle) and82276(mesh diagnosis) are terminal. A nonblocking
+question asks whether that number came from Career UID, replay or another
+source. Do not silently substitute1822797559 or search guessed namespaces.
+
+standalone_profile_bundle.py now composes one owner AUTH/gateway and one Social
+setup: exact target mesh plus normal allowed rank/own-Career read, then the SAME
+gateway for normal owner panel and independent other Career/matches. No extra
+login per section, installed game, local logs/captures or third-party stats.
+Each section exports a typed projection with status/outcome; no raw callbacks
+or owner rank can populate another UID. Source scores remain raw; labels and
+normalized display points are unverified. Explicit token_outcome,
+social_setup_outcome and identity_outcome distinguish no-row from unavailable
+setup; Social acceptance is tracked independently of target identity.
+
+Native readers have explicit send/correlation/reuse metadata and a shared
+absolute15-second native deadline, including sendall timeout. Exact correlated
+service errors and local projection errors can leave the stream reusable;
+partial I/O, reset or correlation/UID failure cannot. No-I/O privacy skips do
+not prevent an independent permitted section. Service errors retain only fixed
+outcomes and bounded numeric source_error_code, never server messages.
+
+requirements-native-client.txt lists the three exercised direct dependencies
+(cryptography50.0.1, msgpack1.2.2, requests2.34.2). A subprocess smoke test loads
+portable modules/public inputs while rejecting desktop/research dependencies.
+It passes on Windows; Linux is NOT yet tested. WSL is not installed and Docker
+was not available here; neither was installed or enabled. No browser storage,
+Wi-Fi, OS settings, production website/provider, external deployment or saved
+credential was changed. Full final regression passed961 tests in150.576s.
+The29-case bundle suite also passed in0.120s, covering the five diagnostic tests
+added after full-suite discovery (current total966). The portability smoke and
+11 bundle-handoff tests passed separately. Existing synthetic vault/temp-file
+warnings were non-failing. Full test helper9414 and all live helpers are terminal.
+
+Next: partial-data website contract/UI integration, owner history/match route
+implementation, reviewed rank labels/normalization, durable authorized session
+renewal and approved native-capable hosting. The hosting question remains
+pending. The goal is ACTIVE/INCOMPLETE; this is another concrete PROGRESS turn.
+
+## Previous checkpoint — September 12: returned-token chain and current rank panel verified
 
 This turn remains PROGRESS; the goal is ACTIVE and INCOMPLETE. A bounded
 two-round normal saved-account exchange now passed LIVE. Round two used only

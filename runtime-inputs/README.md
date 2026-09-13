@@ -1,5 +1,11 @@
 # Reviewed public runtime inputs
 
+The new standalone_profile_bundle.py composes these same public inputs into one
+live-verified UID request, without adding another runtime artifact or installed
+file dependency. requirements-native-client.txt separates its three direct
+packages from the desktop/research environment. A Windows import/public-input
+smoke test excludes those extra packages; Linux verification is still pending.
+
 September12 continuation: unchanged3848703 inputs now also support LIVE19
 other-player rank seasons, two normal returned-refresh-token exchanges with
 fresh owner AUTH/gateway, and the normal owner current-rank panel. Actual panel

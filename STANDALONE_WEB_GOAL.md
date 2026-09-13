@@ -16,6 +16,13 @@ and verify hosted restart/refresh. No production deployment or saved secrets yet
 
 ## Required outcome
 
+Latest implementation checkpoint: one combined UID call now returns the other
+test profile's identity, aggregate,19 season records and43 matches/rank changes,
+with actual current season20. Owner combined identity/Career/current rank also
+passed, but owner history/matches remain unavailable. This library/CLI result
+has NOT yet been connected to the production website or durable server renewal.
+Full hosted acceptance criteria below remain active.
+
 A UID lookup on the hosted site returns the player's available NetEase identity,
 Career totals, season ranks and verified recent matches without the user's
 laptop, installed game, SDK logs or packet captures at runtime. Per-match rank

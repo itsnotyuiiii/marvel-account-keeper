@@ -51,7 +51,7 @@ ERROR_CODES = frozenset({
     "rank_panel_unrecognized_startup_command", "rank_panel_timeout",
     "rank_panel_connection_closed", "rank_panel_network_error", "rank_panel_reply_unvalidated",
     "rank_panel_unexpected", "rank_panel_rank_shape", "rank_panel_level_invalid",
-    "rank_panel_score_invalid",
+    "rank_panel_score_invalid", "rank_panel_deadline_invalid",
 })
 
 
@@ -146,17 +146,19 @@ def _report():
         "identity_basis": "caller_verified_owner_gateway", "response_identity_echo_verified": False,
         "correlation_basis": "fresh_connection_single_operation_exact_method", "nonce_correlated": False,
         "rank_labels_verified": False, "rank_history_verified": False, "overall_peak_verified": False,
-        "connection_reuse_allowed": False, "remote_code_executed": False, "secrets_saved": False,
+        "connection_reuse_allowed": True, "remote_code_executed": False, "secrets_saved": False,
     }
 
 
-def read_rank_panel_once(connection, transport, zone, *, client_version=REVIEWED_BUILD):
+def read_rank_panel_once(connection, transport, zone, *, client_version=REVIEWED_BUILD, deadline=None):
     """Send exactly one normal C_OPEN_PANEL(1), then return only fixed/numeric data.
 
     `zone` is the trusted normal AUTH-selected owner context passed by the
     gateway's after-LOGIN callback; this helper does not itself authenticate it.
     It does not close or replace the caller's connection. A successful result
     permits the owning orchestration to continue its separate authorized work.
+    Optional deadline is absolute monotonic time and only shortens the normal
+    15-second send/receive budget. A no-cipher/no-I/O skip leaves it untouched.
     """
     report = _report()
     if (type(client_version) is not str or client_version != REVIEWED_BUILD
@@ -167,13 +169,25 @@ def read_rank_panel_once(connection, transport, zone, *, client_version=REVIEWED
         return report
     report.update(owner_context_valid=True, uid=str(zone["role_uid"]))
     try:
+        deadline = career._query_deadline(deadline, "rank_panel")
+    except career.CareerError:
+        report["outcome"] = "rank_panel_deadline_invalid"
+        return report
+    except TimeoutError:
+        report["outcome"] = "rank_panel_timeout"
+        return report
+    try:
         request = make_rank_panel_request()
+        report["connection_reuse_allowed"] = False
         encrypted = transport.encrypt(request)
+        remaining_time = deadline - time.monotonic()
+        if remaining_time <= 0:
+            raise TimeoutError
+        connection.settimeout(remaining_time)
         report.update(request_attempted=True, request_sent=None, request_count=1,
                       application_bytes_sent=None)
         connection.sendall(encrypted)
         report.update(request_sent=True, application_bytes_sent=len(request))
-        deadline = time.monotonic() + TIMEOUT_SECONDS
         for _ in range(MAX_RECORDS):
             remaining = MAX_BYTES - report["bytes_received"]
             if remaining < 7:

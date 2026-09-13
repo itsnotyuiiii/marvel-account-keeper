@@ -11,23 +11,25 @@ from standalone_match_query import MatchQueryError, project_match_summary_respon
 
 def _report(outcome):
     return {"outcome": outcome, "request_attempted": False, "career_verified": False,
+            "request_sent": False, "reply_context_verified": False, "connection_reuse_allowed": True,
+            "application_bytes_sent": 0,
             "identity_verified": False, "ranks_verified": False, "matches_verified": False,
             "secrets_saved": False, "remote_code_executed": False}
 
 
-def read_other_career_once(connection, transport, zone, methods, *, setup_report, target_uid):
+def read_other_career_once(connection, transport, zone, methods, *, setup_report, target_uid, deadline=None):
     """One unfiltered PC aggregate, independently gated by overview visibility."""
     return _read_native_section(connection, transport, zone, methods, setup_report=setup_report,
-                                target_uid=target_uid, kind="career")
+                                target_uid=target_uid, kind="career", deadline=deadline)
 
 
-def read_other_matches_once(connection, transport, zone, methods, *, setup_report, target_uid):
+def read_other_matches_once(connection, transport, zone, methods, *, setup_report, target_uid, deadline=None):
     """One first match page, independently gated by global history visibility."""
     return _read_native_section(connection, transport, zone, methods, setup_report=setup_report,
-                                target_uid=target_uid, kind="match_summary")
+                                target_uid=target_uid, kind="match_summary", deadline=deadline)
 
 
-def _read_native_section(connection, transport, zone, methods, *, setup_report, target_uid, kind):
+def _read_native_section(connection, transport, zone, methods, *, setup_report, target_uid, kind, deadline):
     report = _report("other_" + kind + "_prerequisites_unverified")
     if (type(zone) is not dict or type(zone.get("role_uid")) is not int
             or zone["role_uid"] <= 0 or type(zone.get("zone_id")) is not int or zone["zone_id"] <= 0
@@ -51,6 +53,16 @@ def _read_native_section(connection, transport, zone, methods, *, setup_report, 
     if type(permission) is not dict or permission.get("state") != "allowed":
         report["outcome"] = "other_" + kind + "_" + section + "_not_available"
         return report
+    deadline_options = {}
+    if deadline is not None:
+        try:
+            deadline_options["deadline"] = career._query_deadline(deadline, kind)
+        except career.CareerError:
+            report["outcome"] = "other_" + kind + "_deadline_invalid"
+            return report
+        except TimeoutError:
+            report["outcome"] = "other_" + kind + "_reply_timeout"
+            return report
     projected, projection_error = None, None
 
     def on_verified(data):
@@ -63,14 +75,18 @@ def _read_native_section(connection, transport, zone, methods, *, setup_report, 
             # diagnosis here without conflating it with RPC correlation failure.
             projection_error = error.code
 
-    report["request_attempted"] = True
+    # Until the reader returns honest send/correlation metadata, any exception
+    # may have followed cipher movement or a partial send. Local skips above
+    # leave the connection untouched and therefore reusable, not verified.
+    report.update(request_attempted=True, request_sent=None, application_bytes_sent=None,
+                  connection_reuse_allowed=False)
     try:
         if kind == "career":
             native = career.read_one_career(connection, transport, zone, methods, target_uid, 0,
-                                            own_uid=zone["role_uid"], on_verified=on_verified)
+                                            own_uid=zone["role_uid"], on_verified=on_verified, **deadline_options)
         else:
             native = career.read_one_match_summary(connection, transport, zone, methods, target_uid,
-                                                   own_uid=zone["role_uid"], on_verified=on_verified)
+                                                   own_uid=zone["role_uid"], on_verified=on_verified, **deadline_options)
     except (CareerQueryError, MatchQueryError) as error:
         report["outcome"] = error.code
         return report
@@ -80,22 +96,42 @@ def _read_native_section(connection, transport, zone, methods, *, setup_report, 
     if type(native) is not dict:
         report["outcome"] = "other_" + kind + "_reply_unverified"
         return report
+    if type(native.get("request_attempted")) is bool:
+        report["request_attempted"] = native["request_attempted"]
+    if type(native.get("request_sent")) is bool or native.get("request_sent") is None:
+        report["request_sent"] = native.get("request_sent")
+    context_verified = (native.get("reply_context_verified") is True
+                        and report["request_attempted"] is True and report["request_sent"] is True)
+    report["reply_context_verified"] = context_verified
+    report["connection_reuse_allowed"] = (native.get("connection_reuse_allowed") is True
+        and (context_verified or (report["request_attempted"] is False and report["request_sent"] is False)))
     # Fixed types/counts/status only. Never export arbitrary exception/server text.
     for key in ("bytes_received", "application_bytes_sent", "records_received", "other_rpc_count",
                 "startup_record_count"):
         value = native.get(key)
         if type(value) is int and 0 <= value <= 16 * 1024 * 1024:
             report[key] = value
+        elif key == "application_bytes_sent" and key in native and value is None:
+            report[key] = None
     code = native.get("server_error_code")
     if type(code) is int and -(10**9) <= code <= 10**9:
         report["server_error_code"] = code
     native_outcomes = {kind + suffix for suffix in (
         "_server_error", "_reply_timeout", "_connection_closed", "_network_error", "_reply_unvalidated",
         "_record_bound", "_receive_bound", "_request_context_mismatch", "_uid_mismatch", "_reply_shape",
-        "_result_code_missing", "_rows_shape")}
+        "_result_code_missing", "_rows_shape", "_deadline_invalid")}
     native_outcomes.update({"unrecognized_" + kind + "_startup_command", "other_player_" + kind + "_verified"})
     if type(native.get("outcome")) is str and native["outcome"] in native_outcomes:
         report["native_outcome"] = native["outcome"]
+    native_scope = (type(native.get("season")) is int and native["season"] == 0) if kind == "career" else (
+        type(native.get("page")) is int and native["page"] == 0
+        and type(native.get("page_size")) is int and native["page_size"] == 50
+        and type(native.get("match_count")) is int and 0 <= native["match_count"] <= 50)
+    if (native.get(kind + "_verified") is True
+            and (type(native.get("target_uid")) is not int or native["target_uid"] != target_uid or not native_scope)):
+        # A contradictory purported success cannot grant reply provenance or
+        # reuse. Correlated service errors have no required success payload.
+        report.update(reply_context_verified=False, connection_reuse_allowed=False)
     if projection_error is not None:
         report["outcome"] = projection_error
         return report

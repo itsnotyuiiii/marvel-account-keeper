@@ -22,6 +22,8 @@ by history visibility. It cannot be combined with either Career flag.
 identity and overview visibility; no current-season or response UID echo is invented.
 --rank-panel reads the normal owner's current rank panel on the same verified
 gateway after owner mesh identity. Current season is not inferred from history.
+--profile-bundle composes the available identity, aggregate, season ranks and
+first match page for one explicit UID, using a single owner gateway session.
 --refresh-before-auth explicitly uses one normal OAuth refresh first. Only this
 mode accepts a renewal token in the one-use handoff; nothing is saved or retried.
 --history-login-before-auth instead accepts the explicitly selected saved-Steam
@@ -64,12 +66,16 @@ WAIT_SECONDS = 75
 def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelope=False,
                  runtime_version="3825464", enter_gateway=False, collect_social_token=False,
                  refresh_before_auth=False, verify_social_session=False, lookup_uid=None, own_career=False,
-                 other_career=False, other_matches=False, other_ranks=False, rank_panel=False):
+                 other_career=False, other_matches=False, other_ranks=False, rank_panel=False,
+                 profile_bundle=False):
     # Validate before consulting any file or opening a network connection.
     probe.build_web_login_inputs(sauth)
     provenance, pin = runtime.reviewed_runtime_pin(runtime_version)
-    if any(type(flag) is not bool for flag in (own_career, other_career, other_matches, other_ranks, rank_panel)):
+    if any(type(flag) is not bool for flag in (own_career, other_career, other_matches, other_ranks, rank_panel, profile_bundle)):
         raise ValueError("uid_lookup_inputs_invalid")
+    if profile_bundle and (own_career or other_career or other_matches or other_ranks or rank_panel
+            or type(lookup_uid) is not int or not 0 < lookup_uid < 2**63):
+        raise ValueError("profile_bundle_requires_explicit_uid_only")
     if rank_panel:
         if (own_career or other_career or other_matches or other_ranks
                 or lookup_uid is not None and (type(lookup_uid) is not int or lookup_uid != 1370598422)):
@@ -132,7 +138,26 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
         refresh_report = {"outcome": "web_refresh_candidate_received", "request_attempted": True,
                           "candidate_received": True, "owner_authentication_verified": False,
                           "automatic_renewal_verified": False, "secrets_saved": False}
-    if verify_social_session or lookup_uid is not None:
+    if profile_bundle:
+        from standalone_profile_bundle import run_profile_bundle
+        combined = run_profile_bundle(sauth, public.configuration, server,
+            parameter=social_public.parameter, career_methods=public.career_methods,
+            target_uid=lookup_uid, client_version=public.provenance.client_version)
+        report = probe._report("profile_bundle_unverified", transmission_unknown=True)
+        if type(combined) is dict and combined.get("uid") == str(lookup_uid):
+            report["profile_bundle"] = combined
+            owner_verified = combined.get("owner_authentication_verified") is True
+            report.update(auth_service_accepted=owner_verified, own_role_verified=owner_verified,
+                          game_login_verified=owner_verified and combined.get("game_login_verified") is True)
+            if report["game_login_verified"]:
+                report.update(prepare_verified=True, credentials_sent=True)
+            bound = report["game_login_verified"] and combined.get("identity_verified") is True
+            report["identity_verified"] = bound
+            for key in ("career_verified", "ranks_verified", "matches_verified", "current_season_verified"):
+                report[key] = bound and combined.get(key) is True
+            if bound:
+                report["outcome"] = "profile_bundle_returned"
+    elif verify_social_session or lookup_uid is not None:
         from game_social_token_probe import run_social_token_once
         from standalone_social_transport import run_social_setup_once
         setup_report, consumed, native_result = None, False, None
@@ -244,19 +269,21 @@ def validate_history_auth_options(auth_options):
             or auth_options.get("refresh_before_auth", False) is not False):
         raise ValueError("history_requires_current_reviewed_pc_envelope")
     flags = {"with_reviewed_version", "with_reviewed_pc_envelope", "enter_gateway", "collect_social_token",
-             "refresh_before_auth", "verify_social_session", "own_career", "other_career", "other_matches", "other_ranks", "rank_panel"}
+             "refresh_before_auth", "verify_social_session", "own_career", "other_career", "other_matches", "other_ranks", "rank_panel", "profile_bundle"}
     if (set(auth_options) - (flags | {"runtime_version", "lookup_uid"})
             or any(type(auth_options[name]) is not bool for name in flags if name in auth_options)):
         raise ValueError("history_auth_options_invalid")
     uid = auth_options.get("lookup_uid")
     if uid is not None and (type(uid) is not int or not 0 < uid < 2**64):
         raise ValueError("uid_lookup_inputs_invalid")
-    selected = [name for name in ("own_career", "other_career", "other_matches", "other_ranks", "rank_panel")
+    selected = [name for name in ("own_career", "other_career", "other_matches", "other_ranks", "rank_panel", "profile_bundle")
                 if auth_options.get(name) is True]
     owner_only = selected in (["own_career"], ["rank_panel"])
     if len(selected) > 1 or (owner_only and uid not in (None, 1370598422)):
         raise ValueError("select_one_profile_section")
-    if selected and not owner_only and (uid is None or uid == 1370598422 or uid >= 2**63):
+    if selected == ["profile_bundle"] and (uid is None or uid >= 2**63):
+        raise ValueError("profile_bundle_requires_explicit_uid_only")
+    if selected and not owner_only and selected != ["profile_bundle"] and (uid is None or uid == 1370598422 or uid >= 2**63):
         raise ValueError("other_section_requires_explicit_other_uid")
 
 
@@ -305,7 +332,7 @@ def attempt_history_chain(bundle, **auth_options):
     validate_history_auth_options(auth_options)
     if (auth_options.get("lookup_uid") is not None or any(auth_options.get(name, False) for name in (
             "collect_social_token", "verify_social_session", "own_career", "other_career",
-            "other_matches", "other_ranks", "rank_panel"))):
+            "other_matches", "other_ranks", "rank_panel", "profile_bundle"))):
         raise ValueError("history_chain_requires_auth_only")
     auth_rounds = []
 
@@ -467,6 +494,8 @@ def main(argv=None):
                         help="Read other-player season ranks if overview is available, without a current-season guess.")
     parser.add_argument("--rank-panel", action="store_true",
                         help="Read the owner's normal current-season/rank panel on the same verified gateway.")
+    parser.add_argument("--profile-bundle", action="store_true",
+                        help="Read one UID's available profile sections through a single owner gateway session.")
     parser.add_argument("--refresh-before-auth", action="store_true",
                         help="Use one normal OAuth refresh, then verify the renewed owner session.")
     parser.add_argument("--history-login-before-auth", action="store_true",
@@ -478,8 +507,11 @@ def main(argv=None):
         parser.error("select only one normal renewal path")
     if args.verify_history_renewal and (args.lookup_uid is not None or args.collect_social_token
             or args.verify_social_session or args.own_career or args.other_career or args.other_matches
-            or args.other_ranks or args.rank_panel):
+            or args.other_ranks or args.rank_panel or args.profile_bundle):
         parser.error("renewal-chain verification permits only AUTH and optional --enter")
+    if args.profile_bundle and (args.own_career or args.other_career or args.other_matches or args.other_ranks
+            or args.rank_panel or args.lookup_uid is None or not 0 < args.lookup_uid < 2**63):
+        parser.error("--profile-bundle requires one explicit UID and no individual profile flags")
     if args.rank_panel:
         if (args.own_career or args.other_career or args.other_matches or args.other_ranks
                 or args.lookup_uid not in (None, 1370598422)):
@@ -516,6 +548,7 @@ def main(argv=None):
                           "other_matches": args.other_matches,
                           "other_ranks": args.other_ranks,
                           "rank_panel": args.rank_panel,
+                          "profile_bundle": args.profile_bundle,
                           "refresh_before_auth": args.refresh_before_auth,
                           "history_login_before_auth": args.history_login_before_auth,
                           "verify_history_renewal": args.verify_history_renewal,
@@ -534,6 +567,8 @@ def main(argv=None):
             lookup_options["other_ranks"] = True
         if args.rank_panel:
             lookup_options["rank_panel"] = True
+        if args.profile_bundle:
+            lookup_options["profile_bundle"] = True
         runner = attempt_history_auth if args.history_login_before_auth else attempt_auth
         if args.verify_history_renewal:
             runner = attempt_history_chain
@@ -562,6 +597,7 @@ def main(argv=None):
                           "other_matches": args.other_matches,
                           "other_ranks": args.other_ranks,
                           "rank_panel": args.rank_panel,
+                          "profile_bundle": args.profile_bundle,
                           "refresh_before_auth": args.refresh_before_auth,
                           "history_login_before_auth": args.history_login_before_auth,
                           "verify_history_renewal": args.verify_history_renewal,

@@ -136,6 +136,11 @@ class StandaloneNativeSectionsTest(unittest.TestCase):
             self.assertEqual(result["career_verified"], outcome == "other_career_verified")
             self.assertTrue(result["identity_verified"])
             self.assertEqual(result["records_received"], 1)
+            self.assertTrue(result["request_attempted"])
+            self.assertTrue(result["request_sent"])
+            correlated = native_outcome in ("other_player_career_verified", "career_server_error")
+            self.assertEqual(result["reply_context_verified"], correlated)
+            self.assertEqual(result["connection_reuse_allowed"], correlated)
             self.assertNotIn("PRIVATE", json.dumps(result))
             if status:
                 self.assertEqual(result["server_error_code"], status)
@@ -295,6 +300,11 @@ class StandaloneNativeMatchSectionsTest(unittest.TestCase):
             self.assertEqual(result["native_outcome"], native_outcome)
             self.assertEqual(result["matches_verified"], outcome == "match_summary_verified")
             self.assertEqual(result["records_received"], 1)
+            self.assertTrue(result["request_attempted"])
+            self.assertTrue(result["request_sent"])
+            correlated = native_outcome in ("other_player_match_summary_verified", "match_summary_server_error")
+            self.assertEqual(result["reply_context_verified"], correlated)
+            self.assertEqual(result["connection_reuse_allowed"], correlated)
             self.assertNotIn("PRIVATE", json.dumps(result))
             if status:
                 self.assertEqual(result["server_error_code"], status)
@@ -340,7 +350,119 @@ class StandaloneNativeMatchSectionsTest(unittest.TestCase):
             self.assertNotIn("server_error_code", result)
             self.assertNotIn("bytes_received", result)
             self.assertNotIn("records_received", result)
-            self.assertNotIn("application_bytes_sent", result)
+            self.assertIsNone(result["application_bytes_sent"])
+
+
+class NativeSectionReuseTest(unittest.TestCase):
+    def invoke(self, kind, *, selected=None, **changes):
+        selected = setup() if selected is None else selected
+        selected = copy.deepcopy(selected)
+        if selected.get("profile_lookup") and "visibility" in selected["profile_lookup"]:
+            selected["profile_lookup"]["visibility"].setdefault("history", {"state": "allowed"})
+        args = {"connection": object(), "transport": object(), "zone": {"role_uid": 456, "zone_id": 42},
+                "methods": native.career.CareerMethods(1, 2), "target_uid": 123, "setup_report": selected}
+        args.update(changes)
+        operation = native.read_other_career_once if kind == "career" else native.read_other_matches_once
+        return operation(**args)
+
+    def available(self):
+        selected = setup()
+        selected["profile_lookup"]["visibility"] = {"overview": {"state": "allowed"},
+                                                      "history": {"state": "allowed"}}
+        return selected
+
+    def test_local_prerequisite_and_independent_privacy_skips_do_not_damage_connection(self):
+        for kind in ("career", "match_summary"):
+            restricted = self.available()
+            section = "overview" if kind == "career" else "history"
+            restricted["profile_lookup"]["visibility"][section] = {"state": "restricted"}
+            with patch.object(native.career, "read_one_career") as aggregate, \
+                    patch.object(native.career, "read_one_match_summary") as matches:
+                for selected, target in (({}, 123), (restricted, 123), (self.available(), 456)):
+                    result = self.invoke(kind, selected=selected, target_uid=target)
+                    self.assertFalse(result["request_attempted"])
+                    self.assertFalse(result["request_sent"])
+                    self.assertFalse(result["reply_context_verified"])
+                    self.assertTrue(result["connection_reuse_allowed"])
+                    self.assertEqual(result["application_bytes_sent"], 0)
+            aggregate.assert_not_called()
+            matches.assert_not_called()
+
+    def test_deadline_validation_skips_before_reader_and_forwarding_only_shortens_budget(self):
+        for kind, method in (("career", "read_one_career"), ("match_summary", "read_one_match_summary")):
+            with patch.object(native.career.time, "monotonic", return_value=100), \
+                    patch.object(native.career, method) as reader:
+                for deadline in (99, 100, True, "110", float("inf"), float("nan"), 10**1000):
+                    result = self.invoke(kind, selected=self.available(), deadline=deadline)
+                    self.assertFalse(result["request_attempted"])
+                    self.assertFalse(result["reply_context_verified"])
+                    self.assertTrue(result["connection_reuse_allowed"])
+                reader.assert_not_called()
+            returned = {"outcome": kind + "_server_error", "server_error_code": 429,
+                        "request_attempted": True, "request_sent": True,
+                        "reply_context_verified": True, "connection_reuse_allowed": True,
+                        "application_bytes_sent": 123}
+            for supplied, expected in ((110, 110), (1000, 115), (None, None)):
+                with patch.object(native.career.time, "monotonic", return_value=100), \
+                        patch.object(native.career, method, return_value=returned) as reader:
+                    result = self.invoke(kind, selected=self.available(), deadline=supplied)
+                if supplied is None:
+                    self.assertNotIn("deadline", reader.call_args.kwargs)
+                else:
+                    self.assertEqual(reader.call_args.kwargs["deadline"], expected)
+                self.assertTrue(result["reply_context_verified"])
+                self.assertTrue(result["connection_reuse_allowed"])
+                self.assertFalse(result["career_verified"])
+                self.assertFalse(result["matches_verified"])
+                self.assertEqual(result["server_error_code"], 429)
+
+    def test_actual_partial_send_is_unknown_and_terminal_in_both_wrappers(self):
+        class Partial(FakeSocket):
+            def sendall(self, value):
+                super().sendall(value)
+                raise OSError("PRIVATE_PARTIAL")
+        for kind in ("career", "match_summary"):
+            sock = Partial(b"")
+            wire = SimpleNamespace(encrypt=lambda value: value, decrypt=lambda value: value)
+            result = self.invoke(kind, selected=self.available(), connection=sock, transport=wire)
+            self.assertTrue(result["request_attempted"])
+            self.assertIsNone(result["request_sent"])
+            self.assertIsNone(result["application_bytes_sent"])
+            self.assertFalse(result["reply_context_verified"])
+            self.assertFalse(result["connection_reuse_allowed"])
+            self.assertTrue(result["identity_verified"])
+            self.assertEqual(len(sock.sent), 1)
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_no_io_reader_result_overrides_dispatch_attempt_but_untyped_metadata_cannot_grant_reuse(self):
+        for kind, method in (("career", "read_one_career"), ("match_summary", "read_one_match_summary")):
+            returned = {"outcome": kind + "_reply_timeout", "request_attempted": False, "request_sent": False,
+                        "application_bytes_sent": 0, "reply_context_verified": False,
+                        "connection_reuse_allowed": True}
+            with patch.object(native.career, method, return_value=returned):
+                result = self.invoke(kind, selected=self.available())
+            self.assertFalse(result["request_attempted"])
+            self.assertFalse(result["request_sent"])
+            self.assertFalse(result["reply_context_verified"])
+            self.assertTrue(result["connection_reuse_allowed"])
+            for value in (None, [], {"request_attempted": True, "request_sent": None,
+                                     "reply_context_verified": True, "connection_reuse_allowed": True},
+                          {"request_attempted": True, "request_sent": True,
+                           "reply_context_verified": 1, "connection_reuse_allowed": True}):
+                with patch.object(native.career, method, return_value=value):
+                    result = self.invoke(kind, selected=self.available())
+                self.assertFalse(result["reply_context_verified"])
+                self.assertFalse(result["connection_reuse_allowed"])
+
+    def test_contradictory_native_success_uid_cannot_grant_reusable_context(self):
+        for kind, method in (("career", "read_one_career"), ("match_summary", "read_one_match_summary")):
+            returned = {kind + "_verified": True, "request_attempted": True, "request_sent": True,
+                        "reply_context_verified": True, "connection_reuse_allowed": True,
+                        "target_uid": 999, "season": 0, "page": 0, "page_size": 50, "match_count": 0}
+            with patch.object(native.career, method, return_value=returned):
+                result = self.invoke(kind, selected=self.available())
+            self.assertFalse(result["reply_context_verified"])
+            self.assertFalse(result["connection_reuse_allowed"])
 
 
 if __name__ == "__main__":

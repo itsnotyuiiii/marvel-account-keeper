@@ -157,13 +157,13 @@ class RankPanelProjectionTest(unittest.TestCase):
 
 
 class RankPanelReaderTest(unittest.TestCase):
-    def read(self, incoming=None, *, zone=ZONE, version="3848703", sock=None, transport=None):
+    def read(self, incoming=None, *, zone=ZONE, version="3848703", sock=None, transport=None, deadline=None):
         if incoming is None:
             incoming = rpc(probe.REPLY_INDEX, [panel()])
         sock = FakeSocket(incoming) if sock is None else sock
         transport = (SimpleNamespace(encrypt=lambda data: data, decrypt=lambda data: data)
                      if transport is None else transport)
-        result = probe.read_rank_panel_once(sock, transport, zone, client_version=version)
+        result = probe.read_rank_panel_once(sock, transport, zone, client_version=version, deadline=deadline)
         self.assertNotIn("PRIVATE", json.dumps(result, allow_nan=False))
         self.assertFalse(result["secrets_saved"])
         self.assertFalse(result["remote_code_executed"])
@@ -334,6 +334,56 @@ class RankPanelReaderTest(unittest.TestCase):
         self.assertTrue(result["rank_panel_verified"])
         for method in (opened, path_open, connect, auth):
             method.assert_not_called()
+
+    def test_expired_or_invalid_shared_deadline_before_cipher_is_a_reusable_no_io_skip(self):
+        for deadline in (99, 100, True, "110", float("inf"), float("nan"), 10**1000):
+            cipher = Mock(side_effect=AssertionError("must not encrypt"))
+            with patch.object(probe.time, "monotonic", return_value=100), \
+                    patch.object(login, "receive_record") as receive:
+                result, sock = self.read(deadline=deadline, transport=SimpleNamespace(encrypt=cipher))
+            self.assertFalse(result["request_attempted"])
+            self.assertFalse(result["request_sent"])
+            self.assertFalse(result["reply_method_received"])
+            self.assertFalse(result["rank_panel_verified"])
+            self.assertTrue(result["connection_reuse_allowed"])
+            self.assertFalse(sock.sent)
+            self.assertEqual(result["application_bytes_sent"], 0)
+            cipher.assert_not_called()
+            receive.assert_not_called()
+            expected = "rank_panel_timeout" if type(deadline) is int and deadline in (99, 100) else "rank_panel_deadline_invalid"
+            self.assertEqual(result["outcome"], expected)
+
+    def test_shared_deadline_caps_send_and_receive_and_cannot_extend_default_budget(self):
+        original = login.receive_record
+        for supplied, expected in ((None, 115), (110, 110), (1000, 115)):
+            seen = []
+            def receive(connection, transport, deadline, report, **kwargs):
+                seen.append(deadline)
+                return original(connection, transport, deadline, report, **kwargs)
+            with patch.object(probe.time, "monotonic", return_value=100), \
+                    patch.object(login, "receive_record", side_effect=receive):
+                result, sock = self.read(deadline=supplied)
+            self.assertTrue(result["rank_panel_verified"])
+            self.assertEqual(seen, [expected])
+            self.assertEqual(sock.timeouts[0], expected - 100)
+            self.assertTrue(all(0 < value <= expected - 100 for value in sock.timeouts))
+
+    def test_expiry_during_encryption_sends_nothing_but_cannot_reuse_advanced_cipher(self):
+        clock = [100]
+        def encrypt(value):
+            clock[0] = 110
+            return value
+        with patch.object(probe.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(login, "receive_record") as receive:
+            result, sock = self.read(deadline=110, transport=SimpleNamespace(encrypt=encrypt))
+        self.assertEqual(result["outcome"], "rank_panel_timeout")
+        self.assertFalse(result["request_attempted"])
+        self.assertFalse(result["request_sent"])
+        self.assertFalse(result["connection_reuse_allowed"])
+        self.assertEqual(result["application_bytes_sent"], 0)
+        self.assertFalse(sock.sent)
+        self.assertFalse(sock.timeouts)
+        receive.assert_not_called()
 
 
 if __name__ == "__main__":
