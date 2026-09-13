@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
+import web_sdk_renewal as renewal
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "probe-web-sdk-login.py"
 spec = importlib.util.spec_from_file_location("web_sdk_handoff", SCRIPT)
@@ -24,9 +26,9 @@ class WebSDKHandoffTest(unittest.TestCase):
             "sdkuid": "fixture-user", "sessionid": "fixture-secret", "deviceid": "fixture-device",
             "udid": "fixture-udid", "client_login_sn": "fixture-login-sn"}}
 
-    def handler(self, payload=None, raw=None):
+    def handler(self, payload=None, raw=None, *, allow_refresh=False):
         attempt = Mock(return_value={"outcome": "own_existing_role_verified", "secrets_saved": False})
-        cls = handoff.make_handler("/auth-once/fixture-capability", attempt)
+        cls = handoff.make_handler("/auth-once/fixture-capability", attempt, allow_refresh=allow_refresh)
         value = cls.__new__(cls)
         value.path = "/auth-once/fixture-capability"
         value.server = SimpleNamespace(server_port=12345, completed=False, report=None,
@@ -179,6 +181,129 @@ class WebSDKHandoffTest(unittest.TestCase):
         session.get.assert_called_once_with(handoff.runtime.LOGIN_LIST_URL, timeout=10,
                                            allow_redirects=False, stream=True)
         response.raw.read.assert_called_once_with(4097, decode_content=True)
+
+    def test_passive_social_preview_does_not_read_files_or_network(self):
+        with patch.object(handoff, "HTTPServer") as listener, \
+                patch.object(handoff.runtime, "load_runtime_manifest") as loaded:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                handoff.main(["--collect-social-token", "--runtime-version", "3848703",
+                              "--with-reviewed-pc-envelope"])
+        report = json.loads(out.getvalue())
+        self.assertTrue(report["enter_gateway"])
+        self.assertTrue(report["collect_social_token"])
+        self.assertFalse(report["network_attempted"])
+        self.assertFalse(report["files_read"])
+        listener.assert_not_called()
+        loaded.assert_not_called()
+
+    def test_passive_social_rejects_old_build_before_any_io(self):
+        with patch.object(handoff.runtime, "load_runtime_manifest") as loaded, \
+                patch("requests.Session") as session:
+            for version, pc in (("3825464", True), ("3848703", False)):
+                with self.assertRaises(ValueError):
+                    handoff.attempt_auth(self.payload()["sauth"], runtime_version=version,
+                                         with_reviewed_pc_envelope=pc, collect_social_token=True)
+        loaded.assert_not_called()
+        session.assert_not_called()
+
+    def test_passive_social_dispatch_uses_current_runtime_without_a_second_login(self):
+        provenance, _ = handoff.runtime.reviewed_runtime_pin("3848703")
+        public = SimpleNamespace(configuration=object(), login_list_url=handoff.runtime.LOGIN_LIST_URL,
+                                 provenance=provenance)
+        server = object()
+        factory = MagicMock()
+        session = factory.return_value.__enter__.return_value
+        response = session.get.return_value.__enter__.return_value
+        response.status_code, response.url = 200, handoff.runtime.LOGIN_LIST_URL
+        response.raw.read.return_value = b"synthetic-server-list"
+        with patch.object(handoff.runtime, "load_runtime_manifest", return_value=public), \
+                patch.object(handoff.runtime, "project_login_server", return_value=server), \
+                patch("game_social_token_probe.run_social_token_once", return_value={"outcome": "fixture"}) as run, \
+                patch.object(handoff.probe, "run_gateway_once") as gateway, \
+                patch.object(handoff.probe, "run_auth_once") as auth, \
+                patch("requests.Session", factory):
+            handoff.attempt_auth(self.payload()["sauth"], runtime_version="3848703",
+                                 with_reviewed_pc_envelope=True, collect_social_token=True)
+        run.assert_called_once_with(self.payload()["sauth"], public.configuration, server,
+                                    client_version="3848703")
+        auth.assert_not_called()
+        gateway.assert_not_called()
+
+    def test_refresh_handoff_requires_explicit_mode_and_nonempty_token(self):
+        payload = self.payload()
+        payload["sauth"]["refresh_token"] = "fixture-refresh-secret"
+        value, attempt = self.handler(payload, allow_refresh=True)
+        value.do_POST()
+        self.assertTrue(value.server.completed)
+        attempt.assert_called_once_with(payload["sauth"])
+        self.assertNotIn("fixture-refresh-secret", json.dumps(value.reply.call_args.args))
+        value, attempt = self.handler(self.payload(), allow_refresh=True)
+        value.do_POST()
+        self.assertEqual(value.reply.call_args.args[0], 400)
+        attempt.assert_not_called()
+
+    def test_refresh_preview_requires_current_pc_and_is_offline(self):
+        with patch.object(handoff, "HTTPServer") as listener, \
+                patch.object(renewal, "refresh_once") as refresh:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                handoff.main(["--refresh-before-auth", "--runtime-version", "3848703",
+                              "--with-reviewed-pc-envelope"])
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                handoff.main(["--refresh-before-auth"])
+        self.assertTrue(json.loads(out.getvalue())["refresh_before_auth"])
+        self.assertFalse(json.loads(out.getvalue())["network_attempted"])
+        listener.assert_not_called()
+        refresh.assert_not_called()
+
+    def run_refresh_attempt(self, *, failure=None, owner_verified=True):
+        provenance, _ = handoff.runtime.reviewed_runtime_pin("3848703")
+        public = SimpleNamespace(configuration=object(), login_list_url=handoff.runtime.LOGIN_LIST_URL,
+                                 provenance=provenance)
+        server = object()
+        previous = dict(self.payload()["sauth"], refresh_token="fixture-refresh-secret")
+        renewed = dict(self.payload()["sauth"], sessionid="fixture-renewed-secret")
+        candidate = renewal.OAuthRefreshCandidate(renewed, previous["refresh_token"])
+        factory = MagicMock()
+        session = factory.return_value.__enter__.return_value
+        response = session.get.return_value.__enter__.return_value
+        response.status_code, response.url = 200, handoff.runtime.LOGIN_LIST_URL
+        response.raw.read.return_value = b"synthetic-server-list"
+        with patch.object(handoff.runtime, "load_runtime_manifest", return_value=public), \
+                patch.object(handoff.runtime, "project_login_server", return_value=server), \
+                patch.object(renewal, "refresh_once", return_value=candidate, side_effect=failure) as refresh, \
+                patch.object(handoff.probe, "run_auth_once", return_value={
+                    "outcome": "own_existing_role_verified" if owner_verified else "expected_role_missing_or_ambiguous",
+                    "auth_service_accepted": True, "own_role_verified": owner_verified}) as auth, \
+                patch("requests.Session", factory):
+            report = handoff.attempt_auth(previous, runtime_version="3848703",
+                                          with_reviewed_pc_envelope=True, refresh_before_auth=True)
+        refresh.assert_called_once_with(previous, configuration=renewal.OAuthRefreshConfiguration(
+            renewal.OAUTH_REFRESH_ENDPOINT, "502"))
+        self.assertEqual(previous["sessionid"], "fixture-secret")
+        self.assertNotIn("fixture-", json.dumps(report))
+        if failure is None:
+            auth.assert_called_once_with(renewed, public.configuration, server,
+                                          client_version="3848703", os_name="pc")
+        else:
+            auth.assert_not_called()
+        return report
+
+    def test_refresh_candidate_requires_fresh_expected_owner_auth(self):
+        for verified in (True, False):
+            report = self.run_refresh_attempt(owner_verified=verified)
+            self.assertTrue(report["sdk_refresh"]["candidate_received"])
+            self.assertEqual(report["sdk_refresh"]["owner_authentication_verified"], verified)
+            self.assertFalse(report["sdk_refresh"]["automatic_renewal_verified"])
+
+    def test_refresh_failure_never_falls_back_to_old_credentials(self):
+        error = renewal.WebSdkRenewalError("web_refresh_reauthentication_required", request_attempted=True)
+        report = self.run_refresh_attempt(failure=error)
+        self.assertEqual(report["outcome"], "web_refresh_failed")
+        self.assertTrue(report["sdk_refresh"]["request_attempted"])
+        self.assertFalse(report["sdk_refresh"]["candidate_received"])
+        self.assertFalse(report["credentials_sent"])
 
     def test_exact_origin_host_capability_and_loopback_required(self):
         for field, change in (("origin", "https://other.invalid"), ("host", "example.invalid:12345"),

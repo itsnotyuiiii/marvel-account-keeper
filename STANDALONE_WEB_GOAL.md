@@ -53,6 +53,27 @@ is verified, document that limit rather than creating an apparently live feed.
 
 ## Current evidence — September 12, 2026
 
+- Latest follow-up supersedes the token-index/initial-delivery wording below:
+  reviewed RPC1538836248 delivered the normal SocialMatrix token after exact
+  owner gateway verification. Owner/zone/time/route claims passed, using only
+  packaged public inputs, not captures or installed files at runtime. The
+  passive reader received850846 bytes/19 records and sent no application bytes.
+  Engine eid and account uid are separate; an earlier incorrect equality gate
+  was fixed from current source. Claim checks are not service acceptance.
+- Fresh Python SocialMatrix setup and packaged public parameter/index loading
+  are LIVE VERIFIED separately from the historical captured native template.
+  The explicit --verify-social-session helper wires a single callback through
+  the verified owner chain. Hello, exact RPC/aid echo and streamid passed; seven
+  modules including usable svc-user were advertised. One connection sent14
+  handshake+711 application bytes, received509, then closed. Source-backed
+  parser corrections resolved a prior local shape rejection. No player-query
+  integration, saved token or autonomous renewal is implied by setup.
+- Direct OAuth renewal returned an HTTP rejection before AUTH (original status
+  unknown); browser comparison returned TypeError without a usable candidate.
+  A credential-free diagnostic returned400/code1000/invalid access with no CORS
+  sharing header. None proves the UID/token invalid. Normal SDK login can mask
+  refresh failure with interactive fallback. Autonomous renewal remains open.
+  All raw credentials remain transient; no browser-storage update was made.
 - The previous update blocker is resolved. Steam installed/target build 25249397
   is complete; native version/changelist is 1.1.3848703 / 3848703, not the Steam
   build ID. The active goal remains incomplete.

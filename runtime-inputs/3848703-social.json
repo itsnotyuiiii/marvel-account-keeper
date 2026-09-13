@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "game_id": "x20naxx2gb",
+  "provenance": {
+    "archive_sha256": "07a3dcf20d539b9a613246047f5f91e4c7b44de62e96e24c47acea1cef5d1f9f",
+    "client_version": "3848703",
+    "parameter_entry": 5512,
+    "parameter_filename": "Scripts/share/const/const_social.py"
+  },
+  "parameter_base64": "bmV0ZWFzZW5hc2RhcTIwMjA=",
+  "parameter_sha256": "e7a322fd20ed8591c366213d4d4d9ca579a5c2d4e0ca11c8e7f63367c7aa5209",
+  "token_rpc_index": 1538836248
+}

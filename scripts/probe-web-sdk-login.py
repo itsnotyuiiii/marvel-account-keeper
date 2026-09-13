@@ -4,7 +4,13 @@ Preview by default. --serve-once accepts one bounded in-memory SDK bundle from
 the official store origin, sends one normal NetEase AUTH request, verifies the
 expected existing own UID, and exits. Explicit --enter additionally verifies
 one normal gateway login for that same owner and closes. No role creation, stats,
-refresh, game files, SDK logs, captures, credential files or production changes.
+game files, SDK logs, captures, credential files or production changes.
+--collect-social-token also waits passively for the normal owner-bound token
+push, checks its claims in memory, then closes without any SocialMatrix request.
+--verify-social-session additionally establishes one normal SocialMatrix setup
+using that fresh token and a packaged public parameter; no player queries.
+--refresh-before-auth explicitly uses one normal OAuth refresh first. Only this
+mode accepts a renewal token in the one-use handoff; nothing is saved or retried.
 Missing native metadata is omitted, never fabricated. --with-reviewed-version
 adds only client_version and engine_ver from the pinned public manifest. It
 does not claim that this reviewed build remains current. Rejection is ambiguous:
@@ -37,16 +43,26 @@ WAIT_SECONDS = 75
 
 
 def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelope=False,
-                 runtime_version="3825464", enter_gateway=False):
+                 runtime_version="3825464", enter_gateway=False, collect_social_token=False,
+                 refresh_before_auth=False, verify_social_session=False):
     # Validate before consulting any file or opening a network connection.
     probe.build_web_login_inputs(sauth)
     provenance, pin = runtime.reviewed_runtime_pin(runtime_version)
-    if type(enter_gateway) is not bool or (enter_gateway and (
-            runtime_version != "3848703" or not with_reviewed_pc_envelope)):
+    if (any(type(flag) is not bool for flag in (enter_gateway, collect_social_token, refresh_before_auth,
+                                               verify_social_session))
+            or ((enter_gateway or collect_social_token or refresh_before_auth or verify_social_session) and (
+            runtime_version != "3848703" or not with_reviewed_pc_envelope))):
         raise ValueError("gateway_requires_current_reviewed_pc_envelope")
+    if refresh_before_auth and ("refresh_token" not in sauth or not sauth["refresh_token"].strip()):
+        raise ValueError("web_refresh_context_invalid")
     public = runtime.load_runtime_manifest(
         Path(__file__).resolve().parents[1] / "runtime-inputs" / (runtime_version + ".json"),
         expected_sha256=pin, expected_provenance=provenance)
+    social_public = None
+    if verify_social_session:
+        from portable_social_runtime import load_social_runtime
+        social_public = load_social_runtime(
+            Path(__file__).resolve().parents[1] / "runtime-inputs" / (runtime_version + "-social.json"))
     import requests
     with requests.Session() as session:
         # No netrc credentials, proxy credentials, cookies or alternate URL.
@@ -57,15 +73,63 @@ def attempt_auth(sauth, *, with_reviewed_version=False, with_reviewed_pc_envelop
                 raise ValueError("official_server_list_unavailable")
             raw = response.raw.read(4097, decode_content=True)
     server = runtime.project_login_server(raw)
-    if enter_gateway:
-        return probe.run_gateway_once(
+    refresh_report = None
+    if refresh_before_auth:
+        import web_sdk_renewal as renewal
+        try:
+            candidate = renewal.refresh_once(sauth, configuration=renewal.OAuthRefreshConfiguration(
+                renewal.OAUTH_REFRESH_ENDPOINT, renewal.OAUTH_APPID))
+        except renewal.WebSdkRenewalError as exc:
+            result = probe._report("web_refresh_failed")
+            result["sdk_refresh"] = {
+                "outcome": exc.code, "request_attempted": exc.request_attempted,
+                "http_status": exc.http_status,
+                "candidate_received": False, "owner_authentication_verified": False,
+                "automatic_renewal_verified": False, "secrets_saved": False}
+            return result
+        sauth = candidate.sauth
+        refresh_report = {"outcome": "web_refresh_candidate_received", "request_attempted": True,
+                          "candidate_received": True, "owner_authentication_verified": False,
+                          "automatic_renewal_verified": False, "secrets_saved": False}
+    if verify_social_session:
+        from game_social_token_probe import run_social_token_once
+        from standalone_social_transport import run_social_setup_once
+        setup_report, consumed = None, False
+
+        def on_token(fresh_session):
+            nonlocal setup_report, consumed
+            if consumed:
+                raise ValueError("social_setup_already_consumed")
+            consumed = True
+            setup_report = run_social_setup_once(fresh_session, parameter=social_public.parameter)
+
+        report = run_social_token_once(sauth, public.configuration, server,
+                                       client_version=public.provenance.client_version,
+                                       on_token=on_token)
+        token_report = report.get("social_token", {})
+        if (report.get("game_login_verified") is True and type(token_report) is dict
+                and token_report.get("owner_claim_matches") is True
+                and token_report.get("consumer_completed") is True and setup_report is not None):
+            report["social_setup"] = setup_report
+    elif collect_social_token:
+        from game_social_token_probe import run_social_token_once
+        report = run_social_token_once(sauth, public.configuration, server,
+                                       client_version=public.provenance.client_version)
+    elif enter_gateway:
+        report = probe.run_gateway_once(
             sauth, public.configuration, server,
             client_version=public.provenance.client_version, os_name="pc")
-    return probe.run_auth_once(
-        sauth, public.configuration, server,
-        client_version=public.provenance.client_version
-        if with_reviewed_version or with_reviewed_pc_envelope else None,
-        os_name="pc" if with_reviewed_pc_envelope else None)
+    else:
+        report = probe.run_auth_once(
+            sauth, public.configuration, server,
+            client_version=public.provenance.client_version
+            if with_reviewed_version or with_reviewed_pc_envelope else None,
+            os_name="pc" if with_reviewed_pc_envelope else None)
+    if refresh_report is not None:
+        refresh_report["owner_authentication_verified"] = (
+            report.get("auth_service_accepted") is True and report.get("own_role_verified") is True)
+        report["sdk_refresh"] = refresh_report
+    return report
 
 
 def unique_object(pairs):
@@ -77,7 +141,7 @@ def unique_object(pairs):
     return result
 
 
-def make_handler(path, attempt=attempt_auth):
+def make_handler(path, attempt=attempt_auth, *, allow_refresh=False):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass  # Never log URLs, payloads or request headers.
@@ -146,8 +210,12 @@ def make_handler(path, attempt=attempt_auth):
                 if (type(value) is not dict or set(value) != {"selected_uid", "sauth"}
                         or type(value["selected_uid"]) is not int or value["selected_uid"] != 1370598422):
                     raise ValueError
-                # Refresh tokens stay in the browser for either bounded test.
-                if type(value["sauth"]) is not dict or "refresh_token" in value["sauth"]:
+                # Only the explicit normal-renewal mode accepts this field.
+                if type(value["sauth"]) is not dict:
+                    raise ValueError
+                if (not allow_refresh and "refresh_token" in value["sauth"]
+                        or allow_refresh and (type(value["sauth"].get("refresh_token")) is not str
+                                              or not value["sauth"]["refresh_token"].strip())):
                     raise ValueError
                 probe.build_web_login_inputs(value["sauth"])
             except Exception:
@@ -182,31 +250,48 @@ def main(argv=None):
     parser.add_argument("--runtime-version", default="3825464", choices=("3825464", "3848703"))
     parser.add_argument("--enter", action="store_true",
                         help="Also verify one normal owner gateway login, then close; no stats queries.")
+    parser.add_argument("--collect-social-token", action="store_true",
+                        help="Also passively receive one normal owner social token; no social requests.")
+    parser.add_argument("--verify-social-session", action="store_true",
+                        help="Also verify one normal fresh-token SocialMatrix setup; no player queries.")
+    parser.add_argument("--refresh-before-auth", action="store_true",
+                        help="Use one normal OAuth refresh, then verify the renewed owner session.")
     args = parser.parse_args(argv)
-    if args.enter and (args.runtime_version != "3848703" or not args.with_reviewed_pc_envelope):
-        parser.error("--enter requires --runtime-version 3848703 --with-reviewed-pc-envelope")
+    if (args.enter or args.collect_social_token or args.refresh_before_auth or args.verify_social_session) and (
+            args.runtime_version != "3848703" or not args.with_reviewed_pc_envelope):
+        parser.error("gateway actions require --runtime-version 3848703 --with-reviewed-pc-envelope")
     if not args.serve_once:
         print(json.dumps({"outcome": "preview", "network_attempted": False,
                           "credentials_read": False, "files_read": False,
                           "with_reviewed_version": args.with_reviewed_version or args.with_reviewed_pc_envelope,
                           "with_reviewed_pc_envelope": args.with_reviewed_pc_envelope,
-                          "enter_gateway": args.enter,
+                          "enter_gateway": args.enter or args.collect_social_token or args.verify_social_session,
+                          "collect_social_token": args.collect_social_token or args.verify_social_session,
+                          "verify_social_session": args.verify_social_session,
+                          "refresh_before_auth": args.refresh_before_auth,
                           "runtime_version": args.runtime_version}))
         return 0
     path = "/auth-once/" + secrets.token_urlsafe(32)
     def attempt(sauth):
         return attempt_auth(sauth, with_reviewed_version=args.with_reviewed_version,
                             with_reviewed_pc_envelope=args.with_reviewed_pc_envelope,
-                            runtime_version=args.runtime_version, enter_gateway=args.enter)
+                            runtime_version=args.runtime_version, enter_gateway=args.enter,
+                            collect_social_token=args.collect_social_token,
+                            verify_social_session=args.verify_social_session,
+                            refresh_before_auth=args.refresh_before_auth)
 
-    with HTTPServer(("127.0.0.1", 0), make_handler(path, attempt=attempt)) as server:
+    with HTTPServer(("127.0.0.1", 0), make_handler(path, attempt=attempt,
+                                               allow_refresh=args.refresh_before_auth)) as server:
         server.completed, server.report, server.timeout = False, None, 1
         server.payload_read_started = False
         print(json.dumps({"outcome": "awaiting_one_owner_session",
                           "url": "http://127.0.0.1:" + str(server.server_port) + path,
                           "with_reviewed_version": args.with_reviewed_version or args.with_reviewed_pc_envelope,
                           "with_reviewed_pc_envelope": args.with_reviewed_pc_envelope,
-                          "enter_gateway": args.enter,
+                          "enter_gateway": args.enter or args.collect_social_token or args.verify_social_session,
+                          "collect_social_token": args.collect_social_token or args.verify_social_session,
+                          "verify_social_session": args.verify_social_session,
+                          "refresh_before_auth": args.refresh_before_auth,
                           "runtime_version": args.runtime_version,
                           "expires_in_seconds": WAIT_SECONDS}), flush=True)
         deadline = time.monotonic() + WAIT_SECONDS

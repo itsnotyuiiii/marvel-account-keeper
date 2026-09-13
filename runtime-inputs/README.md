@@ -1,5 +1,27 @@
 # Reviewed public runtime inputs
 
+## Additional current SocialMatrix artifact
+
+`3848703-social.json` is 465 bytes, ASCII with LF and final newline; SHA256
+`c3d1a44164613862529a63f4598b01af969dcb2b881107ae12c5edbb0eae09e4` is pinned
+independently in `portable_social_runtime.py`. It contains only current archive
+provenance, game ID, reviewed token RPC index1538836248 and the public17-byte
+SDK parameter from entry5512, Scripts/share/const/const_social.py. Parameter
+SHA256 is `e7a322fd20ed8591c366213d4d4d9ca579a5c2d4e0ca11c8e7f63367c7aa5209`.
+It contains no account/route/token/template or executable code. Loading reads
+only the explicit file, with no installed-file or network fallback.
+
+The normal token RPC was then received on the exact-owner live gateway and its
+owner/zone/time/route claims validated. This supersedes the initial-token/index
+uncertainty in the prior checkpoint below, but does not prove SocialMatrix
+service acceptance by itself. A separate subsequent live normal Python setup
+did verify service acceptance, exact RPC/aid binding and seven advertised
+modules including svc-user, using this artifact and the fresh pushed token.
+The adapter uses current source-reviewed hello/setup and does not load the old
+native/captured uni_lz4 template. No player query or automatic OAuth renewal is
+verified by setup. See API_RESEARCH.md for the complete live result and parser
+corrections; all sockets/helper are terminal.
+
 ## Current reviewed build: 3848703 (September 12, 2026)
 
 `3848703.json` is a separate public-only 774-byte ASCII JSON artifact with LF

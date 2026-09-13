@@ -1,5 +1,207 @@
 # Live API research checkpoints
 
+## September 12, 2026: capture-free social token and renewal investigation
+
+This checkpoint supersedes the unresolved token-index and initial-delivery
+wording in the older gateway checkpoint below. Full standalone stats and
+independent renewal are still incomplete.
+
+### Current owner-bound token delivery
+
+In archive SHA256 `07a3dcf20d539b9a613246047f5f91e4c7b44de62e96e24c47acea1cef5d1f9f`,
+PlayerAvatar entry 3781 defines `S_REFRESH_SOCIAL_TOKEN(token: Str)` at line 128.
+Registration entries 5782/5784 and ancestry 8862/8865 establish the bare-name
+RPC index **1538836248**. The component decorator at 8858 does not install an
+entity VAR_NAME namespace. An independent hash transcription agrees with the
+existing RPC helper. The exact index was then observed on the live connection.
+
+The initial passive receiver incorrectly required engine `ENTITY_CREATE.eid`
+to equal account UID 1370598422. It received the token RPC but stopped before
+parsing it. Source entry 8865 assigns eid independently of the avatar uid
+property (5041); incoming RPC dispatch at 8793 targets the connection's current
+PlayerAvatar. GameInstance entry 6742 identifies GameServiceAvatar by class,
+not eid equality. This was a local unsupported gate, not a server rejection.
+Lifecycle messages remain bounded telemetry; owner binding now uses the
+successful exact-UID gateway LOGIN, same connection, exact RPC and token aid.
+
+The corrected one-use experiment returned `own_gateway_login_verified` and
+`social_token_claims_validated`: owner/zone, time and route-shape checks passed.
+The passive receive consumed 850846 bytes / 19 records, including 7 startup
+records (6 entity creates) and 11 unrelated RPCs. It sent zero application bytes.
+LOGIN received 2397 bytes after sending 286 handshake + 625 application bytes;
+gateway received 39295 after 286 + 71, with four unexecuted HOTFIX records
+(37886 content bytes), exact UID match and reply_relogin=1. All sockets closed.
+No captured session, installed files, logs, process memory, gameplay code,
+SocialMatrix request or saved token was used in that experiment. JWT claim
+checks are not signature verification or downstream service acceptance.
+
+`game_social_token_probe.py` implements this separate research path and keeps
+raw credentials/claims out of reports. `standalone_social_session.py` checks a
+fresh callback-owned token and supported primary route without I/O. The normal
+error-recovery C_REFRESH_SOCIAL_TOKEN request is not used to obtain the initial
+push. Startup sequence reset fails explicitly; received hotfix code is never
+executed.
+
+### Portable normal Python SocialMatrix setup
+
+The new 465-byte LF/ASCII `runtime-inputs/3848703-social.json` is independently
+pinned at SHA256 `c3d1a44164613862529a63f4598b01af969dcb2b881107ae12c5edbb0eae09e4`.
+It contains the public 17-byte SDK parameter (entry 5512,
+Scripts/share/const/const_social.py), SHA256
+`e7a322fd20ed8591c366213d4d4d9ca579a5c2d4e0ca11c8e7f63367c7aa5209`, current
+provenance and token RPC index, not account/session material.
+
+Current public entries 36/38/40/43, 699/701, 3044/3046/3048 and 3498 establish
+the normal Python fallback variant: Magic-RC4 opening, main0/sub0 JSON hello
+with payload_type=1 and social_python_socket_version=1.0.0, then main1/sub3
+LIST_MODULE setup with client version 3.10.1, a fresh RPC id, exact token aid,
+original token and body cmd0/payload e30=. The normal reply normalizes cmd-1;
+requiring wire cmd0 would be an invented gate. Correlation uses rpcid and
+checks both header/body errors. Aid echo, streamid and modules are separate
+evidence, not universally mandatory success fields. Unsupported signature or
+codec variants must not silently select the historical native/captured format.
+
+`standalone_social_transport.py` and explicit helper `--verify-social-session`
+prepare one fresh-route setup then close, with no player query. This is separate
+from the old capture-derived uni_lz4/native template. Source review also fixed
+two local false-rejection gates: entry3044 do_response:336 allows streamid=null,
+and entry699 _on_list_module_cb:283 treats modules=null/missing as no modules.
+
+The first live setup reached hello acceptance, exact RPC correlation, matching
+aid echo and a present streamid, with no header/body error and reply cmd0.
+It then returned LOCAL `social_setup_invalid` while parsing payload/modules:
+14 handshake + 711 application bytes sent, 509 received, one connection and no
+ignored records. This is not proof of server rejection, full session acceptance
+or module availability; the raw reply was not saved. Owner LOGIN/gateway and
+the fresh passive token succeeded (2398 LOGIN bytes, 39295 gateway bytes,
+850420 passive bytes/17 records, 9 other RPCs, 7 startup/6 entity creates).
+All sockets/helper are terminal. No player query, renewal, game files, saved
+credentials or browser-storage update followed. Local parser/source comparison
+and fixed structural diagnostics are the next bounded step, not a guessed
+protocol variant or blind repeat of completed login checks.
+
+Targeted source comparison after that local failure found further parser
+differences. Entry3044 do_response:336 offsets2006-2100/2276-2424 chooses
+nonempty payload before str_payload, and base64-decodes only when str_payload
+is falsey; both populated is not automatically invalid. Entry699
+_on_list_module_cb:283 offsets2-132/262-360 JSON-decodes a string result once
+more, skips falsey names, defaults missing main_cmd to0, accepts0 and lets later
+duplicate names overwrite. These are source-confirmed corrections, not proof
+of which shape occurred in the unretained live reply. A zero command does not
+establish a positive routable svc-user module.
+
+After implementing those corrections and synthetic fixtures, the separate
+changed-parser live experiment returned **social_setup_verified** with
+social_session_accepted=true. One fresh SocialMatrix connection sent14 handshake
+and711 application bytes, received509, accepted hello, matched RPC/aid, returned
+a nonempty streamid, zero error codes and7 modules including routable svc-user.
+The reply's cmd was0. Structural diagnostics showed payload:string296chars,
+str_payload absent, base64 decoded221bytes to an object, modules array7,
+no nested JSON/falsey names/duplicates. These diagnostics do not expose module
+names/commands, credentials, route IP or raw payload. They cannot establish the
+exact field rejected in the earlier unretained reply.
+
+The parent LOGIN/gateway succeeded again (2398 and39295 bytes received; the
+gateway reply_relogin=1), and passive token delivery consumed850846bytes/19
+records, including11 unrelated RPCs and7 startup/6 entity-create records.
+The helper and all three connections are terminal. No player-data, Career,
+match, rank, punishment or renewal request followed; no browser storage was
+changed. This verifies the full browser-issued SDK -> normal game login ->
+normal pushed token -> fresh-route SocialMatrix setup chain without captures
+or game files at runtime, not yet an autonomous hosted stats provider.
+
+### Next normal UID lookup: current mesh path, not legacy SvcUser GetUser
+
+Current3848703 entry3051 UserClient.get_user:206 -> _get_user_server:219 calls
+_get_mesh_user:134, not the still-defined legacy _get_svc_user:191. The normal
+mesh path uses fixed command260 (main1/sub4), data_cmd0, payload {aids:[aid]};
+nested _api_get_user:137 sends it and mesh_user_cb:140 consumes rsp_data.data
+as user rows. The legacy CmdGetUser7 {aid:...} under advertised svc-user is NOT
+the normal current lookup path merely because that module is available.
+
+Entry3044 do_func:520 supplies version3.10.1, fresh rpcid, authenticated-owner
+aid and the truthy setup streamid. Token is included only for reconnect or when
+streamid is absent. Normal API calls do not add ackRpcId (keepalive does).
+Entry4666 uid_2_aid:736 forms zone_UID with get_zone_id:724 from verified game
+state; never hardcode an old zone. Entry3050 User.__init__:39 identifies aid,
+name and config_server. Validate one returned row's aid against the exact
+requested zone_UID, separately from the owner header aid. Own UID uses the same
+mesh read; equality only controls local cache refresh in callback238. No live
+mesh query has been made and the fresh response fields are not yet verified.
+
+Privacy source: current5529 defines CareerOverviewIsVisibleToOther,
+CareerHeroDataIsVisibleToOther, BattleHistoryIsVisibleToOther and
+TimelineIsVisibleToOther. get_career_permission_type_list:58 suffixes only
+overview/hero for positive OS; get_career_permission_type:88 adds _<OS>.
+Enum94 is OPEN0/SELF1/FRIEND2/TEAM3/CLAN4. Current4677 get_permission:171 chooses
+platform key before legacy key; source defaults absent to0, while our hosted
+contract must not claim verified public visibility from unfamiliar/missing
+response data. Own UID is allowed before settings checks; other relationship
+allowances require real context and cannot be inferred. Current1688 hero:240
+passes OS, current1689 history:287 does not. Existing projections read
+config_server.career_settings and config_server.login_os; verify fresh response
+availability before enabling section queries. This source trace is preparation,
+not a live UID lookup, privacy bypass or permission to query punishment records.
+
+### OAuth refresh contract and observed failure
+
+Final source verification for this checkpoint:675 tests passed in105.852s,
+including21 transport tests and10 new helper-integration tests. The earlier
+mocked PowerShell fixture timeout passed on isolated rerun and two later full
+runs. Existing synthetic warning/ResourceWarning output is non-failing. All
+live helper and test processes are terminal; no production provider was switched.
+
+Official public sources:
+
+- https://pay.neteasegames.com/static/js/module.894e7ca6.js (SHA256
+  `0084da0bb7730900d18a8c3d6fa529570d3ae53bc86d85498417faccd9bfc2d9`).
+- https://pay.neteasegames.com/static/js/main.cfbf45bf.js (SHA256
+  `40ce4d341e2fba9923d869cfffe6bb52ce839bf2a0a95b6ec3e3b1db33224083`).
+- https://sdk-os.mpsdk.easebar.com/gzip_static/h5/v1.4.2/js/mpay-h5-sdk-oversea.umd.js
+  (SHA256 `062cb07880c31960f10ef5f5931b0c13e01825b0f426f952d8c56b1e61e4fa35`).
+- https://pay.neteasegames.com/gameclub/games/marvelrivals?lan_code=en-US
+  verifies uni_appid="502" for game x20naxx2gb.
+
+Wrapper __getAccessToken at offset155524 concatenates the configured trailing-
+slash token host with `/api/users/login/v2/oauth/refresh_token`. setExtProp88872,
+request149798 and Axios124587/127712/128408 do not trim this absolute URL.
+The reviewed exact route therefore has a double slash after the host. Form
+fields are game_id=Number(APPID), user_id=Number(sdkuid), refresh_token; this is
+SDK user identity, NOT the character UID. The wrapper uses a raw form string;
+the portable client rejects characters that would corrupt that encoding. No
+custom auth header/signature, cookie or withCredentials requirement was found.
+
+`web_sdk_renewal.py` implements one bounded explicit request and a pure response
+validator. Only integer code0 with an access_token becomes a candidate sessionid;
+unchanged SDK context is preserved and unexpected refresh rotation fails as
+unverified. Candidate receipt alone cannot verify owner authentication or
+automatic renewal. No redirect/retry, environment credentials, persistence or
+old-session fallback is used. Synthetic transport tests preserve the exact
+double-slash request line and no-socket test behavior.
+
+One explicit credentialed direct refresh returned `web_refresh_http_error`
+before AUTH. Status instrumentation was added afterward, so the original HTTP
+status is UNKNOWN. A later browser-context comparison returned TypeError before
+a usable refresh response/handoff; it may have sent the request, and CORS is a
+possible explanation, not a proven cause. Its unused AUTH helper subsequently
+expired with credentials_read=false and payload_read_started=false. No session
+candidate, fresh AUTH, browser-storage update or automatic renewal was verified.
+A separate credential-free POST containing only game_id=502 returned HTTP400,
+application/json, no Access-Control-Allow-Origin and no redirect. That incomplete
+request cannot establish that the owner's refresh token is invalid. OPTIONS200
+without exact origin reflection alone is inconclusive (wildcard may be valid).
+One further bounded credential-free diagnostic with the normal Origin and
+SDK Content-Type/Accept read the 56-byte generic JSON error: alert_type2,
+code1000, msg="invalid access", HTTP400, absent ACAO/Location. It was not an
+HTML challenge response. Missing fields, route/app policy and the credentialed
+failure's cause remain distinguishable unknowns; no alternate endpoint or
+additional credential request was tried.
+
+The official wrapper catches refresh HTTP/CORS and SDK-code failures, clears
+stored login state and invokes normal interactive login. A working store login
+does not itself prove refresh works. The distinct sdk_token/history flow needs
+its own source/context validation; it is not an automatic endpoint fallback.
+
 ## September 12, 2026: current public build and owner gateway login verified
 
 ### Updated distribution and independently reviewed public inputs

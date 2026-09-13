@@ -3,6 +3,88 @@
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
+## Latest continuation — September 12: capture-free SocialMatrix setup verified
+
+The active standalone NetEase-only hosted goal remains INCOMPLETE. The current
+3848703 owner AUTH/gateway acceptance checkpoint below is preserved, but its
+unresolved token-index/initial-token wording is superseded here. The reviewed
+S_REFRESH_SOCIAL_TOKEN index is 1538836248 and the normal gateway push has now
+been received without captures, game files, logs or process memory at runtime.
+Exact owner/zone, expiry and supported-route claims passed. The passive reader
+consumed 850846 bytes / 19 records and sent zero application bytes. Claim checks
+are not JWT signature verification or SocialMatrix service acceptance.
+
+The subsequent normal Python SocialMatrix setup IS NOW LIVE VERIFIED through
+the same owner-bound chain: hello accepted, exact setup RPC match, aid echoed,
+streamid present, no header/body error, seven modules and usable svc-user
+advertised. One fresh connection sent14 handshake+711 application bytes and
+received509, then closed. It sent no player query. The final helper returned
+social_setup_verified/social_session_accepted=true; no installed game, SDK log,
+capture, runtime code execution or credential persistence was used.
+
+An initial setup attempt reached the matching reply but our local parser
+rejected its shape. Source-aligned corrections now accept optional null
+streamid/modules, the SDK's payload/str_payload precedence, one nested JSON
+string, falsey module names, default/zero command and duplicate overwrite.
+The final live reply used base64 payload (296chars ->221bytes) decoded directly
+to an object with7 modules, no nested JSON or duplicates. The earlier reply
+was not saved, so do not invent its exact failing field. Fixed structural
+diagnostics expose only types/counts, not payload/token/route values.
+
+The first collector's eid==UID gate was a local mistake: engine entity eid is
+separate from the account uid. Source review corrected it; the successful
+gateway UID, same connection, exact token RPC and exact aid now bind the owner.
+No startup/hotfix code is executed. See API_RESEARCH.md for source entries and
+the exact experiment counts. Those helpers are terminal.
+
+New source modules: game_social_token_probe.py (passive delivery),
+standalone_social_session.py (pure transient claim checks),
+portable_social_runtime.py and runtime-inputs/3848703-social.json (independently
+pinned public parameter/index), standalone_social_transport.py (one normal
+Python SocialMatrix hello/LIST_MODULE setup, not the old captured native
+uni_lz4 template), and web_sdk_renewal.py (explicit bounded normal OAuth refresh).
+The research helper adds --collect-social-token, --verify-social-session and
+--refresh-before-auth; each requires current3848703 + reviewed PC. Preview stays
+offline. Default AUTH/gateway/application providers remain unchanged.
+
+One direct OAuth refresh received an HTTP rejection before game AUTH; its exact
+HTTP status was not instrumented then and must not be invented. A subsequent
+browser comparison returned TypeError with no usable response/handoff. It may
+have sent the request; no browser storage changed. Its unused AUTH helper later
+expired with credentials_read=false/payload_read_started=false. A credential-
+free exact-route POST returned HTTP400/code1000/"invalid access" without CORS
+sharing headers. That does not establish an invalid owner token or UID. No
+renewed candidate or automatic renewal is verified; no old-token fallback ran.
+The official wrapper can hide refresh failure by returning to normal login.
+Next renewal evidence should distinguish normal OAuth, interactive and SDK
+history-login paths, not retry guessed endpoints or ask for the completed store
+login again without a concrete reason.
+
+No production website, desktop build, capture, Wi-Fi setting, game process,
+punishment query, report or saved credential changed. Next required milestones
+remain UID/visibility-bound live sections, autonomous
+renewal and approved native-capable hosting (Sites cannot run raw TCP). Do not
+claim that the hosted site now has full stats.
+
+Next concrete query is the current mesh user route: UserClient entry3051
+get_user206 -> _get_user_server219 -> _get_mesh_user134, fixed command260
+(main1/sub4), data_cmd0, payload {aids:[verified_zone_UID]}. It is NOT the legacy
+svc-user CmdGetUser7 operation despite that module's availability. Reuse the
+accepted setup streamid/current header contract, then validate one returned
+row's exact aid before reading name/config_server/privacy. Own UID uses this
+same operation and is the first verification target. No mesh query is live-
+verified yet. Exact source/visibility keys are in API_RESEARCH.md; do not repeat
+setup alone now that it passed, or treat missing visibility as proven public.
+
+Final verification:675 Python tests passed in105.852s after the parser and
+handoff changes; 31 focused transport/handoff tests passed in0.294s. An earlier
+full run had one timeout in the existing mocked PowerShell packet-counter
+fixture (no real capture); that exact test passed independently in1.607s and
+both later full runs passed (671 before the final parser cases, then675).
+Existing non-failing synthetic vault warnings/ResourceWarnings remain. All
+helper/test processes are terminal; the signed-in official-store tab is kept
+for continuation. No new user action is needed for the next prepared read.
+
 ## Current checkpoint — September 12, 2026: current-build gateway login verified
 
 The old missing-update blocker below is RESOLVED. Steam now records installed
