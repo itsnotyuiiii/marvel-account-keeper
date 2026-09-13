@@ -267,3 +267,45 @@ Next is the source-backed incremental property-sync path. Only a proven
 unrelated named change may leave the snapshot intact; rank, identity and
 unknown updates must invalidate it until their semantics are implemented.
 Final live season selection and hosted acceptance remain required.
+
+## Incremental-sync entry and framing located
+
+Read-only follow-up on the same pinned native image located the exact receive
+path, without retaining or decoding live sync bytes:
+
+```text
+65534 / 120 -> 0x55adfa0 -> 0x559a850 -> 0x55a46a0
+            -> 0x55aba90 -> 0x55abe20
+```
+
+- `0x55a8de1` registers command `0xfffe78`; callback functor vtable
+  `0xb618750`, invoke slot `+0x10`, points to `0x55adfa0`.
+- That handler decodes the entity-ID/sync-blob envelope via `0x55aa670`.
+  Manager `0x559a850` resolves the exact incoming entity ID at message offset
+  `+0x10`; existing entities reach `0x55a46a0`, while unknown entities' updates
+  are queued. This is still an engine entity ID, not an account UID.
+- `0x55aba90` unpacks `sync_msg` and requires internal type6 (array) at
+  `0x55abb58-0x55abb5d`. It iterates 24-byte native objects; extension type2
+  is dispatched at `0x55abc91-0x55abca1` to `0x55abe20`.
+- The type2 extension payload starts with an operation integer of the native
+  positive-integer type, bounded to127 (`0x55abecd-0x55abf12`). It then reads
+  repeated path/value entries through payload exhaustion, not a JSON map.
+- Each entry starts with an integer header bounded toINT32_MAX
+  (`0x55abf8f-0x55abff4`). Header bit `0x10` selects a distinct packed-index
+  branch. The ordinary branch reads `header` path segments, each a string or
+  signed/unsigned integer, followed by one value (`0x55ac340-0x55ac6cf`).
+- Traversal at `0x55aaeb0` uses dictionary keys or existing object attributes
+  (`0x55aaf85-0x55aafb2`), then recurses. Numeric object segments resolve
+  registered field descriptors; their meaning cannot be inferred by order.
+- Dictionary mutation helper `0x559fe90` sets keys for operations1/3 and
+  deletes for2. Object helper `0x559ff80` has a distinct operation7 branch;
+  its complete semantics remain unreviewed.
+
+No sync classifier or mutation engine is implemented by this trace. A narrow
+next implementation can require complete bounded array/ext2/operation/path
+framing and reject packed paths, numeric/empty roots, unknown operations,
+malformed/trailing data and changes to `uid`, `zone_id` or `RankGame`.
+Before retaining a snapshot, establish that any allowed named root is genuinely
+unrelated, including aliases and whole-object changes; a merely different
+string is not enough. Unknown or rank-relevant changes must still invalidate.
+An actual received update has not yet been classified or live-verified.

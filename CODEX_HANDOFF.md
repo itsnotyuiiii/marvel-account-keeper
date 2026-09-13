@@ -46,6 +46,18 @@ C:/CodexRepos/marvel-account-keeper/dist/marvel-native-api-3848703-owner-startup
 Its isolated extracted --check passed on Windows with network disabled.
 No interpreter, wheels, real credentials, database or hosted service included.
 
+After code checkpoint23bb1e6, read-only sync research located exact receive
+chain65534/120 ->55adfa0 ->559a850 ->55a46a0 ->55aba90 ->55abe20.
+Outer sync_msg is a MessagePack array; ext2 contains an operation integer,
+then repeated header/path-segment/value entries. Header bit0x10 selects an
+unreviewed packed-index branch; ordinary path segments are strings/integers.
+Dictionary operations1/3 set,2 deletes; object op7 requires further review.
+See OWNER_RANK_RESEARCH.md appendix for registration/RVAs. No classifier or
+live sync interpretation yet. Implement only complete bounded source-backed
+paths; reject packed/numeric-root/unknown operations and rank/identity changes.
+Prove independence of any allowed other root, rather than assuming different
+names cannot alias. The current conservative invalidation remains correct.
+
 Hosted goal remains ACTIVE and incomplete. Site deployment is unchanged in
 official-store identity mode. Hosting choice/real persistent bootstrap still
 require user selection; do not purchase a host, save credentials, mark the
