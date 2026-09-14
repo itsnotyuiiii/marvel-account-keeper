@@ -197,8 +197,9 @@ def _load_build_info() -> dict[str, Any]:
 
 
 _BUILD_INFO = _load_build_info()
-_netease_only = _BUILD_INFO.get("stats_provider") in {"netease", "netease-native"}
+_netease_only = _BUILD_INFO.get("stats_provider") in {"netease", "netease-native", "netease-cloud"}
 _local_native_mode = _BUILD_INFO.get("stats_provider") == "netease-native"
+_cloud_mode = _BUILD_INFO.get("stats_provider") == "netease-cloud"
 APP_COMMIT = (_BUILD_INFO.get("commit") or "").strip() or "dev"
 APP_BUILT_AT = _BUILD_INFO.get("built_at")  # ISO 8601 string or None
 
@@ -1292,7 +1293,7 @@ def _require_key():
 
 def _suspend_native_connection(*, close=False):
     """Release native session keys after admitted rotation work has drained."""
-    if _local_native_mode and _career_provider is not None:
+    if (_local_native_mode or _cloud_mode) and _career_provider is not None:
         if close:
             _career_provider.close()
         else:
@@ -2957,7 +2958,7 @@ def _public_account(acct: dict[str, Any], key: bytes) -> dict[str, Any]:
         item.setdefault(field, default)
     item["stats_provider"] = "netease" if _using_netease() else "tracker"
     item["netease_connected"] = _career_provider.can_refresh_account(acct) if _career_provider is not None else False
-    if _local_native_mode and _career_provider is not None:
+    if (_local_native_mode or _cloud_mode) and _career_provider is not None:
         snapshot = _career_provider.cached_account(acct)
         if snapshot is not None:
             try:
@@ -2965,6 +2966,13 @@ def _public_account(acct: dict[str, Any], key: bytes) -> dict[str, Any]:
                     "profile": _native_card_profile(snapshot), "matches_memory_only": True}
             except Exception:
                 pass  # Never expose an unprojected provider object.
+    if type(item.get("netease_native")) is dict:
+        from native_rank_display import current_rank_display
+        # Derive for the response only, including saved snapshots. Do not alter
+        # manual ranks or trust a persisted presentation field.
+        item["netease_native"] = copy.deepcopy(item["netease_native"])
+        item["netease_native"]["rank_display"] = current_rank_display(
+            item["netease_native"].get("profile"))
     try:
         item["password"] = _decrypt(key, acct["password_enc"]) if acct.get("password_enc") else ""
     except Exception:
@@ -3485,20 +3493,21 @@ def delete_account(acct_id: str):
     })
 
 
-# Run vault migrations as soon as the module is imported, so they happen
-# regardless of how the app is launched. Both are idempotent and snapshot the
-# vault into backups/ before any write. Match-index reconciliation is deferred
-# until main() has honored --await-pid and acquired the packaged-instance lock.
-_migrate_from_app_folder()
-_migrate_vault_if_needed()
-_cleanup_post_update()
+# Legacy launches migrate at import time. Cloud launches defer all vault reads,
+# migration and remembered unlock until main() owns the instance lock and has
+# made the pre-cloud checkpoint.
+if not (_cloud_mode or "--cloud-stats" in sys.argv):
+    _migrate_from_app_folder()
+    _migrate_vault_if_needed()
+    _cleanup_post_update()
 # Attempt to install a remembered key from a previous "remember me" unlock.
 # Silent — if DPAPI is unavailable or the blob is stale, the app just starts
 # on the unlock screen like it always did.
-try:
-    _try_remembered_unlock(_read_vault())
-except Exception:
-    pass
+if not (_cloud_mode or "--cloud-stats" in sys.argv):
+    try:
+        _try_remembered_unlock(_read_vault())
+    except Exception:
+        pass
 
 
 # ---------- liveness heartbeat ----------
@@ -3539,6 +3548,10 @@ def check_update():
     """Compare the running version against the latest GitHub release.
     Always returns 200 — a transient network failure shows as
     `{has_update: false}` so the UI stays quiet."""
+    if _cloud_mode:
+        return jsonify({"current": APP_VERSION, "latest": None, "has_update": False,
+            "checked_at": int(time.time()), "packaged": _is_packaged(),
+            "channel": "cloud-preview", "message": "Cloud builds use a separate update channel; your local vault is preserved."})
     if _local_native_mode:
         return jsonify({"current": APP_VERSION, "latest": None, "has_update": False,
             "checked_at": int(time.time()), "packaged": _is_packaged(),
@@ -3588,6 +3601,9 @@ def apply_update():
     _, err = _require_key()
     if err:
         return err
+    if _cloud_mode:
+        return jsonify({"error": "cloud_preview_channel",
+            "message": "Install a newer cloud build; the standard release would replace the AWS connection."}), 409
     if _local_native_mode:
         return jsonify({"error": "native_preview_channel",
             "message": "Install a new native preview build; the standard release would replace this NetEase mode."}), 409
@@ -3975,7 +3991,7 @@ def _focus_existing_window() -> None:
 
 
 def main() -> None:
-    global _career_provider, _netease_only, _local_native_mode
+    global _career_provider, _netease_only, _local_native_mode, _cloud_mode
     # Zero arguments is the intended path — a double-clicked .exe just works.
     # The flags below exist only for the rare headless / power-user case.
     parser = argparse.ArgumentParser(
@@ -3993,6 +4009,7 @@ def main() -> None:
     parser.add_argument("--career-archive", help="experimental: matching locally installed script.uep")
     parser.add_argument("--career-own-uid", help="experimental: your confirmed game UID")
     parser.add_argument("--native-stats", action="store_true", help="use the normal NetEase desktop login; no game capture or hosted backend")
+    parser.add_argument("--cloud-stats", action="store_true", help="use the configured AWS stats service; account credentials stay local")
     parser.add_argument("--await-pid", type=int, default=0, metavar="PID",
                         help=argparse.SUPPRESS)  # internal: set on self-restart
     parser.add_argument("--selftest-spawn", metavar="FILE", default=None,
@@ -4005,6 +4022,8 @@ def main() -> None:
     career_args = (args.career_capture, args.career_archive, args.career_own_uid)
     if any(career_args) and not all(career_args):
         parser.error("Career mode needs --career-capture, --career-archive and --career-own-uid together.")
+    if (args.cloud_stats or _cloud_mode) and (args.native_stats or _local_native_mode or any(career_args)):
+        parser.error("Choose cloud stats without a local NetEase login or capture mode.")
     if all(career_args) and (args.native_stats or _local_native_mode):
         parser.error("Choose either native NetEase login or the legacy captured-session mode.")
 
@@ -4042,7 +4061,21 @@ def main() -> None:
             _focus_existing_window()
             sys.exit(0)
 
-    if args.native_stats or _local_native_mode:
+    if args.cloud_stats or _cloud_mode:
+        from cloud_desktop_provider import CloudDesktopConnection
+        from cloud_upgrade_checkpoint import checkpoint_existing_data
+        # Own the instance lock before taking the upgrade checkpoint or opening
+        # the vault. Reuses the old data folder, never uploads account records.
+        _migrate_from_app_folder()
+        checkpoint_existing_data(DATA_DIR)
+        _migrate_vault_if_needed()
+        try:
+            _try_remembered_unlock(_read_vault())
+        except Exception:
+            pass
+        _cloud_mode = _netease_only = True
+        _career_provider = CloudDesktopConnection(DATA_DIR, lambda: _current_key(touch=False))
+    elif args.native_stats or _local_native_mode:
         from local_native_session import LocalNativeConnection
         _local_native_mode = _netease_only = True
         _career_provider = LocalNativeConnection(DATA_DIR, RESOURCE_DIR, lambda: _current_key(touch=False))

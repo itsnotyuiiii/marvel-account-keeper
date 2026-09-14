@@ -9,6 +9,9 @@ backups/
 .native-state/
 native-session.sqlite*
 netease-session.sqlite*
+cloud-connection.dpapi
+cloud-connection.dpapi.*.tmp
+cloud-upgrade-checkpoint.json
 
 # ── Build output ─────────────────────────────────────────────────────────────
 build/

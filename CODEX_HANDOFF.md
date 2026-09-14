@@ -1,5 +1,56 @@
 # Codex Continuation Handoff
 
+## Latest continuation — September 13: AWS-connected desktop upgrade
+
+The hosted backend is LIVE; older blocked/parked statements below are historical.
+The user requested migrating the older desktop tracker and showing placements /
+NetEase estimated rank. Work is on `codex/cloud-desktop-update`, branched from
+`codex/local-native-stats` at `666b92f`. The website/backend worktrees were not
+modified by this desktop implementation.
+
+Cloud build metadata selects `netease-cloud` (source flag `--cloud-stats`). The
+provider calls only the existing approved AWS API and uses its strict NetEase
+schemaVersion2 projection, exact UID binding, bounded polling of the same pending
+job, a short cache and fixed errors. No Tracker.gg/RivalsData fallback, local
+NetEase sign-in, game, capture or AWS CLI is required by the desktop runtime.
+
+Service access was provisioned successfully for this Windows user in
+`%APPDATA%/MarvelAccountKeeper/cloud-connection.dpapi`, encrypted with user-scoped
+DPAPI. No service bearer/admin keys are in code, card data, build assets or tool
+output. The credential is opened only after the normal vault unlock. It is not
+portable to a different Windows account; use separate operator provisioning.
+
+Existing vault location and password format remain unchanged. First cloud launch
+defers migrations and remembered unlock until after the single-instance lock,
+then takes an unchanged vault copy and consistent SQLite backup under
+`backups/pre-cloud-<timestamp>-<uuid>/`. Original local NetEase session files are
+not opened or migrated. Cloud refresh preserves account passwords, notes and
+manual ranks. Live first-page matches remain memory-only; imported history stays
+separate. Existing schema cleanup / eligible-history reconciliation still apply,
+with the original data recoverable from the pre-cloud checkpoint.
+
+`native_rank_display.py` joins placement counts only to the verified exact
+current-season rank. Missing/conflicting data stays unknown. Ten placements are
+verified in current installed public source and official placement notes. English
+rank table mappings remain unverified: show numeric levels/raw scores, never a
+guessed tier or hidden-MMR forecast. Cards and details label NetEase estimates.
+
+LIVE desktop-provider verification on September14 UTC:1370598422 returned IGN
+ゆいᶻᶻᶻ,12 seasons,50 matches,current level14 and placements0/10 (estimated).
+1822797559 returned KovaaksKid2008,19 seasons,43 matches; current rank/placements
+unknown.10826896958 returned the typed no-profile result, explicitly NOT proof of
+an invalid UID. Existing real vault was untouched; old Career EXE remained open
+and locked with3 cards. No new NetEase login or AWS resource was created.
+
+New scripts: `build-cloud-desktop.py` creates isolated unique artifacts;
+`check-cloud-desktop.py` verifies synthetic startup/restart/migration behavior;
+`provision-cloud-desktop.py` is operator-only setup, not a runtime dependency.
+See `docs/CLOUD_DESKTOP.md`. Final package acceptance is recorded below when done.
+Verification before packaging:1395 Python tests (1393 passed,2 Windows privilege
+skips) and19 Node JSX/UI tests passed. Focused tests include Windows DPAPI with
+synthetic credentials, pending-job continuation, exact profile binding, cloud
+startup deferral, migration backup and preserved manual card values.
+
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 

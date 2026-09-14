@@ -57,6 +57,20 @@ function nativeRankDisplay(rank) {
     ? `${rank.points} raw` : "raw score unavailable"}`;
 }
 
+function nativePlacementFor(acct) {
+  const rank = nativeRankFor(acct);
+  const display = acct?.netease_native?.rank_display;
+  return rank && display?.uid === String(acct.rivals_uid) && display.season === rank.season
+    && display.level === rank.level ? display : null;
+}
+
+function nativePlacementText(acct) {
+  const display = nativePlacementFor(acct);
+  if (!display || !Number.isInteger(display.placements_completed)) return "Placement progress unknown";
+  const count = Math.min(display.placements_completed, 10);
+  return `Placements ${count}/10 · ${display.status === "estimated" ? "NetEase estimated rank" : display.status === "ranked" ? "Placed" : "Status unknown"}`;
+}
+
 function accountRankDisplay(acct, field, opts) {
   if (hasNativeSnapshot(acct) && field === "current") return nativeRankDisplay(nativeRankFor(acct));
   return rankDisplay(acct[field + "_rank"], acct[field + "_points"],
@@ -83,7 +97,9 @@ function NativeProfileDetails({ account }) {
   return <section className="drawer-section" aria-label="NetEase profile details">
     <div className="drawer-section-lbl">NetEase profile · read only</div>
     <p className="career-live-note">UID {profile.uid} · PC{profile.identity?.level != null && ` · Account level ${profile.identity.level}`} · Read {nativeDate(account.netease_native.fetched_at)}</p>
-    <p>Current: <b>{nativeRankDisplay(nativeRankFor(account))}</b>{profile.current_season_verified && ` · Season ${profile.current_season}`}</p>
+    <p>{nativePlacementFor(account)?.status === "estimated" ? "NetEase estimated rank" : "Current"}: <b>{nativeRankDisplay(nativeRankFor(account))}</b>{profile.current_season_verified && ` · Season ${profile.current_season}`}</p>
+    <p>{nativePlacementText(account)}</p>
+    {nativePlacementFor(account)?.status === "estimated" && <p className="career-live-note">This is NetEase's current provisional rank, not a prediction of your final placement. The final rank can change after ten placement matches.</p>}
     <p className="career-live-note">Numeric rank levels and raw server scores; rank names and an overall peak are not verified. Saved ranks below remain separate.</p>
     <h3>Career totals · unfiltered</h3>
     {stats ? <div className="career-live-stats" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))" }}>
@@ -93,10 +109,10 @@ function NativeProfileDetails({ account }) {
     <p className="career-live-note">These totals are not filtered to the panel's current season. Complete lifetime coverage is not established.</p>
     <h3>Season ranks{seasons && ` · ${seasons.length} returned`}</h3>
     {seasons ? seasons.length ? <div className="career-live-table-wrap"><table className="career-live-table">
-      <thead><tr><th>Season</th><th>Rank level</th><th>Raw score</th><th>Season peak level</th><th>Raw peak score</th><th>Record</th><th>Updated</th></tr></thead>
+      <thead><tr><th>Season</th><th>Rank level</th><th>Raw score</th><th>Placements</th><th>Season peak level</th><th>Raw peak score</th><th>Record</th><th>Updated</th></tr></thead>
       <tbody>{seasons.map((row) => <tr key={row.season}>
         <td>{row.season}{profile.current_season_verified && row.season === profile.current_season ? " · Current" : ""}</td>
-        <td>{row.level}</td><td>{row.points}</td><td>{row.peak_level}</td><td>{row.peak_points}</td>
+        <td>{row.level}</td><td>{row.points}</td><td>{Number.isInteger(row.placements_completed) && row.placements_completed >= 0 ? `${Math.min(row.placements_completed, 10)}/10${row.placements_completed < 10 ? " · estimated" : " · placed"}` : "Unknown"}</td><td>{row.peak_level}</td><td>{row.peak_points}</td>
         <td>{row.record ? `${row.record.wins} wins / ${row.record.matches} matches` : "Unknown"}</td><td>{nativeDate(row.updated_at)}</td>
       </tr>)}</tbody>
     </table></div> : <p className="career-live-note">No season rows returned; this does not establish an unranked or complete history.</p>
@@ -369,6 +385,17 @@ const HISTORY_PRIVATE_NOTE =
 // can't push the rank rows around. The full long-form message is also passed
 // through to the chip's `title` attribute as a native hover tooltip.
 const SYNC_META = {
+  cloud_not_configured: { sym: "○", cls: "muted", text: "Cloud access is not configured on this PC" },
+  cloud_config_invalid: { sym: "!", cls: "err", text: "Cloud access cannot be opened on this Windows account" },
+  cloud_access_rejected: { sym: "!", cls: "err", text: "Cloud access rejected — saved data kept" },
+  cloud_request_failed: { sym: "!", cls: "err", text: "Could not reach your AWS stats service" },
+  cloud_lookup_unavailable: { sym: "!", cls: "err", text: "Cloud lookup unavailable — saved data kept" },
+  cloud_response_invalid: { sym: "!", cls: "err", text: "Cloud response could not be verified" },
+  cloud_rate_limited: { sym: "○", cls: "muted", text: "Cloud service requested a pause" },
+  cloud_lookup_expired: { sym: "○", cls: "muted", text: "Cloud lookup expired — refresh again" },
+  cloud_profile_not_returned: { sym: "?", cls: "muted", text: "NetEase returned no profile for this UID",
+    long: "An empty NetEase response does not establish that this UID is invalid. Saved data was kept." },
+  cloud_lookup_pending: { sym: "○", cls: "muted", text: "Profile lookup still pending — try again later" },
   career_not_connected: { sym: "○", cls: "muted", text: "NetEase session needed",
                           long: "The app needs one shared NetEase connection. Target players do not need to log in locally." },
   career_not_configured: { sym: "○", cls: "muted", text: "NetEase connection not configured" },
@@ -570,6 +597,7 @@ function NetEaseCardDetails({ acct, compact = false }) {
     return <div className={"netease-card-details" + (compact ? " is-compact" : "")}>
       {profile?.identity?.level != null && <span>Account level {profile.identity.level} · PC</span>}
       <span>{rank ? `Rank season ${rank.season} · Numeric rank; labels unverified` : "Current native rank unavailable"}</span>
+      <span>{nativePlacementText(acct)}</span>
       {stats ? <span>Unfiltered Career · {stats.matches} matches · {stats.wins} wins{!compact && ` · K/D/A ${stats.kills}/${stats.deaths}/${stats.assists}`}</span>
         : <span>Career · {nativeSectionLabel(profile?.career)}</span>}
       <span>Season history · {profile?.ranks?.status === "available" ? `${profile.ranks.data.season_count} rows` : nativeSectionLabel(profile?.ranks)}</span>

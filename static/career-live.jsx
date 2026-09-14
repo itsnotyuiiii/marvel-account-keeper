@@ -68,6 +68,21 @@ function NativeNetEaseConnection({ request, status, setStatus }) {
   </section>;
 }
 
+function CloudNetEaseConnection({ status }) {
+  const [open, setOpen] = React.useState(!status.connected);
+  return <section className="career-live" aria-label="AWS NetEase connection">
+    <div className="career-live-bar"><button type="button" className="career-live-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <b>NetEase stats · AWS</b><span>{status.connected ? "Cloud access configured · PC UID lookups" : "Cloud access needs setup"}</span>
+      <span aria-hidden="true">{open ? "−" : "+"}</span>
+    </button></div>
+    {open && <div className="career-live-content">
+      <p role="status" className="career-live-note">{status.message || (status.connected ? "Cloud access configured. Add a PC UID or refresh a saved card." : "Cloud access is not configured on this Windows account.")}</p>
+      <p className="career-live-note">Your existing cards, Steam passwords, notes and imported history stay on this computer. Only the requested PC UID and the service access credential go to your AWS backend. No game, NetEase sign-in or administrator access is needed here.</p>
+      <p className="career-live-note">Use Add account, Refresh or Refresh All. In-game-name search is not yet supported. The latest successful read time stays on each card; a configured connection alone does not prove the service is available.</p>
+    </div>}
+  </section>;
+}
+
 window.NetEaseCareerPanel = function NetEaseCareerPanel({ request }) {
   const [status, setStatus] = React.useState(null);
   const [snapshot, setSnapshot] = React.useState(null);
@@ -84,6 +99,7 @@ window.NetEaseCareerPanel = function NetEaseCareerPanel({ request }) {
     });
     return () => { active = false; };
   }, [request]);
+  if (status?.provider === "cloud") return <CloudNetEaseConnection status={status} />;
   if (!status?.configured) return null;
   if (status.provider === "native") return <NativeNetEaseConnection request={request} status={status} setStatus={setStatus} />;
   async function refresh() {

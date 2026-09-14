@@ -89,6 +89,33 @@ function ranked(id, level, points) {
 const sortedIds = (accounts, mode = 'current_desc') =>
   Array.from(sorting.sortAccounts(accounts, mode), (account) => account.id);
 
+test('cloud placement presentation binds UID season and level and labels provisional ranks', () => {
+  const account = fixture();
+  account.netease_native.rank_display = { uid: account.rivals_uid, season: 20, level: 14,
+    placements_completed: 3, status: 'estimated' };
+  assert.equal(cards.nativePlacementText(account), 'Placements 3/10 · NetEase estimated rank');
+  const text = renderedText(cards.window.NativeProfileDetails({ account }));
+  assert.match(text, /NetEase estimated rank/);
+  assert.match(text, /not a prediction of your final placement/);
+  account.netease_native.rank_display.season = 19;
+  assert.equal(cards.nativePlacementText(account), 'Placement progress unknown');
+  account.netease_native.rank_display.season = 20;
+  account.netease_native.rank_display.uid = '1822797559';
+  assert.equal(cards.nativePlacementText(account), 'Placement progress unknown');
+});
+
+test('cloud panel never asks for local login or renders a secret input', () => {
+  const context = { React, window: {} };
+  vm.createContext(context);
+  vm.runInContext(compiled.get('career-live.jsx').code, context);
+  const tree = context.CloudNetEaseConnection({ status: { provider: 'cloud', configured: false } });
+  assert.match(renderedText(tree), /Cloud access is not configured/);
+  assert.match(renderedText(tree), /Only the requested PC UID/);
+  assert.equal(nodes(tree, node => node.type === 'input').length, 0);
+  assert.equal(nodes(tree, node => node.type === 'button').length, 1);
+  assert.ok(!button(tree, 'Connect NetEase'));
+});
+
 test('all three modified JSX modules parse with the bundled production Babel', () => {
   assert.equal(compiled.size, 3);
   for (const result of compiled.values()) assert.ok(result.code.length > 0);

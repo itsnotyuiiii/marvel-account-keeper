@@ -1221,7 +1221,7 @@ function InfoRail({ open, onToggle, statsProvider }) {
   const legend = statsProvider === "netease" ? [
     { icon: "✓", tone: "ok", name: "Rank synced", desc: "Direct NetEase identity/rank read; public PC Career stats use the shared connection too. Missing detailed stats are labeled separately. Sync time is our fetch time, not last played." },
     { icon: "~", tone: "muted", name: "Numeric rank", desc: "Native rank levels and raw server scores are shown without guessed rank names, division progress or an overall peak. Saved rank labels stay separate." },
-    { icon: "○", tone: "muted", name: "Session needed", desc: "The app needs one shared NetEase connection, not a local login for every target player. No third-party fallback is used." },
+    { icon: "○", tone: "muted", name: "Shared connection", desc: "One configured connection loads PC profiles. Cloud builds use AWS without a local NetEase login. No third-party stats fallback is used." },
     { icon: "!", tone: "err", name: "Unavailable", desc: "Expired session, failed read or unfamiliar data. Previously saved ranks are kept." },
   ] : SYNC_LEGEND;
   return (
@@ -2170,7 +2170,7 @@ function App() {
 
         <TweakSection label="Marvel Rivals stats">
           <div className="stats-source-card">
-            <p><b>Rank refresh:</b> {statsProvider === "netease" ? "NetEase only — enter a PC UID. One normal SDK connection loads the available profile; targets need no local login. Native numeric ranks and raw scores stay separate from saved labels. Private or unavailable sections are labeled separately." : "Tracker.gg."}</p>
+            <p><b>Rank refresh:</b> {statsProvider === "netease" ? "NetEase only — enter a PC UID. Your configured connection loads the available profile; cloud mode uses your AWS service. Numeric ranks, raw scores and current-season placements stay separate from saved labels. Private or unavailable sections are labeled separately." : "Tracker.gg."}</p>
             <p><b>Detailed profiles:</b> a RivalsData link appears when an account has a UID. RivalsData receives nothing until you open that link.</p>
           </div>
         </TweakSection>
