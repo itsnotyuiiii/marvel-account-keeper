@@ -51,6 +51,36 @@ skips) and19 Node JSX/UI tests passed. Focused tests include Windows DPAPI with
 synthetic credentials, pending-job continuation, exact profile binding, cloud
 startup deferral, migration backup and preserved manual card values.
 
+FINAL PACKAGE: source167deb0ee0db,23,705,391bytes, SHA256
+`bb87bb58574ea57006915b354211e36ccf8af404d789e74e6266b4d6f3e3eb2a`.
+Artifact:
+`dist/cloud-20260914-013452-5b737cde5bb64362a8b1e15994f30031/MarvelRivalsAccountTracker-Cloud.exe`.
+Hash-verified copy and START HERE.md placed in
+`C:/Users/kylep/OneDrive/Desktop/Marvel Tracker - Cloud 2026-09-13/`.
+
+Packaged acceptance passed8 checks including separate synthetic vault startup,
+normal restart/unlock preserving synthetic passwords/notes/manual ranks, clear
+unconfigured behavior, disabled legacy update, bundled assets and real AWS UID
+refresh after copying only the encrypted service config into the fixture. The
+actual packaged owner lookup again returned273 Career matches,12 seasons,50
+recent matches and0/10 estimated placements. Archive inspection verified the
+cloud/checkpoint/rank/contract modules; no vault/DPAPI/session/runtime-manifest
+assets or AWS SDK. Browser rendering of the packaged localhost page verified
+IGN, stats and placement progress visibly. Native WebView2 window interaction
+with the user's real vault was not attempted; the older Career EXE is still open.
+
+Visual inspection caught an unrefreshed duplicate-UID card acquiring another
+card's live cache despite its old IGN/error.167deb0 binds overlays to each card's
+own successful snapshot timestamp.64 focused cloud tests and13 native app tests
+passed after final changes, plus19 UI tests. Temporary preview processes were
+shut down normally and synthetic fixture/config copies removed. Real vault file
+remained3286bytes with unchanged September10 modification time.
+
+USER NEXT: close the old tracker, open the Desktop cloud EXE, unlock the existing
+vault, then click Refresh rank & stats. No re-import or new login is needed on
+this Windows user. Automatic pre-cloud backup runs at first real cloud launch.
+No backend or website changes remain pending from this desktop turn.
+
 This file intentionally travels with the continuation branch so the work can
 be resumed from another computer without relying on local Codex session data.
 
