@@ -96,6 +96,15 @@ class CloudDesktopAppTest(unittest.TestCase):
             result = app._public_account(card, self.key)
             self.assertEqual(result["rivals_uid"], str(UID))
 
+    def test_uid_cache_does_not_fill_an_unrefreshed_duplicate_card(self):
+        card = self.card()
+        public = app._public_account(card, self.key)
+        self.assertIsNone(public["netease_native"])
+        card["netease_native"] = {"fetched_at": 1, "profile": {"uid": str(UID)}}
+        public = app._public_account(card, self.key)
+        self.assertEqual(public["netease_native"]["fetched_at"], 1)
+        self.assertNotIn("matches", public["netease_native"]["profile"])
+
     def test_cloud_import_does_not_migrate_or_unlock_before_instance_lock(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

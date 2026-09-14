@@ -2960,7 +2960,11 @@ def _public_account(acct: dict[str, Any], key: bytes) -> dict[str, Any]:
     item["netease_connected"] = _career_provider.can_refresh_account(acct) if _career_provider is not None else False
     if (_local_native_mode or _cloud_mode) and _career_provider is not None:
         snapshot = _career_provider.cached_account(acct)
-        if snapshot is not None:
+        saved = item.get("netease_native")
+        # The UID cache can be shared by multiple saved cards. Overlay match
+        # rows only onto the card's own successful snapshot, not an unrefreshed
+        # duplicate whose IGN/error/read-time still describe an older outcome.
+        if snapshot is not None and type(saved) is dict and saved.get("fetched_at") == snapshot.get("fetched_at"):
             try:
                 item["netease_native"] = {"fetched_at": snapshot["fetched_at"],
                     "profile": _native_card_profile(snapshot), "matches_memory_only": True}
