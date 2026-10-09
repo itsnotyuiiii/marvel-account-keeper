@@ -1,4 +1,10 @@
-# Marvel Rivals Account Tracker
+# Deprecated(WIP on client that pulls directly from NetEease instead of using shitty gatekeeping scrapers that failed to make a profit(~cough~ https://marvelrivalsapi.com/) looks like they're defunct now also hmmmmm 
+
+Shoutout to all the schizo incel 20 year olds!! Just go play the game bro. (no i didn't read whatever reply you may have written but I know you looked here :-) 
+
+
+
+## Marvel Rivals Account Tracker
 
 Keep track of your Marvel Rivals / Steam accounts in one place: in-game name,
 rank, and — if you want — username, email, and password. It runs on your own
